@@ -1,0 +1,197 @@
+import { useState, useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
+import api from '../services/api.js';
+import PlatformBadge from '../components/PlatformBadge.jsx';
+import { Link2, CheckCircle, XCircle, Trash2 } from 'lucide-react';
+
+const platforms = [
+  {
+    id: 'gmail',
+    name: 'Gmail',
+    description: 'Connect your Gmail account to receive and send emails',
+    color: 'border-red-200 hover:border-red-400',
+    icon: '📧',
+    authEndpoint: '/auth/gmail/start',
+  },
+  {
+    id: 'facebook',
+    name: 'Facebook Messenger',
+    description: 'Connect a Facebook Page to receive and reply to Messenger messages',
+    color: 'border-blue-200 hover:border-blue-400',
+    icon: '💬',
+    authEndpoint: '/auth/facebook/start',
+  },
+  {
+    id: 'instagram',
+    name: 'Instagram DMs',
+    description: 'Connect an Instagram Business account to manage direct messages',
+    color: 'border-pink-200 hover:border-pink-400',
+    icon: '📸',
+    authEndpoint: '/auth/instagram/start',
+  },
+  {
+    id: 'whatsapp',
+    name: 'WhatsApp Business',
+    description: 'Connect via Embedded Signup to send and receive WhatsApp messages',
+    color: 'border-green-200 hover:border-green-400',
+    icon: '📱',
+    authEndpoint: null, // Uses Embedded Signup
+  },
+];
+
+export default function ConnectionsPage() {
+  const [accounts, setAccounts] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [searchParams] = useSearchParams();
+  const successPlatform = searchParams.get('success');
+  const errorPlatform = searchParams.get('error');
+
+  useEffect(() => {
+    fetchAccounts();
+  }, []);
+
+  async function fetchAccounts() {
+    try {
+      const res = await api.get('/api/accounts');
+      setAccounts(res.data.accounts);
+    } catch (err) {
+      console.error('Failed to fetch accounts:', err);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleConnect(platform) {
+    if (platform.id === 'whatsapp') {
+      // WhatsApp uses Embedded Signup — show instructions for now
+      alert(
+        'WhatsApp uses Meta Embedded Signup.\n\n' +
+          'In production, this button triggers the Facebook SDK launchWhatsAppSignup() flow.\n\n' +
+          'For POC testing, use the /auth/whatsapp/connect API endpoint with your WABA details.'
+      );
+      return;
+    }
+
+    try {
+      const res = await api.get(platform.authEndpoint);
+      window.location.href = res.data.url;
+    } catch (err) {
+      console.error('Failed to start OAuth:', err);
+    }
+  }
+
+  async function handleDisconnect(accountId) {
+    if (!confirm('Are you sure you want to disconnect this account?')) return;
+    try {
+      await api.delete(`/api/accounts/${accountId}`);
+      setAccounts((prev) => prev.filter((a) => a.id !== accountId));
+    } catch (err) {
+      console.error('Failed to disconnect:', err);
+    }
+  }
+
+  function isConnected(platformId) {
+    return accounts.some((a) => a.platform === platformId && a.status === 'active');
+  }
+
+  function getAccountForPlatform(platformId) {
+    return accounts.find((a) => a.platform === platformId && a.status === 'active');
+  }
+
+  return (
+    <div className="h-full overflow-y-auto">
+      <div className="max-w-4xl mx-auto px-6 py-8">
+        <div className="flex items-center gap-3 mb-8">
+          <Link2 size={28} className="text-primary-600" />
+          <div>
+            <h1 className="text-2xl font-bold text-gray-900">Connected Accounts</h1>
+            <p className="text-gray-500 text-sm">Connect your messaging platforms to AuraDesk</p>
+          </div>
+        </div>
+
+        {/* Success/Error banners */}
+        {successPlatform && (
+          <div className="bg-green-50 border border-green-200 text-green-700 px-4 py-3 rounded-lg mb-6 flex items-center gap-2">
+            <CheckCircle size={18} />
+            <span className="capitalize">{successPlatform}</span> connected successfully!
+          </div>
+        )}
+        {errorPlatform && (
+          <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg mb-6 flex items-center gap-2">
+            <XCircle size={18} />
+            Failed to connect <span className="capitalize">{errorPlatform}</span>. Please try again.
+          </div>
+        )}
+
+        {/* Platform cards */}
+        <div className="grid gap-4">
+          {platforms.map((platform) => {
+            const connected = isConnected(platform.id);
+            const account = getAccountForPlatform(platform.id);
+
+            return (
+              <div
+                key={platform.id}
+                className={`bg-white rounded-xl border-2 p-6 transition ${
+                  connected ? 'border-green-300' : platform.color
+                }`}
+              >
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-4">
+                    <span className="text-3xl">{platform.icon}</span>
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <h3 className="text-lg font-semibold text-gray-900">{platform.name}</h3>
+                        {connected && (
+                          <span className="bg-green-100 text-green-700 text-xs font-medium px-2 py-0.5 rounded-full">
+                            Connected
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-sm text-gray-500 mt-0.5">{platform.description}</p>
+                      {connected && account && (
+                        <p className="text-xs text-gray-400 mt-1">
+                          {account.displayName} — Connected {new Date(account.createdAt).toLocaleDateString()}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    {connected ? (
+                      <button
+                        onClick={() => handleDisconnect(account.id)}
+                        className="flex items-center gap-2 px-4 py-2 text-sm text-red-600 hover:bg-red-50 rounded-lg transition"
+                      >
+                        <Trash2 size={16} />
+                        Disconnect
+                      </button>
+                    ) : (
+                      <button
+                        onClick={() => handleConnect(platform)}
+                        className="px-6 py-2.5 bg-primary-600 hover:bg-primary-700 text-white text-sm font-medium rounded-lg transition"
+                      >
+                        Connect
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Info box */}
+        <div className="mt-8 bg-blue-50 border border-blue-200 rounded-xl p-6">
+          <h3 className="font-semibold text-blue-900 mb-2">POC Testing Notes</h3>
+          <ul className="text-sm text-blue-800 space-y-1 list-disc list-inside">
+            <li>Gmail: Works in Google's testing mode — add tester emails in Google Cloud Console</li>
+            <li>Facebook: Add testers as App Testers in Meta Developer Console (Development Mode)</li>
+            <li>Instagram: Requires an Instagram Business/Creator account linked to a Facebook Page</li>
+            <li>WhatsApp: Requires a WhatsApp Business Account — use Embedded Signup flow</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  );
+}
