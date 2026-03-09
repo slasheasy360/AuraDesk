@@ -6,6 +6,7 @@ import * as instagramService from '../services/instagram.js';
 import * as whatsappService from '../services/whatsapp.js';
 import * as gmailService from '../services/gmail.js';
 import { syncGmailMessagesController, gmailDiagnosticController } from '../controllers/gmail.controller.js';
+import { syncInstagramMessages } from '../services/instagram.sync.js';
 
 const router = Router();
 
@@ -69,6 +70,25 @@ router.get('/gmail/diagnose', authenticate, gmailDiagnosticController);
 
 // Sync latest Gmail messages for the current user
 router.get('/gmail/sync', authenticate, syncGmailMessagesController);
+
+// Sync latest Instagram DM messages for the current user
+router.get('/instagram/sync', authenticate, async (req, res) => {
+  try {
+    const messages = await syncInstagramMessages(req.user.id);
+    const newCount = messages.filter((m) => m._isNew).length;
+    res.json({
+      success: true,
+      synced: messages.length,
+      newMessages: newCount,
+    });
+  } catch (err) {
+    console.error('Instagram sync error:', err);
+    res.status(500).json({
+      success: false,
+      error: err.message || 'Failed to sync Instagram messages',
+    });
+  }
+});
 
 // Get messages for a conversation
 router.get('/:conversationId', authenticate, async (req, res) => {
@@ -135,9 +155,12 @@ router.post('/send', authenticate, async (req, res) => {
           break;
         }
         case 'instagram': {
+          // Use contact's platformUserId (Instagram-scoped user ID) for sending,
+          // since platformConversationId may be the IG conversation ID from sync
+          const igRecipientId = conversation.contact?.platformUserId || conversation.platformConversationId;
           const result = await instagramService.sendMessage(
             conversation.connectedAccountId,
-            conversation.platformConversationId,
+            igRecipientId,
             content
           );
           platformMessageId = result.message_id;

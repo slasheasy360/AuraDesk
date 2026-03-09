@@ -17,6 +17,7 @@ export default function InboxPage() {
   const [sendError, setSendError] = useState('');
   const messagesEndRef = useRef(null);
   const pollingRef = useRef(null);
+  const igPollingRef = useRef(null);
   const conversationIdRef = useRef(conversationId);
 
   // Fetch conversations + start Gmail polling
@@ -27,8 +28,13 @@ export default function InboxPage() {
     syncGmail();
     pollingRef.current = setInterval(syncGmail, 60000);
 
+    // Initial Instagram sync, then poll every 60s
+    syncInstagram();
+    igPollingRef.current = setInterval(syncInstagram, 60000);
+
     return () => {
       if (pollingRef.current) clearInterval(pollingRef.current);
+      if (igPollingRef.current) clearInterval(igPollingRef.current);
     };
   }, []);
 
@@ -134,6 +140,20 @@ export default function InboxPage() {
       if (newCount > 0) {
         fetchConversations();
         // Also refresh the active conversation thread if one is open
+        const activeId = conversationIdRef.current;
+        if (activeId) fetchMessages(activeId);
+      }
+    } catch {
+      // Silent fail — retries on next cycle
+    }
+  }
+
+  async function syncInstagram() {
+    try {
+      const res = await api.get('/api/messages/instagram/sync');
+      const newCount = res.data?.newMessages || 0;
+      if (newCount > 0) {
+        fetchConversations();
         const activeId = conversationIdRef.current;
         if (activeId) fetchMessages(activeId);
       }
