@@ -35,7 +35,18 @@ export function decodeConnectState(state) {
   }
 }
 
-export function getLoginUrl(state, scope = 'pages_show_list,pages_manage_metadata,pages_messaging,business_management') {
+export function getLoginUrl(state) {
+  // Request all scopes needed for Facebook Messenger + Instagram DMs in one OAuth flow
+  const scope = [
+    'pages_show_list',
+    'pages_manage_metadata',
+    'pages_messaging',
+    'pages_read_engagement',
+    'business_management',
+    'instagram_basic',
+    'instagram_manage_messages',
+  ].join(',');
+
   const params = new URLSearchParams({
     client_id: getMetaAppId(),
     redirect_uri: getFacebookRedirectUri(),
@@ -51,6 +62,7 @@ export async function exchangeCodeForAccessToken(code) {
     throw new Error('Missing authorization code');
   }
 
+  console.log('[Facebook OAuth] Exchanging code for access token...');
   const tokenRes = await axios.get(`${GRAPH_API}/oauth/access_token`, {
     params: {
       client_id: getMetaAppId(),
@@ -60,27 +72,29 @@ export async function exchangeCodeForAccessToken(code) {
     },
   });
 
+  console.log('[Facebook OAuth] Token exchange successful', {
+    hasAccessToken: Boolean(tokenRes.data.access_token),
+    expiresIn: tokenRes.data.expires_in || 'none',
+  });
+
   return tokenRes.data;
 }
 
 export async function handleCallback(code, userId) {
-  // Exchange code for short-lived token
   const tokenResponse = await exchangeCodeForAccessToken(code);
-  const shortLivedToken = tokenResponse.access_token;
-
-  return handleCallbackWithToken(shortLivedToken, userId);
+  return handleCallbackWithToken(tokenResponse.access_token, userId);
 }
 
 export async function handleCallbackWithToken(shortLivedToken, userId) {
   if (!shortLivedToken) {
     throw new Error('Missing Facebook access token');
   }
-
   if (!userId) {
     throw new Error('Missing userId for Facebook OAuth callback');
   }
 
-  // Exchange for long-lived token (60 days)
+  // ── Step 1: Exchange for long-lived user token (60 days) ──
+  console.log('[Facebook OAuth] Step 1: Exchanging for long-lived token...');
   const longLivedRes = await axios.get(`${GRAPH_API}/oauth/access_token`, {
     params: {
       grant_type: 'fb_exchange_token',
@@ -91,41 +105,85 @@ export async function handleCallbackWithToken(shortLivedToken, userId) {
   });
 
   const longLivedToken = longLivedRes.data.access_token;
-  const expiresIn = longLivedRes.data.expires_in; // seconds
-
-  // Get user's pages
-  const pagesRes = await axios.get(`${GRAPH_API}/me/accounts`, {
-    params: { access_token: longLivedToken },
+  const userTokenExpiresIn = longLivedRes.data.expires_in;
+  console.log('[Facebook OAuth] Step 1 complete: long-lived token obtained', {
+    expiresIn: userTokenExpiresIn,
   });
 
-  const pages = pagesRes.data.data;
-  if (!pages || pages.length === 0) {
-    throw new Error('No Facebook Pages found. User must have a Facebook Page to connect.');
-  }
-
-  // For POC: connect the first page. In production, let user choose.
-  const page = pages[0];
-
-  // Get page access token (doesn't expire when obtained from long-lived user token)
-  const pageTokenRes = await axios.get(`${GRAPH_API}/${page.id}`, {
+  // ── Step 2: Fetch user's Facebook Pages ──
+  console.log('[Facebook OAuth] Step 2: Fetching /me/accounts...');
+  const pagesRes = await axios.get(`${GRAPH_API}/me/accounts`, {
     params: {
-      fields: 'access_token,name,picture',
+      fields: 'id,name,access_token,picture',
       access_token: longLivedToken,
     },
   });
 
-  const pageAccessToken = pageTokenRes.data.access_token;
-
-  // Subscribe page to webhook
-  await axios.post(`${GRAPH_API}/${page.id}/subscribed_apps`, null, {
-    params: {
-      subscribed_fields: 'messages,message_reads,message_deliveries,messaging_postbacks',
-      access_token: pageAccessToken,
-    },
+  const pages = pagesRes.data.data;
+  console.log('[Facebook OAuth] Step 2 complete: pages found', {
+    count: pages?.length || 0,
+    pages: pages?.map((p) => ({ id: p.id, name: p.name })) || [],
   });
 
-  // Upsert connected account
-  const connectedAccount = await prisma.connectedAccount.upsert({
+  if (!pages || pages.length === 0) {
+    throw new Error(
+      'No Facebook Pages found. The user must be an admin of at least one Facebook Page.'
+    );
+  }
+
+  // For POC: connect the first page. In production, let user choose.
+  const page = pages[0];
+  const pageAccessToken = page.access_token; // already a page token from /me/accounts
+
+  console.log('[Facebook OAuth] Selected page:', { id: page.id, name: page.name });
+
+  // ── Step 3: Subscribe the Page to webhook events ──
+  console.log('[Facebook OAuth] Step 3: Subscribing page to webhook...');
+  try {
+    const subRes = await axios.post(`${GRAPH_API}/${page.id}/subscribed_apps`, null, {
+      params: {
+        subscribed_fields: 'messages,message_reads,message_deliveries,messaging_postbacks,feed',
+        access_token: pageAccessToken,
+      },
+    });
+    console.log('[Facebook OAuth] Step 3 complete: webhook subscription response', subRes.data);
+  } catch (subErr) {
+    console.error('[Facebook OAuth] Step 3 FAILED: webhook subscription error', {
+      status: subErr.response?.status,
+      data: subErr.response?.data,
+      message: subErr.message,
+    });
+    // Don't throw — continue to save the account. Webhook can be re-subscribed later.
+  }
+
+  // ── Step 4: Detect Instagram Business Account linked to this Page ──
+  let igAccount = null;
+  console.log('[Facebook OAuth] Step 4: Checking for Instagram Business Account...');
+  try {
+    const igRes = await axios.get(`${GRAPH_API}/${page.id}`, {
+      params: {
+        fields: 'instagram_business_account{id,username,name,profile_picture_url}',
+        access_token: pageAccessToken,
+      },
+    });
+    if (igRes.data.instagram_business_account) {
+      igAccount = igRes.data.instagram_business_account;
+      console.log('[Facebook OAuth] Step 4 complete: Instagram account found', {
+        id: igAccount.id,
+        username: igAccount.username,
+      });
+    } else {
+      console.log('[Facebook OAuth] Step 4: No Instagram Business Account linked to this page');
+    }
+  } catch (igErr) {
+    console.warn('[Facebook OAuth] Step 4: Could not check Instagram account', {
+      message: igErr.message,
+    });
+  }
+
+  // ── Step 5: Save Facebook Page connected account + token ──
+  console.log('[Facebook OAuth] Step 5: Saving Facebook connected account...');
+  const fbAccount = await prisma.connectedAccount.upsert({
     where: {
       userId_platform_platformAccountId: {
         userId,
@@ -146,27 +204,109 @@ export async function handleCallbackWithToken(shortLivedToken, userId) {
     },
   });
 
-  // Store page access token encrypted
   await prisma.authToken.upsert({
-    where: { connectedAccountId: connectedAccount.id },
+    where: { connectedAccountId: fbAccount.id },
     update: {
       accessTokenEncrypted: encrypt(pageAccessToken),
       refreshTokenEncrypted: encrypt(longLivedToken),
-      expiresAt: expiresIn ? new Date(Date.now() + expiresIn * 1000) : null,
+      expiresAt: userTokenExpiresIn
+        ? new Date(Date.now() + userTokenExpiresIn * 1000)
+        : null,
       tokenType: 'page_token',
-      scopes: 'pages_messaging',
+      scopes: 'pages_messaging,pages_manage_metadata',
     },
     create: {
-      connectedAccountId: connectedAccount.id,
+      connectedAccountId: fbAccount.id,
       accessTokenEncrypted: encrypt(pageAccessToken),
       refreshTokenEncrypted: encrypt(longLivedToken),
-      expiresAt: expiresIn ? new Date(Date.now() + expiresIn * 1000) : null,
+      expiresAt: userTokenExpiresIn
+        ? new Date(Date.now() + userTokenExpiresIn * 1000)
+        : null,
       tokenType: 'page_token',
-      scopes: 'pages_messaging',
+      scopes: 'pages_messaging,pages_manage_metadata',
     },
   });
 
-  return { connectedAccount, pages };
+  // Record webhook subscription
+  await prisma.webhookSubscription.upsert({
+    where: {
+      id: (
+        await prisma.webhookSubscription.findFirst({
+          where: { connectedAccountId: fbAccount.id, platform: 'facebook' },
+        })
+      )?.id || 'non-existent-id',
+    },
+    update: {
+      subscribedFields: 'messages,message_reads,message_deliveries,messaging_postbacks,feed',
+      verifiedAt: new Date(),
+    },
+    create: {
+      connectedAccountId: fbAccount.id,
+      platform: 'facebook',
+      subscribedFields: 'messages,message_reads,message_deliveries,messaging_postbacks,feed',
+      verifiedAt: new Date(),
+    },
+  });
+
+  console.log('[Facebook OAuth] Step 5 complete: Facebook account saved', {
+    accountId: fbAccount.id,
+    pageId: page.id,
+    pageName: page.name,
+  });
+
+  // ── Step 6: If Instagram Business Account found, save it too ──
+  if (igAccount) {
+    console.log('[Facebook OAuth] Step 6: Saving Instagram connected account...');
+    const instaAccount = await prisma.connectedAccount.upsert({
+      where: {
+        userId_platform_platformAccountId: {
+          userId,
+          platform: 'instagram',
+          platformAccountId: igAccount.id,
+        },
+      },
+      update: {
+        displayName: igAccount.username || igAccount.name,
+        avatarUrl: igAccount.profile_picture_url || null,
+        status: 'active',
+      },
+      create: {
+        userId,
+        platform: 'instagram',
+        platformAccountId: igAccount.id,
+        displayName: igAccount.username || igAccount.name,
+        avatarUrl: igAccount.profile_picture_url || null,
+        status: 'active',
+      },
+    });
+
+    // Instagram messages use the Page access token
+    await prisma.authToken.upsert({
+      where: { connectedAccountId: instaAccount.id },
+      update: {
+        accessTokenEncrypted: encrypt(pageAccessToken),
+        refreshTokenEncrypted: encrypt(longLivedToken),
+        tokenType: 'page_token',
+        scopes: 'instagram_manage_messages',
+      },
+      create: {
+        connectedAccountId: instaAccount.id,
+        accessTokenEncrypted: encrypt(pageAccessToken),
+        refreshTokenEncrypted: encrypt(longLivedToken),
+        tokenType: 'page_token',
+        scopes: 'instagram_manage_messages',
+      },
+    });
+
+    console.log('[Facebook OAuth] Step 6 complete: Instagram account saved', {
+      accountId: instaAccount.id,
+      igId: igAccount.id,
+      username: igAccount.username,
+    });
+  }
+
+  console.log('[Facebook OAuth] ✓ Full OAuth flow completed for user', userId);
+  return { connectedAccount: fbAccount, pages, igAccount };
 }
 
 export async function sendMessage(connectedAccountId, recipientPsid, text) {

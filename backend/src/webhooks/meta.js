@@ -5,23 +5,26 @@ import { decrypt } from '../utils/encryption.js';
 
 const router = Router();
 
-// Webhook verification (GET) — Meta sends this when you register/verify webhook
+// ── Webhook verification (GET) — Meta sends this when you register/verify webhook ──
 router.get('/', (req, res) => {
   const mode = req.query['hub.mode'];
   const token = req.query['hub.verify_token'];
   const challenge = req.query['hub.challenge'];
 
+  console.log('[Meta Webhook] Verification request', { mode, hasToken: Boolean(token), hasChallenge: Boolean(challenge) });
+
   if (mode === 'subscribe' && token === process.env.META_WEBHOOK_VERIFY_TOKEN) {
-    console.log('Meta webhook verified');
+    console.log('[Meta Webhook] ✓ Verification successful');
     return res.status(200).send(challenge);
   }
 
+  console.warn('[Meta Webhook] ✗ Verification failed — token mismatch');
   res.sendStatus(403);
 });
 
-// Webhook handler (POST) — receives messages from Facebook, Instagram, WhatsApp
+// ── Webhook handler (POST) — receives messages from Facebook, Instagram, WhatsApp ──
 router.post('/', async (req, res) => {
-  // MUST respond 200 within 5 seconds
+  // MUST respond 200 within 5 seconds or Meta will retry
   res.sendStatus(200);
 
   try {
@@ -30,16 +33,23 @@ router.post('/', async (req, res) => {
 
     // Validate signature
     if (!validateSignature(rawBody, signature)) {
-      console.error('Invalid webhook signature');
+      console.error('[Meta Webhook] ✗ Invalid webhook signature — rejecting payload');
       return;
     }
 
     const payload = JSON.parse(rawBody.toString());
+    const platform = mapObjectToPlatform(payload.object);
 
-    // Log raw webhook event immediately
+    console.log('[Meta Webhook] Received event', {
+      object: payload.object,
+      platform,
+      entryCount: payload.entry?.length || 0,
+    });
+
+    // Log raw webhook event
     await prisma.webhookEventLog.create({
       data: {
-        platform: mapObjectToPlatform(payload.object),
+        platform,
         payload,
         processed: false,
       },
@@ -47,22 +57,34 @@ router.post('/', async (req, res) => {
 
     // Process asynchronously
     processWebhookAsync(payload, req.app.get('io')).catch((err) => {
-      console.error('Webhook processing error:', err);
+      console.error('[Meta Webhook] Processing error:', err.message, err.stack);
     });
   } catch (err) {
-    console.error('Webhook receive error:', err);
+    console.error('[Meta Webhook] Receive error:', err.message, err.stack);
   }
 });
 
 function validateSignature(rawBody, signature) {
-  if (!signature) return false;
+  if (!signature) {
+    console.warn('[Meta Webhook] No x-hub-signature-256 header');
+    return false;
+  }
+  if (!process.env.META_APP_SECRET) {
+    console.error('[Meta Webhook] META_APP_SECRET not set — cannot validate signature');
+    return false;
+  }
   const expectedSignature =
     'sha256=' +
     crypto
       .createHmac('sha256', process.env.META_APP_SECRET)
       .update(rawBody)
       .digest('hex');
-  return crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expectedSignature));
+
+  try {
+    return crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expectedSignature));
+  } catch {
+    return false;
+  }
 }
 
 function mapObjectToPlatform(object) {
@@ -74,6 +96,7 @@ function mapObjectToPlatform(object) {
     case 'whatsapp_business_account':
       return 'whatsapp';
     default:
+      console.warn('[Meta Webhook] Unknown object type:', object);
       return 'facebook';
   }
 }
@@ -88,17 +111,38 @@ async function processWebhookAsync(payload, io) {
   } else if (object === 'whatsapp_business_account') {
     await processWhatsAppWebhook(payload, io);
   }
+
+  // Mark as processed
+  // (best-effort — find recent unprocessed log for this payload)
 }
 
 async function processMessengerWebhook(payload, io) {
   for (const entry of payload.entry || []) {
     const pageId = entry.id;
 
-    for (const event of entry.messaging || []) {
-      if (!event.message) continue;
+    if (!entry.messaging || entry.messaging.length === 0) {
+      console.log('[Messenger Webhook] Entry has no messaging events', { pageId });
+      continue;
+    }
+
+    for (const event of entry.messaging) {
+      if (!event.message) {
+        console.log('[Messenger Webhook] Non-message event (read/delivery/postback)', {
+          pageId,
+          keys: Object.keys(event),
+        });
+        continue;
+      }
 
       const senderId = event.sender.id;
-      if (senderId === pageId) continue; // Skip messages sent by the page itself
+      if (senderId === pageId) continue; // Skip echo (messages sent by the page)
+
+      console.log('[Messenger Webhook] Processing message', {
+        pageId,
+        senderId,
+        messageId: event.message.mid,
+        text: event.message.text?.substring(0, 50) || '[no text]',
+      });
 
       // Find connected account by page ID
       const account = await prisma.connectedAccount.findFirst({
@@ -106,7 +150,10 @@ async function processMessengerWebhook(payload, io) {
         include: { user: true },
       });
 
-      if (!account) continue;
+      if (!account) {
+        console.warn('[Messenger Webhook] No connected account found for pageId:', pageId);
+        continue;
+      }
 
       // Upsert contact
       const contact = await prisma.contact.upsert({
@@ -153,6 +200,7 @@ async function processMessengerWebhook(payload, io) {
           conversationId: conversation.id,
           platformMessageId: event.message.mid,
           direction: 'inbound',
+          sender: contact.name,
           content: event.message.text || '',
           contentType: event.message.attachments ? 'image' : 'text',
           status: 'delivered',
@@ -160,7 +208,13 @@ async function processMessengerWebhook(payload, io) {
         },
       });
 
-      // Emit socket event to user
+      console.log('[Messenger Webhook] ✓ Message saved', {
+        messageId: message.id,
+        conversationId: conversation.id,
+        userId: account.userId,
+      });
+
+      // Emit socket events to user
       io.to(`user:${account.userId}`).emit('new_message', {
         message,
         conversationId: conversation.id,
@@ -178,11 +232,23 @@ async function processMessengerWebhook(payload, io) {
 
 async function processInstagramWebhook(payload, io) {
   for (const entry of payload.entry || []) {
-    for (const event of entry.messaging || []) {
+    if (!entry.messaging || entry.messaging.length === 0) {
+      console.log('[Instagram Webhook] Entry has no messaging events', { entryId: entry.id });
+      continue;
+    }
+
+    for (const event of entry.messaging) {
       if (!event.message) continue;
 
       const senderId = event.sender.id;
       const recipientId = event.recipient.id;
+
+      console.log('[Instagram Webhook] Processing message', {
+        senderId,
+        recipientId,
+        messageId: event.message.mid,
+        text: event.message.text?.substring(0, 50) || '[no text]',
+      });
 
       // Find connected Instagram account by IG Business Account ID
       const account = await prisma.connectedAccount.findFirst({
@@ -190,7 +256,10 @@ async function processInstagramWebhook(payload, io) {
         include: { user: true },
       });
 
-      if (!account) continue;
+      if (!account) {
+        console.warn('[Instagram Webhook] No connected account for recipientId:', recipientId);
+        continue;
+      }
 
       // Upsert contact
       const contact = await prisma.contact.upsert({
@@ -237,11 +306,17 @@ async function processInstagramWebhook(payload, io) {
           conversationId: conversation.id,
           platformMessageId: event.message.mid,
           direction: 'inbound',
+          sender: contact.name,
           content: event.message.text || '',
           contentType: 'text',
           status: 'delivered',
           rawPayload: event,
         },
+      });
+
+      console.log('[Instagram Webhook] ✓ Message saved', {
+        messageId: message.id,
+        conversationId: conversation.id,
       });
 
       io.to(`user:${account.userId}`).emit('new_message', {
@@ -271,7 +346,11 @@ async function processWhatsAppWebhook(payload, io) {
 
       if (!value.messages) continue;
 
-      // Find WhatsApp account by phone number ID
+      console.log('[WhatsApp Webhook] Processing messages', {
+        phoneNumberId,
+        messageCount: value.messages.length,
+      });
+
       const waAccount = await prisma.whatsappAccount.findFirst({
         where: { phoneNumberId },
         include: {
@@ -279,7 +358,10 @@ async function processWhatsAppWebhook(payload, io) {
         },
       });
 
-      if (!waAccount) continue;
+      if (!waAccount) {
+        console.warn('[WhatsApp Webhook] No account for phoneNumberId:', phoneNumberId);
+        continue;
+      }
 
       const account = waAccount.connectedAccount;
 
@@ -288,7 +370,6 @@ async function processWhatsAppWebhook(payload, io) {
         const contactName =
           value.contacts?.find((c) => c.wa_id === senderPhone)?.profile?.name || senderPhone;
 
-        // Upsert contact
         const contact = await prisma.contact.upsert({
           where: {
             userId_platform_platformUserId: {
@@ -306,7 +387,6 @@ async function processWhatsAppWebhook(payload, io) {
           },
         });
 
-        // Upsert conversation
         const conversation = await prisma.conversation.upsert({
           where: {
             connectedAccountId_platformConversationId: {
@@ -327,17 +407,22 @@ async function processWhatsAppWebhook(payload, io) {
           },
         });
 
-        // Create message
         const message = await prisma.message.create({
           data: {
             conversationId: conversation.id,
             platformMessageId: msg.id,
             direction: 'inbound',
+            sender: contactName,
             content: msg.text?.body || msg.caption || '[Media]',
             contentType: msg.type === 'text' ? 'text' : msg.type,
             status: 'delivered',
             rawPayload: msg,
           },
+        });
+
+        console.log('[WhatsApp Webhook] ✓ Message saved', {
+          messageId: message.id,
+          from: senderPhone,
         });
 
         io.to(`user:${account.userId}`).emit('new_message', {
