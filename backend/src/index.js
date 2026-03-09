@@ -76,6 +76,14 @@ const PORT = process.env.PORT || 3001;
 server.listen(PORT, () => {
   console.log(`AuraDesk backend running on port ${PORT}`);
 
+  // Log WhatsApp env var status on startup
+  const waToken = process.env.WHATSAPP_SYSTEM_USER_TOKEN;
+  if (waToken) {
+    console.log(`[Startup] WHATSAPP_SYSTEM_USER_TOKEN: length=${waToken.length}, starts="${waToken.substring(0, 10)}...", ends="...${waToken.substring(waToken.length - 10)}"`);
+  } else {
+    console.warn('[Startup] WHATSAPP_SYSTEM_USER_TOKEN is not set');
+  }
+
   // Renew expiring Gmail watches every 6 hours
   const SIX_HOURS = 6 * 60 * 60 * 1000;
   setInterval(() => {

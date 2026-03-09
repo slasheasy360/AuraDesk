@@ -250,14 +250,24 @@ async function processInstagramWebhook(payload, io) {
         text: event.message.text?.substring(0, 50) || '[no text]',
       });
 
-      // Find connected Instagram account by IG Business Account ID
-      const account = await prisma.connectedAccount.findFirst({
+      // Find connected Instagram account — try recipientId first (inbound), then senderId (echo/outbound)
+      let account = await prisma.connectedAccount.findFirst({
         where: { platform: 'instagram', platformAccountId: recipientId, status: 'active' },
         include: { user: true },
       });
 
+      // If not found by recipientId, this might be an echo (outbound) — sender is our account
       if (!account) {
-        console.warn('[Instagram Webhook] No connected account for recipientId:', recipientId);
+        account = await prisma.connectedAccount.findFirst({
+          where: { platform: 'instagram', platformAccountId: senderId, status: 'active' },
+          include: { user: true },
+        });
+        if (account) {
+          // This is an echo of our own outbound message — skip it
+          console.log('[Instagram Webhook] Skipping echo/outbound message from our account');
+          continue;
+        }
+        console.warn('[Instagram Webhook] No connected account for recipientId:', recipientId, 'or senderId:', senderId);
         continue;
       }
 
