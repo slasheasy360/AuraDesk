@@ -23,14 +23,14 @@ export async function handleEmbeddedSignup(userId, wabaId, phoneNumberId, userAc
     console.warn('[WhatsApp] Could not fetch phone details (non-fatal):', err.response?.data?.error?.message || err.message);
   }
 
-  // Subscribe webhook to WABA (non-fatal — messaging still works without it)
+  // Subscribe webhook to WABA (non-fatal — works without it if configured manually in dashboard)
   try {
     await axios.post(`${GRAPH_API}/${wabaId}/subscribed_apps`, null, {
       params: { access_token: userAccessToken },
     });
     console.log('[WhatsApp] Webhook subscription successful');
-  } catch (subErr) {
-    console.warn('[WhatsApp] Webhook subscription failed (non-fatal):', subErr.response?.data?.error?.message || subErr.message);
+  } catch {
+    // (#200) Permissions error is expected for system user tokens — webhook can be configured manually in Meta dashboard instead
   }
 
   // Upsert connected account
