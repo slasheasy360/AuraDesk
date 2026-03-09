@@ -53,6 +53,7 @@ export function getLoginUrl(state) {
     scope,
     response_type: 'code',
     state,
+    auth_type: 'rerequest',
   });
   return `https://www.facebook.com/v21.0/dialog/oauth?${params}`;
 }
