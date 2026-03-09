@@ -32,9 +32,18 @@ export async function syncInstagramMessages(userId) {
       const messages = await syncAccountMessages(account, igUserId, pageToken, userId);
       allNewMessages.push(...messages);
     } catch (err) {
-      console.error('[Instagram Sync] Error syncing account:', account.id, err.message);
-      if (err.response?.data) {
-        console.error('[Instagram Sync] API error details:', JSON.stringify(err.response.data));
+      const errCode = err.response?.data?.error?.code;
+      const errMsg = err.response?.data?.error?.message || err.message;
+      // Code 3 = "Application does not have the capability" — means instagram_manage_messages
+      // permission not approved. Log once quietly, don't spam.
+      if (errCode === 3) {
+        // Only log first time, not every 60s poll
+        if (!syncInstagramMessages._capabilityWarned) {
+          console.warn('[Instagram Sync] Conversations API not available (app needs instagram_manage_messages Advanced Access). Sync disabled until permission is granted.');
+          syncInstagramMessages._capabilityWarned = true;
+        }
+      } else {
+        console.error('[Instagram Sync] Error syncing account:', account.id, errMsg);
       }
     }
   }
