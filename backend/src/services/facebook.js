@@ -110,6 +110,27 @@ export async function handleCallbackWithToken(shortLivedToken, userId) {
     expiresIn: userTokenExpiresIn,
   });
 
+  // ── Step 1b: Check granted permissions ──
+  console.log('[Facebook OAuth] Step 1b: Checking granted permissions...');
+  try {
+    const permsRes = await axios.get(`${GRAPH_API}/me/permissions`, {
+      params: { access_token: longLivedToken },
+    });
+    console.log('[Facebook OAuth] Granted permissions:', JSON.stringify(permsRes.data.data));
+  } catch (permErr) {
+    console.warn('[Facebook OAuth] Could not check permissions:', permErr.message);
+  }
+
+  // ── Step 1c: Get user info ──
+  try {
+    const meRes = await axios.get(`${GRAPH_API}/me`, {
+      params: { fields: 'id,name', access_token: longLivedToken },
+    });
+    console.log('[Facebook OAuth] Authenticated user:', meRes.data);
+  } catch (meErr) {
+    console.warn('[Facebook OAuth] Could not fetch /me:', meErr.message);
+  }
+
   // ── Step 2: Fetch user's Facebook Pages ──
   console.log('[Facebook OAuth] Step 2: Fetching /me/accounts...');
   const pagesRes = await axios.get(`${GRAPH_API}/me/accounts`, {
@@ -119,6 +140,7 @@ export async function handleCallbackWithToken(shortLivedToken, userId) {
     },
   });
 
+  console.log('[Facebook OAuth] Step 2 raw response:', JSON.stringify(pagesRes.data));
   const pages = pagesRes.data.data;
   console.log('[Facebook OAuth] Step 2 complete: pages found', {
     count: pages?.length || 0,
@@ -127,7 +149,8 @@ export async function handleCallbackWithToken(shortLivedToken, userId) {
 
   if (!pages || pages.length === 0) {
     throw new Error(
-      'No Facebook Pages found. The user must be an admin of at least one Facebook Page.'
+      'No Facebook Pages found. Make sure: (1) You are admin of a Facebook Page, (2) Your Meta app has pages_show_list permission, (3) You granted page access during OAuth. Raw response: ' +
+        JSON.stringify(pagesRes.data)
     );
   }
 
