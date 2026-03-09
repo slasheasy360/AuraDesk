@@ -1,4 +1,6 @@
 import axios from 'axios';
+import fs from 'fs';
+import FormData from 'form-data';
 import prisma from '../utils/prisma.js';
 import { encrypt, decrypt } from '../utils/encryption.js';
 
@@ -116,6 +118,74 @@ export async function sendMessage(connectedAccountId, toPhoneNumber, text) {
       type: 'text',
       text: { body: text },
     },
+    {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+      },
+    }
+  );
+
+  return res.data;
+}
+
+export async function sendMedia(connectedAccountId, toPhoneNumber, file) {
+  const whatsappAccount = await prisma.whatsappAccount.findUnique({
+    where: { connectedAccountId },
+    include: { connectedAccount: { include: { authToken: true } } },
+  });
+
+  if (!whatsappAccount) throw new Error('WhatsApp account not found');
+
+  const authToken = whatsappAccount.connectedAccount.authToken;
+  if (!authToken) throw new Error('No auth token found');
+
+  const accessToken = decrypt(authToken.accessTokenEncrypted);
+
+  // Step 1: Upload media to WhatsApp
+  const form = new FormData();
+  form.append('messaging_product', 'whatsapp');
+  form.append('file', fs.createReadStream(file.path), {
+    filename: file.originalname,
+    contentType: file.mimetype,
+  });
+
+  const uploadRes = await axios.post(
+    `${GRAPH_API}/${whatsappAccount.phoneNumberId}/media`,
+    form,
+    {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        ...form.getHeaders(),
+      },
+    }
+  );
+
+  const mediaId = uploadRes.data.id;
+
+  // Step 2: Determine media type
+  let mediaType = 'document';
+  if (file.mimetype.startsWith('image/')) mediaType = 'image';
+  else if (file.mimetype.startsWith('video/')) mediaType = 'video';
+  else if (file.mimetype.startsWith('audio/')) mediaType = 'audio';
+
+  // Step 3: Send the media message
+  const messagePayload = {
+    messaging_product: 'whatsapp',
+    recipient_type: 'individual',
+    to: toPhoneNumber,
+    type: mediaType,
+    [mediaType]: { id: mediaId },
+  };
+
+  // Add filename for documents
+  if (mediaType === 'document') {
+    messagePayload.document.filename = file.originalname;
+  }
+
+  const res = await axios.post(
+    `${GRAPH_API}/${whatsappAccount.phoneNumberId}/messages`,
+    messagePayload,
     {
       headers: {
         Authorization: `Bearer ${accessToken}`,

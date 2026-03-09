@@ -3,7 +3,16 @@
     "allow": [
       "Bash(ls -la \"c:\\\\Users\\\\gondy\\\\OneDrive\\\\Desktop\\\\AuraDesk\\\\frontend\\\\src\"\" && echo \"---\" && ls -la \"c:UsersgondyOneDriveDesktopAuraDeskfrontendpublic\"\")",
       "Bash(ls \"c:\\\\Users\\\\gondy\\\\OneDrive\\\\Desktop\\\\AuraDesk\\\\frontend\\\\src\\\\assets\"\" 2>/dev/null || echo \"Assets folder empty or missing \")",
-      "Bash(npm run build)"
+      "Bash(npm run build)",
+      "Bash(npm install multer)",
+      "Bash(npm install dompurify)",
+      "Bash(npm install form-data)",
+      "Bash(node -e \"import\\(''./src/routes/messages.js''\\).then\\(\\(\\) => console.log\\(''messages.js OK''\\)\\).catch\\(e => console.error\\(''FAIL:'', e.message\\)\\)\")",
+      "Bash(node -e \"import\\(''./src/services/gmail.js''\\).then\\(\\(\\) => console.log\\(''gmail.js OK''\\)\\).catch\\(e => console.error\\(''FAIL:'', e.message\\)\\)\")",
+      "Bash(node -e \"import\\(''./src/services/whatsapp.js''\\).then\\(\\(\\) => console.log\\(''whatsapp.js OK''\\)\\).catch\\(e => console.error\\(''FAIL:'', e.message\\)\\)\")",
+      "Bash(node -e \"import\\(''./src/services/facebook.js''\\).then\\(\\(\\) => console.log\\(''facebook.js OK''\\)\\).catch\\(e => console.error\\(''FAIL:'', e.message\\)\\)\")",
+      "Bash(node -e \"import\\(''./src/services/instagram.js''\\).then\\(\\(\\) => console.log\\(''instagram.js OK''\\)\\).catch\\(e => console.error\\(''FAIL:'', e.message\\)\\)\")",
+      "Bash(node -e \"import\\(''./src/middleware/upload.js''\\).then\\(\\(\\) => console.log\\(''upload.js OK''\\)\\).catch\\(e => console.error\\(''FAIL:'', e.message\\)\\)\")"
     ]
   }
 }

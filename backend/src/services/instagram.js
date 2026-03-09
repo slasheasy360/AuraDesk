@@ -1,4 +1,6 @@
 import axios from 'axios';
+import fs from 'fs';
+import FormData from 'form-data';
 import prisma from '../utils/prisma.js';
 import { encrypt, decrypt } from '../utils/encryption.js';
 
@@ -176,6 +178,40 @@ export async function sendMessage(connectedAccountId, recipientId, text) {
       params: { access_token: pageToken },
     }
   );
+
+  return res.data;
+}
+
+export async function sendAttachment(connectedAccountId, recipientId, file) {
+  const authToken = await prisma.authToken.findUnique({
+    where: { connectedAccountId },
+  });
+  if (!authToken) throw new Error('No auth token found');
+
+  const pageToken = decrypt(authToken.accessTokenEncrypted);
+
+  // Instagram DM supports image attachments
+  let type = 'file';
+  if (file.mimetype.startsWith('image/')) type = 'image';
+  else if (file.mimetype.startsWith('video/')) type = 'video';
+  else if (file.mimetype.startsWith('audio/')) type = 'audio';
+
+  const form = new FormData();
+  form.append('recipient', JSON.stringify({ id: recipientId }));
+  form.append('messaging_type', 'RESPONSE');
+  form.append('message', JSON.stringify({
+    attachment: { type, payload: { is_reusable: false } },
+  }));
+  form.append('filedata', fs.createReadStream(file.path), {
+    filename: file.originalname,
+    contentType: file.mimetype,
+  });
+
+  const res = await axios.post(`${GRAPH_API}/me/messages`, form, {
+    params: { access_token: pageToken },
+    headers: form.getHeaders(),
+    maxContentLength: 26214400,
+  });
 
   return res.data;
 }

@@ -52,3 +52,54 @@ body {
   opacity: 0;
   transition: opacity 250ms ease-in;
 }
+
+/* HTML email content styles */
+.email-html-content {
+  overflow-wrap: break-word;
+  word-break: break-word;
+}
+.email-html-content img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 6px;
+}
+.email-html-content a {
+  color: #2563eb;
+  text-decoration: underline;
+}
+.email-html-content a:hover {
+  color: #1d4ed8;
+}
+.email-html-content blockquote {
+  border-left: 3px solid #e2e8f0;
+  padding-left: 12px;
+  margin: 8px 0;
+  color: #64748b;
+}
+.email-html-content pre {
+  background: #f1f5f9;
+  padding: 12px;
+  border-radius: 6px;
+  overflow-x: auto;
+  font-size: 13px;
+}
+.email-html-content table {
+  border-collapse: collapse;
+  max-width: 100%;
+}
+.email-html-content td, .email-html-content th {
+  border: 1px solid #e2e8f0;
+  padding: 6px 10px;
+}
+.email-html-content h1, .email-html-content h2, .email-html-content h3 {
+  margin-top: 16px;
+  margin-bottom: 8px;
+  font-weight: 600;
+}
+.email-html-content p {
+  margin-bottom: 8px;
+}
+.email-html-content ul, .email-html-content ol {
+  padding-left: 20px;
+  margin-bottom: 8px;
+}

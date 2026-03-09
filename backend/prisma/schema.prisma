@@ -116,7 +116,9 @@ model Message {
   sender              String?
   subject             String?
   content             String?
+  htmlContent         String?  @map("html_content")
   contentType         ContentType @default(text) @map("content_type")
+  attachments         Json?
   sentAt              DateTime @default(now()) @map("sent_at")
   deliveredAt         DateTime? @map("delivered_at")
   readAt              DateTime? @map("read_at")

@@ -157,6 +157,8 @@ export async function getGmailMessages(userId) {
       const subject = extractHeader(headers, 'Subject') || '(No Subject)';
       const { sender, senderEmail } = parseSender(fromHeader);
       const body = toPreviewBody(msg);
+      const htmlBody = gmailApi.getEmailHtmlBody(msg.payload || {}) || null;
+      const emailAttachments = gmailApi.getEmailAttachments(msg.payload || {});
 
       // Determine the "other party" — for outbound emails, use the recipient
       const isOutbound = senderEmail === accountEmail;
@@ -180,6 +182,8 @@ export async function getGmailMessages(userId) {
         subject,
         snippet: toSnippet(body),
         body,
+        htmlBody,
+        attachments: emailAttachments.length > 0 ? emailAttachments : null,
         timestamp: normalizeTimestamp(msg.internalDate),
         labelIds: msg.labelIds || [],
         rawPayload: msg,
@@ -266,7 +270,9 @@ export async function syncGmailMessages(userId) {
         sender: item.sender,
         subject: item.subject,
         content: item.body || item.snippet || item.subject,
+        htmlContent: item.htmlBody || null,
         contentType: 'email',
+        attachments: item.attachments || undefined,
         status: item.isOutbound ? 'sent' : 'delivered',
         sentAt: item.timestamp,
         rawPayload: item.rawPayload,

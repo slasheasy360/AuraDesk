@@ -1,3 +1,4 @@
+import fs from 'fs';
 import { google } from 'googleapis';
 import prisma from '../utils/prisma.js';
 import { encrypt, decrypt } from '../utils/encryption.js';
@@ -154,7 +155,7 @@ export async function fetchThread(connectedAccountId, threadId) {
   return res.data;
 }
 
-export async function sendEmail(connectedAccountId, to, subject, body, threadId) {
+export async function sendEmail(connectedAccountId, to, subject, body, threadId, attachments = []) {
   const gmail = await getGmailClient(connectedAccountId);
 
   const account = await prisma.connectedAccount.findUnique({
@@ -184,7 +185,7 @@ export async function sendEmail(connectedAccountId, to, subject, body, threadId)
     }
   }
 
-  const raw = createRawEmail(account.platformAccountId, to, subject, body, lastMessageId);
+  const raw = createRawEmail(account.platformAccountId, to, subject, body, lastMessageId, attachments);
 
   const requestBody = { raw };
   if (threadId) requestBody.threadId = threadId;
@@ -197,13 +198,15 @@ export async function sendEmail(connectedAccountId, to, subject, body, threadId)
   return res.data;
 }
 
-function createRawEmail(from, to, subject, body, inReplyToMessageId) {
+function createRawEmail(from, to, subject, body, inReplyToMessageId, attachments = []) {
+  const boundary = `boundary_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+  const hasAttachments = attachments.length > 0;
+
   const headers = [
     `From: ${from}`,
     `To: ${to}`,
     `Subject: ${subject}`,
     'MIME-Version: 1.0',
-    'Content-Type: text/plain; charset=utf-8',
   ];
 
   if (inReplyToMessageId) {
@@ -211,7 +214,35 @@ function createRawEmail(from, to, subject, body, inReplyToMessageId) {
     headers.push(`References: ${inReplyToMessageId}`);
   }
 
-  const email = `${headers.join('\r\n')}\r\n\r\n${body}`;
+  if (!hasAttachments) {
+    headers.push('Content-Type: text/plain; charset=utf-8');
+    const email = `${headers.join('\r\n')}\r\n\r\n${body}`;
+    return Buffer.from(email).toString('base64url');
+  }
+
+  // Multipart email with attachments
+  headers.push(`Content-Type: multipart/mixed; boundary="${boundary}"`);
+
+  let email = `${headers.join('\r\n')}\r\n\r\n`;
+
+  // Text body part
+  email += `--${boundary}\r\n`;
+  email += 'Content-Type: text/plain; charset=utf-8\r\n\r\n';
+  email += `${body}\r\n\r\n`;
+
+  // Attachment parts
+  for (const file of attachments) {
+    const fileData = fs.readFileSync(file.path);
+    const base64Data = fileData.toString('base64');
+    email += `--${boundary}\r\n`;
+    email += `Content-Type: ${file.mimetype}; name="${file.originalname}"\r\n`;
+    email += 'Content-Transfer-Encoding: base64\r\n';
+    email += `Content-Disposition: attachment; filename="${file.originalname}"\r\n\r\n`;
+    email += `${base64Data}\r\n\r\n`;
+  }
+
+  email += `--${boundary}--`;
+
   return Buffer.from(email).toString('base64url');
 }
 
@@ -371,4 +402,48 @@ export function getEmailBody(payload) {
     }
   }
   return '';
+}
+
+export function getEmailHtmlBody(payload) {
+  // Extract HTML body specifically, falling back through multipart structure
+  if (payload.parts) {
+    for (const part of payload.parts) {
+      if (part.mimeType === 'text/html' && part.body?.data) {
+        return Buffer.from(part.body.data, 'base64url').toString('utf8');
+      }
+      // Check nested multipart/alternative
+      if (part.mimeType === 'multipart/alternative' && part.parts) {
+        for (const subPart of part.parts) {
+          if (subPart.mimeType === 'text/html' && subPart.body?.data) {
+            return Buffer.from(subPart.body.data, 'base64url').toString('utf8');
+          }
+        }
+      }
+    }
+  }
+  // Single-part HTML email
+  if (payload.mimeType === 'text/html' && payload.body?.data) {
+    return Buffer.from(payload.body.data, 'base64url').toString('utf8');
+  }
+  return null;
+}
+
+export function getEmailAttachments(payload) {
+  const attachments = [];
+  function walk(parts) {
+    if (!parts) return;
+    for (const part of parts) {
+      if (part.filename && part.body?.attachmentId) {
+        attachments.push({
+          filename: part.filename,
+          mimeType: part.mimeType,
+          size: part.body.size || 0,
+          attachmentId: part.body.attachmentId,
+        });
+      }
+      if (part.parts) walk(part.parts);
+    }
+  }
+  walk(payload.parts);
+  return attachments;
 }

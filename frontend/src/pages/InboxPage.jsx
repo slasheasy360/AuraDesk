@@ -1,8 +1,9 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
+import DOMPurify from 'dompurify';
 import api from '../services/api.js';
 import { getSocket } from '../services/socket.js';
-import { Send, Search, MessageSquare, Mail, ArrowLeft, Paperclip, Smile } from 'lucide-react';
+import { Send, Search, MessageSquare, Mail, ArrowLeft, Paperclip, Smile, X, FileText, Image } from 'lucide-react';
 import PlatformBadge, { PlatformIcon } from '../components/PlatformBadge.jsx';
 
 export default function InboxPage() {
@@ -15,10 +16,13 @@ export default function InboxPage() {
   const [sending, setSending] = useState(false);
   const [search, setSearch] = useState('');
   const [sendError, setSendError] = useState('');
+  const [attachments, setAttachments] = useState([]);
+  const [dragOver, setDragOver] = useState(false);
   const messagesEndRef = useRef(null);
   const pollingRef = useRef(null);
   const igPollingRef = useRef(null);
   const conversationIdRef = useRef(conversationId);
+  const fileInputRef = useRef(null);
 
   // Fetch conversations + start polling
   useEffect(() => {
@@ -111,6 +115,7 @@ export default function InboxPage() {
     if (conversationId) {
       fetchMessages(conversationId);
       setSendError('');
+      setAttachments([]);
       setConversations((prev) =>
         prev.map((c) => (c.id === conversationId ? { ...c, unreadCount: 0 } : c))
       );
@@ -172,17 +177,33 @@ export default function InboxPage() {
 
   async function handleSend(e) {
     e.preventDefault();
-    if (!newMessage.trim() || !conversationId || sending) return;
+    if ((!newMessage.trim() && attachments.length === 0) || !conversationId || sending) return;
 
     setSending(true);
     setSendError('');
     try {
-      const res = await api.post('/api/messages/send', {
-        conversationId,
-        content: newMessage.trim(),
-      });
+      let res;
+      if (attachments.length > 0) {
+        const formData = new FormData();
+        formData.append('conversationId', conversationId);
+        if (newMessage.trim()) {
+          formData.append('content', newMessage.trim());
+        }
+        for (const att of attachments) {
+          formData.append('attachments', att.file);
+        }
+        res = await api.post('/api/messages/send', formData, {
+          headers: { 'Content-Type': 'multipart/form-data' },
+        });
+      } else {
+        res = await api.post('/api/messages/send', {
+          conversationId,
+          content: newMessage.trim(),
+        });
+      }
       setMessages((prev) => [...prev, res.data.message]);
       setNewMessage('');
+      setAttachments([]);
     } catch (err) {
       console.error('Failed to send message:', err);
       setSendError(err.response?.data?.error || 'Failed to send message');
@@ -190,6 +211,34 @@ export default function InboxPage() {
       setSending(false);
     }
   }
+
+  const handleFileSelect = useCallback((files) => {
+    const newAttachments = Array.from(files).map((file) => ({
+      id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      file,
+      name: file.name,
+      size: file.size,
+      type: file.type,
+      preview: file.type.startsWith('image/') ? URL.createObjectURL(file) : null,
+    }));
+    setAttachments((prev) => [...prev, ...newAttachments]);
+  }, []);
+
+  const removeAttachment = useCallback((id) => {
+    setAttachments((prev) => {
+      const att = prev.find((a) => a.id === id);
+      if (att?.preview) URL.revokeObjectURL(att.preview);
+      return prev.filter((a) => a.id !== id);
+    });
+  }, []);
+
+  const handleDrop = useCallback((e) => {
+    e.preventDefault();
+    setDragOver(false);
+    if (e.dataTransfer.files?.length) {
+      handleFileSelect(e.dataTransfer.files);
+    }
+  }, [handleFileSelect]);
 
   const platform = activeConversation?.connectedAccount?.platform;
   const isEmailPlatform = platform === 'gmail';
@@ -211,7 +260,6 @@ export default function InboxPage() {
     navigate('/inbox');
   };
 
-  // Platform-specific colors
   const platformTheme = getPlatformTheme(platform);
 
   return (
@@ -253,7 +301,7 @@ export default function InboxPage() {
             filteredConversations.map((conv) => {
               const lastMessage = conv.messages?.[0];
               const preview = lastMessage?.content
-                ? lastMessage.content.replace(/\n+/g, ' ').slice(0, 80)
+                ? lastMessage.content.replace(/<[^>]+>/g, '').replace(/\n+/g, ' ').slice(0, 80)
                 : 'No messages';
               const convPlatform = conv.connectedAccount?.platform;
 
@@ -265,7 +313,6 @@ export default function InboxPage() {
                     conv.id === conversationId ? 'bg-primary-50 border-l-[3px] border-l-primary-500' : ''
                   }`}
                 >
-                  {/* Platform icon avatar */}
                   <div className="relative flex-shrink-0">
                     <div className={`w-11 h-11 rounded-full flex items-center justify-center ${getPlatformAvatarStyle(convPlatform)}`}>
                       <PlatformIcon platform={convPlatform} size={20} />
@@ -307,12 +354,24 @@ export default function InboxPage() {
           ${conversationId ? 'flex' : 'hidden md:flex'}
         `}
         style={{ backgroundColor: platformTheme.chatBg }}
+        onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+        onDragLeave={() => setDragOver(false)}
+        onDrop={handleDrop}
       >
+        {/* Drop overlay */}
+        {dragOver && (
+          <div className="absolute inset-0 bg-primary-500/10 border-2 border-dashed border-primary-400 z-10 flex items-center justify-center rounded-lg pointer-events-none">
+            <div className="bg-white px-6 py-4 rounded-xl shadow-lg text-center">
+              <Paperclip size={32} className="text-primary-500 mx-auto mb-2" />
+              <p className="text-sm font-medium text-gray-700">Drop files here to attach</p>
+            </div>
+          </div>
+        )}
+
         {conversationId && activeConversation ? (
           <>
-            {/* Chat header - platform-styled */}
+            {/* Chat header */}
             <div className={`border-b px-4 sm:px-6 py-3 flex items-center gap-3 ${platformTheme.headerBg} ${platformTheme.headerBorder}`}>
-              {/* Back button on mobile */}
               <button
                 onClick={handleBackToList}
                 className="md:hidden text-gray-600 hover:text-gray-900 transition flex-shrink-0"
@@ -337,7 +396,7 @@ export default function InboxPage() {
               </div>
             </div>
 
-            {/* Messages area - platform-specific rendering */}
+            {/* Messages area */}
             <div className="flex-1 overflow-y-auto px-3 sm:px-6 py-4 space-y-3">
               {messages.map((msg, idx) => {
                 const isOutbound = msg.direction === 'outbound';
@@ -355,7 +414,7 @@ export default function InboxPage() {
                     )}
 
                     {isEmailPlatform
-                      ? renderEmailMessage(msg, isOutbound, idx, messages)
+                      ? renderEmailMessage(msg, isOutbound, idx)
                       : platform === 'whatsapp'
                       ? renderWhatsAppMessage(msg, isOutbound)
                       : platform === 'instagram'
@@ -376,8 +435,36 @@ export default function InboxPage() {
               </div>
             )}
 
-            {/* Message composer - platform-styled */}
-            {renderComposer(platform, isEmailPlatform, newMessage, setNewMessage, handleSend, sending)}
+            {/* Attachment preview bar */}
+            {attachments.length > 0 && (
+              <AttachmentPreview attachments={attachments} onRemove={removeAttachment} />
+            )}
+
+            {/* Hidden file input */}
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              className="hidden"
+              onChange={(e) => {
+                if (e.target.files?.length) {
+                  handleFileSelect(e.target.files);
+                  e.target.value = '';
+                }
+              }}
+            />
+
+            {/* Message composer */}
+            {renderComposer({
+              platform,
+              isEmailPlatform,
+              newMessage,
+              setNewMessage,
+              handleSend,
+              sending,
+              attachments,
+              onAttachClick: () => fileInputRef.current?.click(),
+            })}
           </>
         ) : (
           <div className="flex-1 flex flex-col items-center justify-center text-gray-400 px-6">
@@ -393,6 +480,38 @@ export default function InboxPage() {
   );
 }
 
+// ─── Attachment preview bar ───
+
+function AttachmentPreview({ attachments, onRemove }) {
+  return (
+    <div className="px-4 sm:px-6 py-2 bg-white border-t border-gray-100">
+      <div className="flex gap-2 overflow-x-auto pb-1">
+        {attachments.map((att) => (
+          <div key={att.id} className="relative flex-shrink-0 group">
+            {att.preview ? (
+              <div className="w-16 h-16 rounded-lg overflow-hidden border border-gray-200">
+                <img src={att.preview} alt={att.name} className="w-full h-full object-cover" />
+              </div>
+            ) : (
+              <div className="w-16 h-16 rounded-lg border border-gray-200 bg-gray-50 flex flex-col items-center justify-center px-1">
+                <FileText size={18} className="text-gray-400 mb-0.5" />
+                <span className="text-[9px] text-gray-500 truncate w-full text-center">{att.name.split('.').pop()}</span>
+              </div>
+            )}
+            <button
+              onClick={() => onRemove(att.id)}
+              className="absolute -top-1.5 -right-1.5 w-5 h-5 bg-red-500 text-white rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+            >
+              <X size={12} />
+            </button>
+            <p className="text-[9px] text-gray-400 truncate w-16 mt-0.5 text-center">{att.name}</p>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 // ─── Platform theme configs ───
 
 function getPlatformTheme(platform) {
@@ -402,7 +521,6 @@ function getPlatformTheme(platform) {
         chatBg: '#e5ddd5',
         headerBg: 'bg-[#075e54]',
         headerBorder: 'border-[#064e45]',
-        headerText: 'text-white',
         dateBadgeBg: 'bg-white/80',
         dateBadgeText: 'text-gray-600',
       };
@@ -411,7 +529,6 @@ function getPlatformTheme(platform) {
         chatBg: '#fafafa',
         headerBg: 'bg-white',
         headerBorder: 'border-gray-200',
-        headerText: 'text-gray-900',
         dateBadgeBg: 'bg-gray-100',
         dateBadgeText: 'text-gray-400',
       };
@@ -420,7 +537,6 @@ function getPlatformTheme(platform) {
         chatBg: '#f0f2f5',
         headerBg: 'bg-white',
         headerBorder: 'border-gray-200',
-        headerText: 'text-gray-900',
         dateBadgeBg: 'bg-gray-200',
         dateBadgeText: 'text-gray-500',
       };
@@ -429,7 +545,6 @@ function getPlatformTheme(platform) {
         chatBg: '#f8f9fa',
         headerBg: 'bg-white',
         headerBorder: 'border-gray-200',
-        headerText: 'text-gray-900',
         dateBadgeBg: 'bg-gray-100',
         dateBadgeText: 'text-gray-400',
       };
@@ -438,7 +553,6 @@ function getPlatformTheme(platform) {
         chatBg: '#f9fafb',
         headerBg: 'bg-white',
         headerBorder: 'border-gray-200',
-        headerText: 'text-gray-900',
         dateBadgeBg: 'bg-gray-100',
         dateBadgeText: 'text-gray-400',
       };
@@ -455,41 +569,101 @@ function getPlatformAvatarStyle(platform) {
   }
 }
 
-// ─── Email thread view ───
+// ─── Attachment indicator for messages ───
 
-function renderEmailMessage(msg, isOutbound, idx, allMessages) {
+function MessageAttachments({ attachments }) {
+  if (!attachments || !Array.isArray(attachments) || attachments.length === 0) return null;
   return (
-    <div className={`max-w-[95%] sm:max-w-[85%] ${isOutbound ? 'ml-auto' : ''}`}>
-      <div className={`rounded-xl p-4 shadow-sm ${
-        isOutbound
-          ? 'bg-blue-50 border border-blue-200'
-          : 'bg-white border border-gray-200'
-      }`}>
-        <div className="flex items-center justify-between mb-2">
-          <div className="flex items-center gap-2">
-            <div className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-medium ${
-              isOutbound ? 'bg-blue-200 text-blue-700' : 'bg-gray-200 text-gray-600'
-            }`}>
-              {(msg.sender || (isOutbound ? 'Y' : '?'))[0]?.toUpperCase()}
-            </div>
-            <span className="text-sm font-medium text-gray-900">
-              {isOutbound ? 'You' : (msg.sender || 'Unknown')}
-            </span>
-          </div>
-          <span className="text-xs text-gray-400">
-            {formatTime(msg.sentAt)}
-          </span>
+    <div className="mt-2 flex flex-wrap gap-1.5">
+      {attachments.map((att, i) => (
+        <div key={i} className="flex items-center gap-1 px-2 py-1 bg-black/5 rounded text-[11px]">
+          {att.mimeType?.startsWith('image/') ? <Image size={12} /> : <FileText size={12} />}
+          <span className="truncate max-w-[120px]">{att.filename}</span>
+          <span className="text-gray-400">({formatFileSize(att.size)})</span>
         </div>
+      ))}
+    </div>
+  );
+}
 
-        {msg.subject && idx === 0 && (
-          <div className="flex items-center gap-1.5 mb-2">
-            <Mail size={13} className="text-gray-400" />
-            <span className="text-xs font-medium text-gray-600">{msg.subject}</span>
+// ─── Email thread view with HTML rendering ───
+
+function renderEmailMessage(msg, isOutbound, idx) {
+  const hasHtml = msg.htmlContent && msg.htmlContent.trim().length > 0;
+  const sanitizedHtml = hasHtml
+    ? DOMPurify.sanitize(msg.htmlContent, {
+        ALLOWED_TAGS: ['p', 'br', 'b', 'i', 'u', 'strong', 'em', 'a', 'ul', 'ol', 'li', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'blockquote', 'pre', 'code', 'div', 'span', 'table', 'thead', 'tbody', 'tr', 'td', 'th', 'img', 'hr'],
+        ALLOWED_ATTR: ['href', 'target', 'rel', 'src', 'alt', 'width', 'height', 'style', 'class'],
+        ADD_ATTR: ['target'],
+      })
+    : null;
+
+  return (
+    <div className="flex justify-center my-2">
+      <div className="w-full max-w-2xl">
+        <div className={`rounded-xl shadow-sm overflow-hidden ${
+          isOutbound
+            ? 'bg-blue-50 border border-blue-200'
+            : 'bg-white border border-gray-200'
+        }`}>
+          {/* Email header */}
+          <div className="px-5 py-3 border-b border-gray-100">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold ${
+                  isOutbound ? 'bg-blue-200 text-blue-700' : 'bg-red-100 text-red-600'
+                }`}>
+                  {(msg.sender || (isOutbound ? 'Y' : '?'))[0]?.toUpperCase()}
+                </div>
+                <div>
+                  <span className="text-sm font-semibold text-gray-900">
+                    {isOutbound ? 'You' : (msg.sender || 'Unknown')}
+                  </span>
+                </div>
+              </div>
+              <span className="text-xs text-gray-400">
+                {msg.sentAt ? new Date(msg.sentAt).toLocaleString([], {
+                  month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
+                }) : ''}
+              </span>
+            </div>
+            {msg.subject && idx === 0 && (
+              <div className="flex items-center gap-1.5 mt-2">
+                <Mail size={13} className="text-gray-400 flex-shrink-0" />
+                <span className="text-xs font-medium text-gray-600 truncate">{msg.subject}</span>
+              </div>
+            )}
           </div>
-        )}
 
-        <div className="text-sm text-gray-800 whitespace-pre-wrap break-words leading-relaxed">
-          {msg.content}
+          {/* Email body */}
+          <div className="px-5 py-4">
+            {sanitizedHtml ? (
+              <div
+                className="email-html-content text-sm text-gray-800 leading-relaxed break-words"
+                dangerouslySetInnerHTML={{ __html: sanitizedHtml }}
+              />
+            ) : (
+              <div className="text-sm text-gray-800 whitespace-pre-wrap break-words leading-relaxed">
+                {msg.content}
+              </div>
+            )}
+          </div>
+
+          {/* Attachments */}
+          {msg.attachments && Array.isArray(msg.attachments) && msg.attachments.length > 0 && (
+            <div className="px-5 py-3 border-t border-gray-100 bg-gray-50/50">
+              <p className="text-[10px] uppercase tracking-wide text-gray-400 font-medium mb-2">Attachments</p>
+              <div className="flex flex-wrap gap-2">
+                {msg.attachments.map((att, i) => (
+                  <div key={i} className="flex items-center gap-1.5 px-2.5 py-1.5 bg-white rounded-lg border border-gray-200 text-xs">
+                    {att.mimeType?.startsWith('image/') ? <Image size={14} className="text-blue-500" /> : <FileText size={14} className="text-gray-400" />}
+                    <span className="truncate max-w-[150px] text-gray-700">{att.filename}</span>
+                    <span className="text-gray-400">({formatFileSize(att.size)})</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </div>
@@ -509,10 +683,9 @@ function renderWhatsAppMessage(msg, isOutbound) {
         }`}
       >
         <p className="whitespace-pre-wrap break-words">{msg.content}</p>
-        <div className={`flex items-center justify-end gap-1 mt-1`}>
-          <span className="text-[10px] text-gray-500">
-            {formatTime(msg.sentAt)}
-          </span>
+        <MessageAttachments attachments={msg.attachments} />
+        <div className="flex items-center justify-end gap-1 mt-1">
+          <span className="text-[10px] text-gray-500">{formatTime(msg.sentAt)}</span>
           {isOutbound && msg.status && (
             <span className="text-[10px] text-blue-500">
               {msg.status === 'delivered' || msg.status === 'read' ? '✓✓' : '✓'}
@@ -537,6 +710,7 @@ function renderInstagramMessage(msg, isOutbound) {
         }`}
       >
         <p className="whitespace-pre-wrap break-words">{msg.content}</p>
+        <MessageAttachments attachments={msg.attachments} />
         <p className={`text-[10px] mt-1 text-right ${isOutbound ? 'text-white/70' : 'text-gray-400'}`}>
           {formatTime(msg.sentAt)}
         </p>
@@ -558,6 +732,7 @@ function renderFacebookMessage(msg, isOutbound) {
         }`}
       >
         <p className="whitespace-pre-wrap break-words">{msg.content}</p>
+        <MessageAttachments attachments={msg.attachments} />
         <p className={`text-[10px] mt-1 text-right ${isOutbound ? 'text-blue-200' : 'text-gray-400'}`}>
           {formatTime(msg.sentAt)}
         </p>
@@ -579,6 +754,7 @@ function renderDefaultMessage(msg, isOutbound) {
         }`}
       >
         <p className="whitespace-pre-wrap break-words">{msg.content}</p>
+        <MessageAttachments attachments={msg.attachments} />
         <p className={`text-xs mt-1 ${isOutbound ? 'text-primary-200' : 'text-gray-400'}`}>
           {formatTime(msg.sentAt)}
         </p>
@@ -589,7 +765,9 @@ function renderDefaultMessage(msg, isOutbound) {
 
 // ─── Platform-specific composer ───
 
-function renderComposer(platform, isEmailPlatform, newMessage, setNewMessage, handleSend, sending) {
+function renderComposer({ platform, isEmailPlatform, newMessage, setNewMessage, handleSend, sending, attachments, onAttachClick }) {
+  const hasContent = newMessage.trim() || attachments.length > 0;
+
   if (isEmailPlatform) {
     return (
       <form onSubmit={handleSend} className="bg-white border-t border-gray-200 px-4 sm:px-6 py-4">
@@ -609,11 +787,13 @@ function renderComposer(platform, isEmailPlatform, newMessage, setNewMessage, ha
           />
           <div className="flex items-center justify-between px-4 py-2 bg-gray-50 border-t border-gray-100">
             <div className="flex items-center gap-2 text-gray-400">
-              <button type="button" className="hover:text-gray-600 transition p-1"><Paperclip size={16} /></button>
+              <button type="button" onClick={onAttachClick} className="hover:text-gray-600 transition p-1" title="Attach file">
+                <Paperclip size={16} />
+              </button>
             </div>
             <button
               type="submit"
-              disabled={!newMessage.trim() || sending}
+              disabled={!hasContent || sending}
               className="bg-primary-500 hover:bg-primary-600 text-white px-4 py-1.5 rounded-lg text-sm font-medium transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
             >
               <Send size={14} />
@@ -630,6 +810,9 @@ function renderComposer(platform, isEmailPlatform, newMessage, setNewMessage, ha
       <form onSubmit={handleSend} className="bg-[#f0f0f0] px-3 sm:px-4 py-2.5">
         <div className="flex items-center gap-2">
           <button type="button" className="text-gray-500 hover:text-gray-700 transition p-1.5"><Smile size={22} /></button>
+          <button type="button" onClick={onAttachClick} className="text-gray-500 hover:text-gray-700 transition p-1.5" title="Attach file">
+            <Paperclip size={20} />
+          </button>
           <input
             type="text"
             value={newMessage}
@@ -639,7 +822,7 @@ function renderComposer(platform, isEmailPlatform, newMessage, setNewMessage, ha
           />
           <button
             type="submit"
-            disabled={!newMessage.trim() || sending}
+            disabled={!hasContent || sending}
             className="bg-[#075e54] hover:bg-[#064e45] text-white p-2.5 rounded-full transition disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <Send size={18} />
@@ -653,6 +836,9 @@ function renderComposer(platform, isEmailPlatform, newMessage, setNewMessage, ha
     return (
       <form onSubmit={handleSend} className="bg-white border-t border-gray-200 px-3 sm:px-4 py-3">
         <div className="flex items-center gap-2">
+          <button type="button" onClick={onAttachClick} className="text-gray-400 hover:text-gray-600 transition p-1" title="Attach file">
+            <Paperclip size={18} />
+          </button>
           <input
             type="text"
             value={newMessage}
@@ -662,7 +848,7 @@ function renderComposer(platform, isEmailPlatform, newMessage, setNewMessage, ha
           />
           <button
             type="submit"
-            disabled={!newMessage.trim() || sending}
+            disabled={!hasContent || sending}
             className="text-primary-500 hover:text-primary-600 font-semibold text-sm transition disabled:opacity-50 disabled:cursor-not-allowed px-2"
           >
             Send
@@ -676,6 +862,9 @@ function renderComposer(platform, isEmailPlatform, newMessage, setNewMessage, ha
     return (
       <form onSubmit={handleSend} className="bg-white border-t border-gray-100 px-3 sm:px-4 py-2.5">
         <div className="flex items-center gap-2">
+          <button type="button" onClick={onAttachClick} className="text-[#0084ff] hover:text-[#0073e6] transition p-1" title="Attach file">
+            <Paperclip size={20} />
+          </button>
           <input
             type="text"
             value={newMessage}
@@ -685,7 +874,7 @@ function renderComposer(platform, isEmailPlatform, newMessage, setNewMessage, ha
           />
           <button
             type="submit"
-            disabled={!newMessage.trim() || sending}
+            disabled={!hasContent || sending}
             className="text-[#0084ff] hover:text-[#0073e6] transition disabled:opacity-50 disabled:cursor-not-allowed p-1.5"
           >
             <Send size={20} />
@@ -699,6 +888,9 @@ function renderComposer(platform, isEmailPlatform, newMessage, setNewMessage, ha
   return (
     <form onSubmit={handleSend} className="bg-white border-t border-gray-200 px-4 sm:px-6 py-3">
       <div className="flex items-center gap-3">
+        <button type="button" onClick={onAttachClick} className="text-gray-400 hover:text-gray-600 transition p-1" title="Attach file">
+          <Paperclip size={18} />
+        </button>
         <input
           type="text"
           value={newMessage}
@@ -708,7 +900,7 @@ function renderComposer(platform, isEmailPlatform, newMessage, setNewMessage, ha
         />
         <button
           type="submit"
-          disabled={!newMessage.trim() || sending}
+          disabled={!hasContent || sending}
           className="bg-primary-500 hover:bg-primary-600 text-white p-2.5 rounded-xl transition disabled:opacity-50 disabled:cursor-not-allowed"
         >
           <Send size={18} />
@@ -719,6 +911,13 @@ function renderComposer(platform, isEmailPlatform, newMessage, setNewMessage, ha
 }
 
 // ─── Utility functions ───
+
+function formatFileSize(bytes) {
+  if (!bytes) return '0B';
+  if (bytes < 1024) return `${bytes}B`;
+  if (bytes < 1048576) return `${(bytes / 1024).toFixed(1)}KB`;
+  return `${(bytes / 1048576).toFixed(1)}MB`;
+}
 
 function formatTime(dateStr) {
   if (!dateStr) return '';

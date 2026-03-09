@@ -1,5 +1,7 @@
 import { Router } from 'express';
+import fs from 'fs';
 import { authenticate } from '../middleware/auth.js';
+import { upload } from '../middleware/upload.js';
 import prisma from '../utils/prisma.js';
 import * as facebookService from '../services/facebook.js';
 import * as instagramService from '../services/instagram.js';
@@ -116,12 +118,14 @@ router.get('/:conversationId', authenticate, async (req, res) => {
   }
 });
 
-// Send a message
-router.post('/send', authenticate, async (req, res) => {
+// Send a message (with optional file attachments)
+router.post('/send', authenticate, upload.array('attachments', 10), async (req, res) => {
   try {
     const { conversationId, content } = req.body;
-    if (!conversationId || !content) {
-      return res.status(400).json({ error: 'conversationId and content are required' });
+    const files = req.files || [];
+
+    if (!conversationId || (!content && files.length === 0)) {
+      return res.status(400).json({ error: 'conversationId and content (or attachments) are required' });
     }
 
     const conversation = await prisma.conversation.findFirst({
@@ -141,38 +145,82 @@ router.post('/send', authenticate, async (req, res) => {
 
     const { platform } = conversation.connectedAccount;
     let platformMessageId = null;
+    const attachmentMeta = [];
 
     // Send via the correct platform API
     try {
       switch (platform) {
         case 'facebook': {
-          const result = await facebookService.sendMessage(
-            conversation.connectedAccountId,
-            conversation.platformConversationId,
-            content
-          );
-          platformMessageId = result.message_id;
+          if (content) {
+            const result = await facebookService.sendMessage(
+              conversation.connectedAccountId,
+              conversation.platformConversationId,
+              content
+            );
+            platformMessageId = result.message_id;
+          }
+          for (const file of files) {
+            const result = await facebookService.sendAttachment(
+              conversation.connectedAccountId,
+              conversation.platformConversationId,
+              file
+            );
+            attachmentMeta.push({
+              filename: file.originalname,
+              mimeType: file.mimetype,
+              size: file.size,
+              platformId: result.message_id || null,
+            });
+          }
           break;
         }
         case 'instagram': {
-          // Use contact's platformUserId (Instagram-scoped user ID) for sending,
-          // since platformConversationId may be the IG conversation ID from sync
           const igRecipientId = conversation.contact?.platformUserId || conversation.platformConversationId;
-          const result = await instagramService.sendMessage(
-            conversation.connectedAccountId,
-            igRecipientId,
-            content
-          );
-          platformMessageId = result.message_id;
+          if (content) {
+            const result = await instagramService.sendMessage(
+              conversation.connectedAccountId,
+              igRecipientId,
+              content
+            );
+            platformMessageId = result.message_id;
+          }
+          for (const file of files) {
+            const result = await instagramService.sendAttachment(
+              conversation.connectedAccountId,
+              igRecipientId,
+              file
+            );
+            attachmentMeta.push({
+              filename: file.originalname,
+              mimeType: file.mimetype,
+              size: file.size,
+              platformId: result.message_id || null,
+            });
+          }
           break;
         }
         case 'whatsapp': {
-          const result = await whatsappService.sendMessage(
-            conversation.connectedAccountId,
-            conversation.platformConversationId,
-            content
-          );
-          platformMessageId = result.messages?.[0]?.id;
+          if (content) {
+            const result = await whatsappService.sendMessage(
+              conversation.connectedAccountId,
+              conversation.platformConversationId,
+              content
+            );
+            platformMessageId = result.messages?.[0]?.id;
+          }
+          for (const file of files) {
+            const result = await whatsappService.sendMedia(
+              conversation.connectedAccountId,
+              conversation.platformConversationId,
+              file
+            );
+            attachmentMeta.push({
+              filename: file.originalname,
+              mimeType: file.mimetype,
+              size: file.size,
+              platformId: result.messages?.[0]?.id || null,
+            });
+          }
           break;
         }
         case 'gmail': {
@@ -194,10 +242,19 @@ router.post('/send', authenticate, async (req, res) => {
             conversation.connectedAccountId,
             recipientEmail,
             subject,
-            content,
-            conversation.platformConversationId
+            content || '',
+            conversation.platformConversationId,
+            files
           );
           platformMessageId = result.id;
+
+          for (const file of files) {
+            attachmentMeta.push({
+              filename: file.originalname,
+              mimeType: file.mimetype,
+              size: file.size,
+            });
+          }
           break;
         }
         default:
@@ -213,6 +270,21 @@ router.post('/send', authenticate, async (req, res) => {
       return res.status(typeof status === 'number' ? status : 502).json({
         error: `Failed to send via ${platform}: ${detail}`,
       });
+    } finally {
+      // Clean up uploaded files from disk
+      for (const file of files) {
+        try { fs.unlinkSync(file.path); } catch { /* ignore */ }
+      }
+    }
+
+    // Determine content type
+    let contentType = platform === 'gmail' ? 'email' : 'text';
+    if (files.length > 0 && !content) {
+      const mime = files[0].mimetype;
+      if (mime.startsWith('image/')) contentType = 'image';
+      else if (mime.startsWith('video/')) contentType = 'video';
+      else if (mime.startsWith('audio/')) contentType = 'audio';
+      else contentType = 'file';
     }
 
     // Save message to DB
@@ -222,8 +294,9 @@ router.post('/send', authenticate, async (req, res) => {
         platformMessageId,
         direction: 'outbound',
         sender: req.user.name || req.user.email,
-        content,
-        contentType: platform === 'gmail' ? 'email' : 'text',
+        content: content || (attachmentMeta.length > 0 ? `[${attachmentMeta.map(a => a.filename).join(', ')}]` : ''),
+        contentType,
+        attachments: attachmentMeta.length > 0 ? attachmentMeta : undefined,
         status: 'sent',
         sentAt: new Date(),
       },
