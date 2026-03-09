@@ -9,11 +9,12 @@ export default function DashboardLayout() {
   const navigate = useNavigate();
 
   useEffect(() => {
-    if (user) {
+    if (user?.id) {
       connectSocket(user.id);
     }
+    // Only disconnect on full unmount (logout), not on user object re-renders
     return () => disconnectSocket();
-  }, [user]);
+  }, [user?.id]);
 
   const handleLogout = () => {
     logout();

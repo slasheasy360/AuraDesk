@@ -2,6 +2,7 @@ import { Routes, Route, Navigate } from 'react-router-dom';
 import { useAuth } from './context/AuthContext.jsx';
 import LoginPage from './pages/LoginPage.jsx';
 import RegisterPage from './pages/RegisterPage.jsx';
+import OAuthCallbackPage from './pages/OAuthCallbackPage.jsx';
 import DashboardLayout from './components/DashboardLayout.jsx';
 import InboxPage from './pages/InboxPage.jsx';
 import ConnectionsPage from './pages/ConnectionsPage.jsx';
@@ -18,6 +19,7 @@ export default function App() {
     <Routes>
       <Route path="/login" element={<LoginPage />} />
       <Route path="/register" element={<RegisterPage />} />
+      <Route path="/dashboard" element={<OAuthCallbackPage />} />
       <Route
         path="/"
         element={

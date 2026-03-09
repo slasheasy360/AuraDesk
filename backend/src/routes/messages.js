@@ -5,8 +5,70 @@ import * as facebookService from '../services/facebook.js';
 import * as instagramService from '../services/instagram.js';
 import * as whatsappService from '../services/whatsapp.js';
 import * as gmailService from '../services/gmail.js';
+import { syncGmailMessagesController, gmailDiagnosticController } from '../controllers/gmail.controller.js';
 
 const router = Router();
+
+// Get smart inbox messages across all connected platforms
+router.get('/', authenticate, async (req, res) => {
+  try {
+    const messages = await prisma.message.findMany({
+      where: {
+        conversation: {
+          connectedAccount: {
+            userId: req.user.id,
+            status: 'active',
+          },
+        },
+      },
+      include: {
+        conversation: {
+          include: {
+            contact: {
+              select: {
+                id: true,
+                name: true,
+                username: true,
+                platformUserId: true,
+              },
+            },
+            connectedAccount: {
+              select: {
+                id: true,
+                platform: true,
+                displayName: true,
+              },
+            },
+          },
+        },
+      },
+      orderBy: { sentAt: 'desc' },
+    });
+
+    const normalized = messages.map((message) => ({
+      ...message,
+      platform: message.conversation.connectedAccount.platform,
+      sender:
+        message.sender ||
+        message.conversation.contact?.name ||
+        message.conversation.contact?.username ||
+        message.conversation.contact?.platformUserId ||
+        'Unknown',
+      subject: message.subject || null,
+    }));
+
+    res.json({ messages: normalized });
+  } catch (err) {
+    console.error('Get smart inbox messages error:', err);
+    res.status(500).json({ error: 'Failed to fetch smart inbox messages' });
+  }
+});
+
+// Diagnose Gmail API connectivity
+router.get('/gmail/diagnose', authenticate, gmailDiagnosticController);
+
+// Sync latest Gmail messages for the current user
+router.get('/gmail/sync', authenticate, syncGmailMessagesController);
 
 // Get messages for a conversation
 router.get('/:conversationId', authenticate, async (req, res) => {
@@ -61,45 +123,73 @@ router.post('/send', authenticate, async (req, res) => {
     let platformMessageId = null;
 
     // Send via the correct platform API
-    switch (platform) {
-      case 'facebook': {
-        const result = await facebookService.sendMessage(
-          conversation.connectedAccountId,
-          conversation.platformConversationId,
-          content
-        );
-        platformMessageId = result.message_id;
-        break;
+    try {
+      switch (platform) {
+        case 'facebook': {
+          const result = await facebookService.sendMessage(
+            conversation.connectedAccountId,
+            conversation.platformConversationId,
+            content
+          );
+          platformMessageId = result.message_id;
+          break;
+        }
+        case 'instagram': {
+          const result = await instagramService.sendMessage(
+            conversation.connectedAccountId,
+            conversation.platformConversationId,
+            content
+          );
+          platformMessageId = result.message_id;
+          break;
+        }
+        case 'whatsapp': {
+          const result = await whatsappService.sendMessage(
+            conversation.connectedAccountId,
+            conversation.platformConversationId,
+            content
+          );
+          platformMessageId = result.messages?.[0]?.id;
+          break;
+        }
+        case 'gmail': {
+          const recipientEmail = conversation.contact?.platformUserId;
+          if (!recipientEmail) {
+            return res.status(400).json({ error: 'No recipient email found for this Gmail conversation' });
+          }
+
+          const lastMsg = await prisma.message.findFirst({
+            where: { conversationId: conversation.id },
+            orderBy: { sentAt: 'desc' },
+            select: { subject: true },
+          });
+          const subject = lastMsg?.subject
+            ? (lastMsg.subject.startsWith('Re:') ? lastMsg.subject : `Re: ${lastMsg.subject}`)
+            : 'Re:';
+
+          const result = await gmailService.sendEmail(
+            conversation.connectedAccountId,
+            recipientEmail,
+            subject,
+            content,
+            conversation.platformConversationId
+          );
+          platformMessageId = result.id;
+          break;
+        }
+        default:
+          return res.status(400).json({ error: `Unsupported platform: ${platform}` });
       }
-      case 'instagram': {
-        const result = await instagramService.sendMessage(
-          conversation.connectedAccountId,
-          conversation.platformConversationId,
-          content
-        );
-        platformMessageId = result.message_id;
-        break;
-      }
-      case 'whatsapp': {
-        const result = await whatsappService.sendMessage(
-          conversation.connectedAccountId,
-          conversation.platformConversationId,
-          content
-        );
-        platformMessageId = result.messages?.[0]?.id;
-        break;
-      }
-      case 'gmail': {
-        const result = await gmailService.sendEmail(
-          conversation.connectedAccountId,
-          conversation.platformConversationId, // For Gmail, this is the email address or thread ID
-          'Re: Conversation', // Subject
-          content,
-          conversation.platformConversationId
-        );
-        platformMessageId = result.id;
-        break;
-      }
+    } catch (platformErr) {
+      console.error(`[${platform}] Send error:`, platformErr);
+      const status = platformErr?.response?.status || platformErr?.code || 500;
+      const detail = platformErr?.response?.data?.error?.message
+        || platformErr?.response?.data?.error
+        || platformErr?.message
+        || 'Unknown error';
+      return res.status(typeof status === 'number' ? status : 502).json({
+        error: `Failed to send via ${platform}: ${detail}`,
+      });
     }
 
     // Save message to DB
@@ -108,6 +198,7 @@ router.post('/send', authenticate, async (req, res) => {
         conversationId: conversation.id,
         platformMessageId,
         direction: 'outbound',
+        sender: req.user.name || req.user.email,
         content,
         contentType: platform === 'gmail' ? 'email' : 'text',
         status: 'sent',

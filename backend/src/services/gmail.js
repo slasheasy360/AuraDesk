@@ -161,17 +161,43 @@ export async function sendEmail(connectedAccountId, to, subject, body, threadId)
     where: { id: connectedAccountId },
   });
 
-  const raw = createRawEmail(account.platformAccountId, to, subject, body, threadId);
+  // Get the Message-ID of the last message in the thread for proper In-Reply-To
+  let lastMessageId = null;
+  if (threadId) {
+    try {
+      const threadRes = await gmail.users.threads.get({
+        userId: 'me',
+        id: threadId,
+        format: 'metadata',
+        metadataHeaders: ['Message-ID'],
+      });
+      const threadMessages = threadRes.data.messages || [];
+      if (threadMessages.length > 0) {
+        const lastMsg = threadMessages[threadMessages.length - 1];
+        const msgIdHeader = lastMsg.payload?.headers?.find(
+          (h) => h.name.toLowerCase() === 'message-id'
+        );
+        lastMessageId = msgIdHeader?.value || null;
+      }
+    } catch {
+      // If we can't fetch the thread, send without In-Reply-To
+    }
+  }
+
+  const raw = createRawEmail(account.platformAccountId, to, subject, body, lastMessageId);
+
+  const requestBody = { raw };
+  if (threadId) requestBody.threadId = threadId;
 
   const res = await gmail.users.messages.send({
     userId: 'me',
-    requestBody: { raw, threadId },
+    requestBody,
   });
 
   return res.data;
 }
 
-function createRawEmail(from, to, subject, body, threadId) {
+function createRawEmail(from, to, subject, body, inReplyToMessageId) {
   const headers = [
     `From: ${from}`,
     `To: ${to}`,
@@ -180,13 +206,144 @@ function createRawEmail(from, to, subject, body, threadId) {
     'Content-Type: text/plain; charset=utf-8',
   ];
 
-  if (threadId) {
-    headers.push(`In-Reply-To: ${threadId}`);
-    headers.push(`References: ${threadId}`);
+  if (inReplyToMessageId) {
+    headers.push(`In-Reply-To: ${inReplyToMessageId}`);
+    headers.push(`References: ${inReplyToMessageId}`);
   }
 
   const email = `${headers.join('\r\n')}\r\n\r\n${body}`;
   return Buffer.from(email).toString('base64url');
+}
+
+// ─── Gmail Watch (Pub/Sub) ───────────────────────────────────────────────────
+
+/**
+ * Start watching a Gmail mailbox via Pub/Sub.
+ * Returns { historyId, expiration } to store in the DB.
+ */
+export async function startWatch(connectedAccountId) {
+  const gmail = await getGmailClient(connectedAccountId);
+  const topicName = process.env.GMAIL_PUBSUB_TOPIC;
+  if (!topicName) throw new Error('GMAIL_PUBSUB_TOPIC env var is not set');
+
+  const res = await gmail.users.watch({
+    userId: 'me',
+    requestBody: {
+      topicName,
+      labelIds: ['INBOX'],
+    },
+  });
+
+  const { historyId, expiration } = res.data;
+
+  // Persist to DB
+  const account = await prisma.connectedAccount.findUnique({
+    where: { id: connectedAccountId },
+  });
+  if (account) {
+    await prisma.connectedAccount.update({
+      where: { id: connectedAccountId },
+      data: {
+        gmailHistoryId: String(historyId),
+        gmailWatchExpiration: new Date(Number(expiration)),
+      },
+    });
+  }
+
+  console.log(`[Gmail Watch] Started for account ${connectedAccountId}, historyId=${historyId}, expires=${new Date(Number(expiration)).toISOString()}`);
+  return { historyId: String(historyId), expiration: new Date(Number(expiration)) };
+}
+
+/**
+ * Stop watching a Gmail mailbox.
+ */
+export async function stopWatch(connectedAccountId) {
+  try {
+    const gmail = await getGmailClient(connectedAccountId);
+    await gmail.users.stop({ userId: 'me' });
+    await prisma.connectedAccount.update({
+      where: { id: connectedAccountId },
+      data: { gmailHistoryId: null, gmailWatchExpiration: null },
+    });
+    console.log(`[Gmail Watch] Stopped for account ${connectedAccountId}`);
+  } catch (err) {
+    console.error(`[Gmail Watch] Stop failed for ${connectedAccountId}:`, err.message);
+  }
+}
+
+/**
+ * Fetch new messages since a given historyId using the History API.
+ * Returns an array of full message objects.
+ */
+export async function fetchHistoryMessages(connectedAccountId, startHistoryId) {
+  const gmail = await getGmailClient(connectedAccountId);
+
+  const historyRes = await gmail.users.history.list({
+    userId: 'me',
+    startHistoryId,
+    historyTypes: ['messageAdded'],
+    labelId: 'INBOX',
+  });
+
+  const histories = historyRes.data.history || [];
+  const newHistoryId = historyRes.data.historyId;
+
+  // Collect unique message IDs from messagesAdded events
+  const messageIds = new Set();
+  for (const record of histories) {
+    for (const added of record.messagesAdded || []) {
+      messageIds.add(added.message.id);
+    }
+  }
+
+  if (messageIds.size === 0) {
+    return { messages: [], newHistoryId };
+  }
+
+  // Fetch full message details
+  const messages = await Promise.all(
+    [...messageIds].map(async (id) => {
+      try {
+        const msgRes = await gmail.users.messages.get({
+          userId: 'me',
+          id,
+          format: 'full',
+        });
+        return msgRes.data;
+      } catch {
+        return null; // Message may have been deleted
+      }
+    })
+  );
+
+  return {
+    messages: messages.filter(Boolean),
+    newHistoryId,
+  };
+}
+
+/**
+ * Renew watches for all active Gmail accounts whose watch is about to expire.
+ * Call this periodically (e.g. every 6 hours).
+ */
+export async function renewExpiringWatches() {
+  const threshold = new Date(Date.now() + 24 * 60 * 60 * 1000); // expires within 24h
+  const accounts = await prisma.connectedAccount.findMany({
+    where: {
+      platform: 'gmail',
+      status: 'active',
+      gmailWatchExpiration: { lt: threshold },
+    },
+  });
+
+  console.log(`[Gmail Watch] Renewing ${accounts.length} expiring watches`);
+  for (const account of accounts) {
+    try {
+      await startWatch(account.id);
+    } catch (err) {
+      console.error(`[Gmail Watch] Renewal failed for ${account.id}:`, err.message);
+    }
+  }
 }
 
 export function parseEmailHeaders(headers) {

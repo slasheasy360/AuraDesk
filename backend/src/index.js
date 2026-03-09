@@ -14,6 +14,7 @@ import messageRoutes from './routes/messages.js';
 import accountRoutes from './routes/accounts.js';
 import metaWebhook from './webhooks/meta.js';
 import gmailWebhook from './webhooks/gmail.js';
+import { renewExpiringWatches } from './services/gmail.js';
 
 const app = express();
 const server = http.createServer(app);
@@ -74,4 +75,19 @@ app.get('/health', (req, res) => res.json({ status: 'ok', timestamp: new Date().
 const PORT = process.env.PORT || 3001;
 server.listen(PORT, () => {
   console.log(`AuraDesk backend running on port ${PORT}`);
+
+  // Renew expiring Gmail watches every 6 hours
+  const SIX_HOURS = 6 * 60 * 60 * 1000;
+  setInterval(() => {
+    renewExpiringWatches().catch((err) => {
+      console.error('[Cron] Gmail watch renewal failed:', err.message);
+    });
+  }, SIX_HOURS);
+
+  // Also run once on startup (after a short delay to let DB connect)
+  setTimeout(() => {
+    renewExpiringWatches().catch((err) => {
+      console.error('[Startup] Gmail watch renewal failed:', err.message);
+    });
+  }, 10000);
 });

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import api from '../services/api.js';
 import PlatformBadge from '../components/PlatformBadge.jsx';
@@ -42,6 +42,7 @@ const platforms = [
 export default function ConnectionsPage() {
   const [accounts, setAccounts] = useState([]);
   const [loading, setLoading] = useState(true);
+  const syncTriggeredRef = useRef(false);
   const [searchParams] = useSearchParams();
   const successPlatform = searchParams.get('success');
   const errorPlatform = searchParams.get('error');
@@ -49,6 +50,24 @@ export default function ConnectionsPage() {
   useEffect(() => {
     fetchAccounts();
   }, []);
+
+  useEffect(() => {
+    if (loading || syncTriggeredRef.current) return;
+
+    const gmailConnected = accounts.some((a) => a.platform === 'gmail' && a.status === 'active');
+    if (!gmailConnected) return;
+
+    // Sync right after Gmail connect callback or whenever a connected Gmail account is shown.
+    syncTriggeredRef.current = true;
+    api
+      .get('/api/messages/gmail/sync')
+      .then(() => {
+        window.dispatchEvent(new Event('auradesk:refresh-inbox'));
+      })
+      .catch((err) => {
+        console.error('Failed to sync Gmail messages:', err);
+      });
+  }, [accounts, loading, successPlatform]);
 
   async function fetchAccounts() {
     try {

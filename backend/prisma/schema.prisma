@@ -21,14 +21,16 @@ model User {
 }
 
 model ConnectedAccount {
-  id                String   @id @default(uuid())
-  userId            String   @map("user_id")
-  platform          Platform
-  platformAccountId String   @map("platform_account_id")
-  displayName       String?  @map("display_name")
-  avatarUrl         String?  @map("avatar_url")
-  status            AccountStatus @default(active)
-  createdAt         DateTime @default(now()) @map("created_at")
+  id                     String   @id @default(uuid())
+  userId                 String   @map("user_id")
+  platform               Platform
+  platformAccountId      String   @map("platform_account_id")
+  displayName            String?  @map("display_name")
+  avatarUrl              String?  @map("avatar_url")
+  status                 AccountStatus @default(active)
+  gmailHistoryId         String?  @map("gmail_history_id")
+  gmailWatchExpiration   DateTime? @map("gmail_watch_expiration")
+  createdAt              DateTime @default(now()) @map("created_at")
 
   user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   authToken         AuthToken?
@@ -111,6 +113,8 @@ model Message {
   conversationId      String   @map("conversation_id")
   platformMessageId   String?  @map("platform_message_id")
   direction           MessageDirection
+  sender              String?
+  subject             String?
   content             String?
   contentType         ContentType @default(text) @map("content_type")
   sentAt              DateTime @default(now()) @map("sent_at")
