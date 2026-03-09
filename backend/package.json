@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "dev": "nodemon src/index.js",
-    "start": "npx prisma migrate deploy && node src/index.js",
+    "start": "node src/index.js",
     "db:migrate": "npx prisma migrate dev",
     "db:generate": "npx prisma generate",
     "db:push": "npx prisma db push",
