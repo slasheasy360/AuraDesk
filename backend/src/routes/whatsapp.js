@@ -142,4 +142,35 @@ router.post('/connect-with-token', authenticate, async (req, res) => {
   }
 });
 
+// One-click connect using server env vars (WHATSAPP_WABA_ID, WHATSAPP_PHONE_NUMBER_ID, WHATSAPP_SYSTEM_USER_TOKEN)
+router.post('/connect-env', authenticate, async (req, res) => {
+  try {
+    const wabaId = process.env.WHATSAPP_WABA_ID;
+    const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID;
+    const accessToken = process.env.WHATSAPP_SYSTEM_USER_TOKEN;
+
+    if (!wabaId || !phoneNumberId || !accessToken) {
+      return res.status(400).json({
+        error: 'WhatsApp env vars not configured. Set WHATSAPP_WABA_ID, WHATSAPP_PHONE_NUMBER_ID, and WHATSAPP_SYSTEM_USER_TOKEN on the server.',
+      });
+    }
+
+    console.log('[WhatsApp Connect] One-click connect using env vars...');
+
+    const account = await whatsappService.handleEmbeddedSignup(
+      req.user.id,
+      wabaId,
+      phoneNumberId,
+      accessToken
+    );
+
+    console.log('[WhatsApp Connect] ✓ Connected via env vars', { accountId: account.id });
+    res.json({ account });
+  } catch (err) {
+    console.error('WhatsApp connect-env error:', err.response?.data || err.message);
+    const detail = err.response?.data?.error?.message || err.message;
+    res.status(500).json({ error: `Failed to connect WhatsApp: ${detail}` });
+  }
+});
+
 export default router;

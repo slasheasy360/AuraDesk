@@ -6,20 +6,32 @@ const GRAPH_API = 'https://graph.facebook.com/v21.0';
 
 export async function handleEmbeddedSignup(userId, wabaId, phoneNumberId, userAccessToken) {
   // Get phone number details
-  const phoneRes = await axios.get(`${GRAPH_API}/${phoneNumberId}`, {
-    params: {
-      fields: 'display_phone_number,verified_name',
-      access_token: userAccessToken,
-    },
-  });
+  let phoneNumber = phoneNumberId;
+  let businessName = 'WhatsApp Business';
 
-  const phoneNumber = phoneRes.data.display_phone_number;
-  const businessName = phoneRes.data.verified_name;
+  try {
+    const phoneRes = await axios.get(`${GRAPH_API}/${phoneNumberId}`, {
+      params: {
+        fields: 'display_phone_number,verified_name',
+        access_token: userAccessToken,
+      },
+    });
+    phoneNumber = phoneRes.data.display_phone_number || phoneNumber;
+    businessName = phoneRes.data.verified_name || businessName;
+    console.log('[WhatsApp] Phone details:', { phoneNumber, businessName });
+  } catch (err) {
+    console.warn('[WhatsApp] Could not fetch phone details (non-fatal):', err.response?.data?.error?.message || err.message);
+  }
 
-  // Subscribe webhook to WABA
-  await axios.post(`${GRAPH_API}/${wabaId}/subscribed_apps`, null, {
-    params: { access_token: userAccessToken },
-  });
+  // Subscribe webhook to WABA (non-fatal — messaging still works without it)
+  try {
+    await axios.post(`${GRAPH_API}/${wabaId}/subscribed_apps`, null, {
+      params: { access_token: userAccessToken },
+    });
+    console.log('[WhatsApp] Webhook subscription successful');
+  } catch (subErr) {
+    console.warn('[WhatsApp] Webhook subscription failed (non-fatal):', subErr.response?.data?.error?.message || subErr.message);
+  }
 
   // Upsert connected account
   const connectedAccount = await prisma.connectedAccount.upsert({
