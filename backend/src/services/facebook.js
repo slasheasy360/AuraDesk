@@ -3,37 +3,60 @@ import prisma from '../utils/prisma.js';
 import { encrypt, decrypt } from '../utils/encryption.js';
 
 const GRAPH_API = 'https://graph.facebook.com/v21.0';
+const DEFAULT_FACEBOOK_REDIRECT_URI = 'https://auradesk-k5en.onrender.com/auth/facebook/callback';
 
-export function getLoginUrl(state) {
+function getMetaAppId() {
+  if (!process.env.META_APP_ID) {
+    throw new Error('META_APP_ID is not configured');
+  }
+  return process.env.META_APP_ID;
+}
+
+function getMetaAppSecret() {
+  if (!process.env.META_APP_SECRET) {
+    throw new Error('META_APP_SECRET is not configured');
+  }
+  return process.env.META_APP_SECRET;
+}
+
+function getFacebookRedirectUri() {
+  return process.env.FACEBOOK_REDIRECT_URI || DEFAULT_FACEBOOK_REDIRECT_URI;
+}
+
+export function getLoginUrl(state, scope = 'pages_show_list,pages_manage_metadata,pages_messaging,business_management') {
   const params = new URLSearchParams({
-    client_id: process.env.META_APP_ID,
-    redirect_uri: `${process.env.NGROK_URL || 'http://localhost:3001'}/auth/facebook/callback`,
-    scope: 'pages_show_list,pages_manage_metadata,pages_messaging,business_management',
+    client_id: getMetaAppId(),
+    redirect_uri: getFacebookRedirectUri(),
+    scope,
     response_type: 'code',
     state,
   });
   return `https://www.facebook.com/v21.0/dialog/oauth?${params}`;
 }
 
-export async function handleCallback(code, userId) {
-  // Exchange code for short-lived token
+export async function exchangeCodeForAccessToken(code) {
   const tokenRes = await axios.get(`${GRAPH_API}/oauth/access_token`, {
     params: {
-      client_id: process.env.META_APP_ID,
-      client_secret: process.env.META_APP_SECRET,
-      redirect_uri: `${process.env.NGROK_URL || 'http://localhost:3001'}/auth/facebook/callback`,
+      client_id: getMetaAppId(),
+      client_secret: getMetaAppSecret(),
+      redirect_uri: getFacebookRedirectUri(),
       code,
     },
   });
 
-  const shortLivedToken = tokenRes.data.access_token;
+  return tokenRes.data.access_token;
+}
+
+export async function handleCallback(code, userId) {
+  // Exchange code for short-lived token
+  const shortLivedToken = await exchangeCodeForAccessToken(code);
 
   // Exchange for long-lived token (60 days)
   const longLivedRes = await axios.get(`${GRAPH_API}/oauth/access_token`, {
     params: {
       grant_type: 'fb_exchange_token',
-      client_id: process.env.META_APP_ID,
-      client_secret: process.env.META_APP_SECRET,
+      client_id: getMetaAppId(),
+      client_secret: getMetaAppSecret(),
       fb_exchange_token: shortLivedToken,
     },
   });

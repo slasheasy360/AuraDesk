@@ -12,14 +12,8 @@ const GRAPH_API = 'https://graph.facebook.com/v21.0';
 
 // Facebook OAuth login — redirect to Facebook consent screen
 router.get('/', (req, res) => {
-  const params = new URLSearchParams({
-    client_id: process.env.META_APP_ID,
-    redirect_uri: `${process.env.NGROK_URL || 'http://localhost:3001'}/auth/facebook/callback`,
-    scope: 'email,public_profile',
-    response_type: 'code',
-    state: 'facebook_login',
-  });
-  res.redirect(`https://www.facebook.com/v21.0/dialog/oauth?${params}`);
+  const url = facebookService.getLoginUrl('facebook_login', 'email,public_profile');
+  res.redirect(url);
 });
 
 // Start Facebook OAuth for page connection (authenticated)
@@ -41,16 +35,7 @@ router.get('/callback', async (req, res) => {
     // Check if this is a login flow or a page connection flow
     if (state === 'facebook_login') {
       // LOGIN FLOW: Get user profile, find/create user, issue JWT
-      const tokenRes = await axios.get(`${GRAPH_API}/oauth/access_token`, {
-        params: {
-          client_id: process.env.META_APP_ID,
-          client_secret: process.env.META_APP_SECRET,
-          redirect_uri: `${process.env.NGROK_URL || 'http://localhost:3001'}/auth/facebook/callback`,
-          code,
-        },
-      });
-
-      const accessToken = tokenRes.data.access_token;
+      const accessToken = await facebookService.exchangeCodeForAccessToken(code);
 
       // Get user profile
       const profileRes = await axios.get(`${GRAPH_API}/me`, {
