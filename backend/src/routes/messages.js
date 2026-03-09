@@ -121,7 +121,7 @@ router.get('/:conversationId', authenticate, async (req, res) => {
 // Send a message (with optional file attachments)
 router.post('/send', authenticate, upload.array('attachments', 10), async (req, res) => {
   try {
-    const { conversationId, content } = req.body;
+    const { conversationId, content, subject: reqSubject } = req.body;
     const files = req.files || [];
 
     if (!conversationId || (!content && files.length === 0)) {
@@ -229,14 +229,19 @@ router.post('/send', authenticate, upload.array('attachments', 10), async (req, 
             return res.status(400).json({ error: 'No recipient email found for this Gmail conversation' });
           }
 
-          const lastMsg = await prisma.message.findFirst({
-            where: { conversationId: conversation.id },
-            orderBy: { sentAt: 'desc' },
-            select: { subject: true },
-          });
-          const subject = lastMsg?.subject
-            ? (lastMsg.subject.startsWith('Re:') ? lastMsg.subject : `Re: ${lastMsg.subject}`)
-            : 'Re:';
+          let subject;
+          if (reqSubject) {
+            subject = reqSubject;
+          } else {
+            const lastMsg = await prisma.message.findFirst({
+              where: { conversationId: conversation.id },
+              orderBy: { sentAt: 'desc' },
+              select: { subject: true },
+            });
+            subject = lastMsg?.subject
+              ? (lastMsg.subject.startsWith('Re:') ? lastMsg.subject : `Re: ${lastMsg.subject}`)
+              : 'Re:';
+          }
 
           const result = await gmailService.sendEmail(
             conversation.connectedAccountId,
@@ -287,6 +292,23 @@ router.post('/send', authenticate, upload.array('attachments', 10), async (req, 
       else contentType = 'file';
     }
 
+    // For gmail, resolve the subject to store with the message
+    let savedSubject = null;
+    if (platform === 'gmail') {
+      if (reqSubject) {
+        savedSubject = reqSubject;
+      } else {
+        const lastMsg = await prisma.message.findFirst({
+          where: { conversationId: conversation.id },
+          orderBy: { sentAt: 'desc' },
+          select: { subject: true },
+        });
+        savedSubject = lastMsg?.subject
+          ? (lastMsg.subject.startsWith('Re:') ? lastMsg.subject : `Re: ${lastMsg.subject}`)
+          : 'Re:';
+      }
+    }
+
     // Save message to DB
     const message = await prisma.message.create({
       data: {
@@ -294,6 +316,7 @@ router.post('/send', authenticate, upload.array('attachments', 10), async (req, 
         platformMessageId,
         direction: 'outbound',
         sender: req.user.name || req.user.email,
+        subject: savedSubject,
         content: content || (attachmentMeta.length > 0 ? `[${attachmentMeta.map(a => a.filename).join(', ')}]` : ''),
         contentType,
         attachments: attachmentMeta.length > 0 ? attachmentMeta : undefined,
