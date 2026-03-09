@@ -23,6 +23,18 @@ function getFacebookRedirectUri() {
   return process.env.FACEBOOK_REDIRECT_URI || DEFAULT_FACEBOOK_REDIRECT_URI;
 }
 
+export function encodeConnectState(userId) {
+  return Buffer.from(JSON.stringify({ userId, mode: 'connect' })).toString('base64url');
+}
+
+export function decodeConnectState(state) {
+  try {
+    return JSON.parse(Buffer.from(state, 'base64url').toString());
+  } catch {
+    throw new Error('Invalid OAuth state payload');
+  }
+}
+
 export function getLoginUrl(state, scope = 'pages_show_list,pages_manage_metadata,pages_messaging,business_management') {
   const params = new URLSearchParams({
     client_id: getMetaAppId(),
@@ -35,6 +47,10 @@ export function getLoginUrl(state, scope = 'pages_show_list,pages_manage_metadat
 }
 
 export async function exchangeCodeForAccessToken(code) {
+  if (!code) {
+    throw new Error('Missing authorization code');
+  }
+
   const tokenRes = await axios.get(`${GRAPH_API}/oauth/access_token`, {
     params: {
       client_id: getMetaAppId(),
@@ -44,12 +60,25 @@ export async function exchangeCodeForAccessToken(code) {
     },
   });
 
-  return tokenRes.data.access_token;
+  return tokenRes.data;
 }
 
 export async function handleCallback(code, userId) {
   // Exchange code for short-lived token
-  const shortLivedToken = await exchangeCodeForAccessToken(code);
+  const tokenResponse = await exchangeCodeForAccessToken(code);
+  const shortLivedToken = tokenResponse.access_token;
+
+  return handleCallbackWithToken(shortLivedToken, userId);
+}
+
+export async function handleCallbackWithToken(shortLivedToken, userId) {
+  if (!shortLivedToken) {
+    throw new Error('Missing Facebook access token');
+  }
+
+  if (!userId) {
+    throw new Error('Missing userId for Facebook OAuth callback');
+  }
 
   // Exchange for long-lived token (60 days)
   const longLivedRes = await axios.get(`${GRAPH_API}/oauth/access_token`, {

@@ -1,76 +1,78 @@
 import { Router } from 'express';
-import axios from 'axios';
-import jwt from 'jsonwebtoken';
-import bcrypt from 'bcryptjs';
-import crypto from 'crypto';
 import { authenticate } from '../middleware/auth.js';
 import * as facebookService from '../services/facebook.js';
-import prisma from '../utils/prisma.js';
 
 const router = Router();
-const GRAPH_API = 'https://graph.facebook.com/v21.0';
+const DEFAULT_FRONTEND_URL = 'https://aura-desk.vercel.app';
 
-// Facebook OAuth login — redirect to Facebook consent screen
-router.get('/', (req, res) => {
-  const url = facebookService.getLoginUrl('facebook_login', 'email,public_profile');
+function getFrontendUrl() {
+  return (process.env.FRONTEND_URL || DEFAULT_FRONTEND_URL).replace(/\/$/, '');
+}
+
+// Backward-compatible shortcut for old clients that still call /auth/facebook.
+router.get('/', authenticate, (req, res) => {
+  const state = facebookService.encodeConnectState(req.user.id);
+  const url = facebookService.getLoginUrl(state);
   res.redirect(url);
 });
 
 // Start Facebook OAuth for page connection (authenticated)
-router.get('/start', authenticate, (req, res) => {
-  const state = Buffer.from(JSON.stringify({ userId: req.user.id, mode: 'connect' })).toString('base64url');
-  const url = facebookService.getLoginUrl(state);
-  res.json({ url });
+router.get('/start', authenticate, async (req, res) => {
+  try {
+    const state = facebookService.encodeConnectState(req.user.id);
+    const url = facebookService.getLoginUrl(state);
+    console.log('[Facebook OAuth] Generated start URL', {
+      userId: req.user.id,
+      redirectUri: process.env.FACEBOOK_REDIRECT_URI,
+    });
+    res.json({ url });
+  } catch (err) {
+    console.error('[Facebook OAuth] Failed to start OAuth:', err.message);
+    res.status(500).json({ error: 'Failed to initialize Facebook OAuth' });
+  }
 });
 
-// Facebook OAuth callback — handles both login and page connection
+// Facebook OAuth callback
 router.get('/callback', async (req, res) => {
-  const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+  const frontendUrl = getFrontendUrl();
   try {
     const { code, state } = req.query;
-    if (!code) {
-      return res.status(400).send('Missing authorization code');
+    if (!code || typeof code !== 'string') {
+      console.warn('[Facebook OAuth] Missing or invalid code query param', { codeType: typeof code });
+      return res.redirect(`${frontendUrl}?error=facebook_auth_failed`);
     }
 
-    // Check if this is a login flow or a page connection flow
-    if (state === 'facebook_login') {
-      // LOGIN FLOW: Get user profile, find/create user, issue JWT
-      const accessToken = await facebookService.exchangeCodeForAccessToken(code);
-
-      // Get user profile
-      const profileRes = await axios.get(`${GRAPH_API}/me`, {
-        params: { fields: 'id,name,email,picture', access_token: accessToken },
-      });
-
-      const profile = profileRes.data;
-      if (!profile.email) {
-        return res.redirect(`${frontendUrl}/login?error=no_email`);
-      }
-
-      // Find or create user
-      let user = await prisma.user.findUnique({ where: { email: profile.email } });
-      if (!user) {
-        user = await prisma.user.create({
-          data: {
-            email: profile.email,
-            name: profile.name || profile.email,
-            passwordHash: await bcrypt.hash(crypto.randomUUID(), 12),
-          },
-        });
-      }
-
-      const token = jwt.sign({ userId: user.id }, process.env.JWT_SECRET, { expiresIn: '7d' });
-      res.redirect(`${frontendUrl}/dashboard?token=${token}`);
-    } else {
-      // PAGE CONNECTION FLOW (existing behavior)
-      if (!state) return res.status(400).send('Missing state');
-      const { userId } = JSON.parse(Buffer.from(state, 'base64url').toString());
-      await facebookService.handleCallback(code, userId);
-      res.redirect(`${frontendUrl}/connections?success=facebook`);
+    if (!state || typeof state !== 'string') {
+      console.warn('[Facebook OAuth] Missing or invalid state query param', { stateType: typeof state });
+      return res.redirect(`${frontendUrl}?error=facebook_auth_failed`);
     }
+
+    const { userId } = facebookService.decodeConnectState(state);
+    if (!userId) {
+      console.warn('[Facebook OAuth] Decoded state without userId');
+      return res.redirect(`${frontendUrl}?error=facebook_auth_failed`);
+    }
+
+    const tokenResponse = await facebookService.exchangeCodeForAccessToken(code);
+    console.log('[Facebook OAuth] Token exchange response', {
+      hasAccessToken: Boolean(tokenResponse.access_token),
+      tokenType: tokenResponse.token_type || null,
+      expiresIn: tokenResponse.expires_in || null,
+    });
+
+    await facebookService.handleCallbackWithToken(tokenResponse.access_token, userId);
+    return res.redirect(`${frontendUrl}/connections?success=facebook`);
   } catch (err) {
-    console.error('Facebook callback error:', err);
-    res.redirect(`${frontendUrl}/login?error=facebook_auth_failed`);
+    const facebookError = err.response?.data?.error;
+    console.error('[Facebook OAuth] Callback failed', {
+      message: err.message,
+      code: facebookError?.code,
+      type: facebookError?.type,
+      subcode: facebookError?.error_subcode,
+      traceId: facebookError?.fbtrace_id,
+      raw: err.response?.data || null,
+    });
+    return res.redirect(`${frontendUrl}?error=facebook_auth_failed`);
   }
 });
 
