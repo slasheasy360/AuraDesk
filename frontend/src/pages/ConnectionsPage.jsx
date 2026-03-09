@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import api from '../services/api.js';
 import PlatformBadge from '../components/PlatformBadge.jsx';
-import { Link2, CheckCircle, XCircle, Trash2 } from 'lucide-react';
+import { Link2, CheckCircle, XCircle, Trash2, X } from 'lucide-react';
 
 const platforms = [
   {
@@ -32,10 +32,10 @@ const platforms = [
   {
     id: 'whatsapp',
     name: 'WhatsApp Business',
-    description: 'Connect via Embedded Signup to send and receive WhatsApp messages',
+    description: 'Connect via access token to send and receive WhatsApp messages',
     color: 'border-green-200 hover:border-green-400',
     icon: '📱',
-    authEndpoint: null, // Uses Embedded Signup
+    authEndpoint: null, // Uses token connect
   },
 ];
 
@@ -46,6 +46,12 @@ export default function ConnectionsPage() {
   const [searchParams] = useSearchParams();
   const successPlatform = searchParams.get('success');
   const errorPlatform = searchParams.get('error');
+
+  // WhatsApp connect modal state
+  const [showWhatsAppModal, setShowWhatsAppModal] = useState(false);
+  const [waToken, setWaToken] = useState('');
+  const [waConnecting, setWaConnecting] = useState(false);
+  const [waError, setWaError] = useState('');
 
   useEffect(() => {
     fetchAccounts();
@@ -82,12 +88,9 @@ export default function ConnectionsPage() {
 
   async function handleConnect(platform) {
     if (platform.id === 'whatsapp') {
-      // WhatsApp uses Embedded Signup — show instructions for now
-      alert(
-        'WhatsApp uses Meta Embedded Signup.\n\n' +
-          'In production, this button triggers the Facebook SDK launchWhatsAppSignup() flow.\n\n' +
-          'For POC testing, use the /auth/whatsapp/connect API endpoint with your WABA details.'
-      );
+      setShowWhatsAppModal(true);
+      setWaError('');
+      setWaToken('');
       return;
     }
 
@@ -96,6 +99,29 @@ export default function ConnectionsPage() {
       window.location.href = res.data.url;
     } catch (err) {
       console.error('Failed to start OAuth:', err);
+    }
+  }
+
+  async function handleWhatsAppConnect(e) {
+    e.preventDefault();
+    if (!waToken.trim()) return;
+
+    setWaConnecting(true);
+    setWaError('');
+
+    try {
+      await api.post('/auth/whatsapp/connect-with-token', {
+        accessToken: waToken.trim(),
+      });
+
+      setShowWhatsAppModal(false);
+      setWaToken('');
+      fetchAccounts();
+    } catch (err) {
+      console.error('WhatsApp connect failed:', err);
+      setWaError(err.response?.data?.error || 'Failed to connect WhatsApp. Check your access token.');
+    } finally {
+      setWaConnecting(false);
     }
   }
 
@@ -207,10 +233,76 @@ export default function ConnectionsPage() {
             <li>Gmail: Works in Google's testing mode — add tester emails in Google Cloud Console</li>
             <li>Facebook: Add testers as App Testers in Meta Developer Console (Development Mode)</li>
             <li>Instagram: Requires an Instagram Business/Creator account linked to a Facebook Page</li>
-            <li>WhatsApp: Requires a WhatsApp Business Account — use Embedded Signup flow</li>
+            <li>WhatsApp: Paste your System User permanent access token from Meta Business Settings</li>
           </ul>
         </div>
       </div>
+
+      {/* WhatsApp Connect Modal */}
+      {showWhatsAppModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg mx-4 p-6">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-lg font-bold text-gray-900">Connect WhatsApp Business</h2>
+              <button
+                onClick={() => setShowWhatsAppModal(false)}
+                className="text-gray-400 hover:text-gray-600 transition"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            <div className="bg-green-50 border border-green-200 rounded-lg p-4 mb-4">
+              <p className="text-sm text-green-800 font-medium mb-2">How to get your access token:</p>
+              <ol className="text-sm text-green-700 space-y-1 list-decimal list-inside">
+                <li>Go to Meta Business Settings &gt; System Users</li>
+                <li>Create a System User (or select existing one)</li>
+                <li>Click "Generate New Token"</li>
+                <li>Select your Meta App and add permissions:
+                  <span className="font-mono text-xs ml-1">whatsapp_business_management, whatsapp_business_messaging</span>
+                </li>
+                <li>Copy the generated token and paste below</li>
+              </ol>
+            </div>
+
+            <form onSubmit={handleWhatsAppConnect}>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                System User Access Token
+              </label>
+              <textarea
+                value={waToken}
+                onChange={(e) => setWaToken(e.target.value)}
+                placeholder="Paste your permanent access token here..."
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm font-mono focus:border-primary-400 focus:ring-1 focus:ring-primary-400 outline-none resize-none h-24"
+                autoFocus
+              />
+
+              {waError && (
+                <div className="mt-2 bg-red-50 border border-red-200 text-red-600 text-sm px-3 py-2 rounded-lg">
+                  {waError}
+                </div>
+              )}
+
+              <div className="flex items-center justify-end gap-3 mt-4">
+                <button
+                  type="button"
+                  onClick={() => setShowWhatsAppModal(false)}
+                  className="px-4 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-lg transition"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={!waToken.trim() || waConnecting}
+                  className="px-6 py-2.5 bg-green-600 hover:bg-green-700 text-white text-sm font-medium rounded-lg transition disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {waConnecting ? 'Connecting...' : 'Connect WhatsApp'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
