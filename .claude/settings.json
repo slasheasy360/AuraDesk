@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ls -la \"c:\\\\Users\\\\gondy\\\\OneDrive\\\\Desktop\\\\AuraDesk\\\\frontend\\\\src\"\" && echo \"---\" && ls -la \"c:UsersgondyOneDriveDesktopAuraDeskfrontendpublic\"\")",
+      "Bash(ls \"c:\\\\Users\\\\gondy\\\\OneDrive\\\\Desktop\\\\AuraDesk\\\\frontend\\\\src\\\\assets\"\" 2>/dev/null || echo \"Assets folder empty or missing \")",
+      "Bash(npm run build)"
+    ]
+  }
+}

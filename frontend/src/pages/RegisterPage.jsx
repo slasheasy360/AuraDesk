@@ -33,7 +33,7 @@ export default function RegisterPage() {
   };
 
   return (
-    <div className="min-h-screen flex">
+    <div className="min-h-screen flex flex-col lg:flex-row">
       {/* Left panel */}
       <div className="hidden lg:flex lg:w-1/2 bg-primary-950 text-white flex-col justify-center px-16">
         <div className="mb-8">
@@ -50,26 +50,35 @@ export default function RegisterPage() {
         </div>
       </div>
 
+      {/* Mobile header */}
+      <div className="lg:hidden bg-primary-950 text-white px-6 py-8 text-center">
+        <div className="flex items-center justify-center gap-3 mb-3">
+          <div className="w-9 h-9 bg-primary-500 rounded-lg flex items-center justify-center text-lg font-bold">A</div>
+          <span className="text-xl font-bold">AuraDesk</span>
+        </div>
+        <p className="text-gray-400 text-sm">Create your account to get started</p>
+      </div>
+
       {/* Right panel */}
-      <div className="flex-1 flex items-center justify-center px-8 bg-gray-50">
+      <div className="flex-1 flex items-center justify-center px-6 sm:px-8 py-8 bg-gray-50">
         <div className="w-full max-w-md">
-          <h2 className="text-3xl font-bold text-gray-900 mb-2">Create an account</h2>
+          <h2 className="text-2xl sm:text-3xl font-bold text-gray-900 mb-2">Create an account</h2>
           <p className="text-gray-500 mb-8">Get started with AuraDesk</p>
 
           {error && (
-            <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg mb-4">
+            <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg mb-4 text-sm">
               {error}
             </div>
           )}
 
-          <form onSubmit={handleSubmit} className="space-y-5">
+          <form onSubmit={handleSubmit} className="space-y-4 sm:space-y-5">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Full Name</label>
               <input
                 type="text"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
-                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent outline-none"
+                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent outline-none text-sm sm:text-base"
                 placeholder="John Doe"
                 required
               />
@@ -80,7 +89,7 @@ export default function RegisterPage() {
                 type="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent outline-none"
+                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent outline-none text-sm sm:text-base"
                 placeholder="you@example.com"
                 required
               />
@@ -91,7 +100,7 @@ export default function RegisterPage() {
                 type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent outline-none"
+                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent outline-none text-sm sm:text-base"
                 placeholder="Create a password"
                 required
                 minLength={8}
@@ -103,7 +112,7 @@ export default function RegisterPage() {
                 type="password"
                 value={confirmPassword}
                 onChange={(e) => setConfirmPassword(e.target.value)}
-                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent outline-none"
+                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent outline-none text-sm sm:text-base"
                 placeholder="Confirm your password"
                 required
               />
@@ -117,7 +126,7 @@ export default function RegisterPage() {
             </button>
           </form>
 
-          <p className="mt-6 text-center text-gray-500">
+          <p className="mt-6 text-center text-gray-500 text-sm">
             Already have an account?{' '}
             <Link to="/login" className="text-primary-600 font-medium hover:underline">
               Log in
