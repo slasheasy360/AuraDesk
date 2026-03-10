@@ -238,7 +238,7 @@ export async function syncGmailMessages(userId) {
         platformConversationId: item.threadId,
         contactId: contact.id,
         lastMessageAt: item.timestamp,
-        unreadCount: item.labelIds.includes('UNREAD') ? 1 : 0,
+        unreadCount: 0,
       },
     });
 

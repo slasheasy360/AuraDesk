@@ -128,6 +128,12 @@ export default function InboxPage() {
 
         // Update message cache for this conversation
         messageCache.current.set(convId, null); // invalidate so next switch refetches
+
+        // Message arrived while user is viewing this conversation — mark as read in DB
+        // so unreadCount doesn't accumulate for "seen" messages
+        if (data.message?.direction === 'inbound') {
+          api.get(`/api/conversations/${convId}`).catch(() => {});
+        }
       }
     };
 
@@ -170,13 +176,23 @@ export default function InboxPage() {
   useEffect(() => {
     conversationIdRef.current = conversationId;
     if (conversationId) {
-      // Restore from cache instantly, then fetch in background
+      // Restore from cache instantly, then fall back to sessionStorage, then fetch from API
       const cached = messageCache.current.get(conversationId);
       if (cached) {
         setMessages(cached.messages);
         setActiveConversation(cached.activeConversation);
-        // Rebuild known IDs from cache
         cached.messages.forEach((m) => m.id && knownMessageIds.current.add(m.id));
+      } else {
+        // On page refresh, messageCache is empty — restore from sessionStorage for instant display
+        const sessionMsgs = sessionGet(SESSION_KEYS.MESSAGES + conversationId);
+        if (sessionMsgs && sessionMsgs.length > 0) {
+          setMessages(sessionMsgs);
+          sessionMsgs.forEach((m) => m.id && knownMessageIds.current.add(m.id));
+        }
+        const sessionConv = sessionGet(SESSION_KEYS.ACTIVE_CONVERSATION);
+        if (sessionConv && sessionConv.id === conversationId) {
+          setActiveConversation(sessionConv);
+        }
       }
       fetchMessages(conversationId);
       setSendError('');
@@ -268,8 +284,9 @@ export default function InboxPage() {
         const entry = messageCache.current.get(convId);
         if (entry) entry.fresh = false;
       }, 30000);
-      // Persist to sessionStorage
+      // Persist to sessionStorage for page refresh recovery
       sessionSet(SESSION_KEYS.MESSAGES + convId, msgs.slice(-50)); // last 50 msgs
+      sessionSet(SESSION_KEYS.ACTIVE_CONVERSATION, convRes.data.conversation);
     } catch (err) {
       console.error('Failed to fetch messages:', err);
     }
