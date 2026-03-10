@@ -38,15 +38,13 @@ export function decodeConnectState(state) {
 }
 
 export function getLoginUrl(state) {
-  // Request all scopes needed for Facebook Messenger + Instagram DMs in one OAuth flow
+  // Request only Facebook Messenger scopes — Instagram has its own separate OAuth flow
   const scope = [
     'pages_show_list',
     'pages_manage_metadata',
     'pages_messaging',
     'pages_read_engagement',
     'business_management',
-    'instagram_basic',
-    'instagram_manage_messages',
   ].join(',');
 
   const params = new URLSearchParams({
@@ -182,33 +180,8 @@ export async function handleCallbackWithToken(shortLivedToken, userId) {
     // Don't throw — continue to save the account. Webhook can be re-subscribed later.
   }
 
-  // ── Step 4: Detect Instagram Business Account linked to this Page ──
-  let igAccount = null;
-  console.log('[Facebook OAuth] Step 4: Checking for Instagram Business Account...');
-  try {
-    const igRes = await axios.get(`${GRAPH_API}/${page.id}`, {
-      params: {
-        fields: 'instagram_business_account{id,username,name,profile_picture_url}',
-        access_token: pageAccessToken,
-      },
-    });
-    if (igRes.data.instagram_business_account) {
-      igAccount = igRes.data.instagram_business_account;
-      console.log('[Facebook OAuth] Step 4 complete: Instagram account found', {
-        id: igAccount.id,
-        username: igAccount.username,
-      });
-    } else {
-      console.log('[Facebook OAuth] Step 4: No Instagram Business Account linked to this page');
-    }
-  } catch (igErr) {
-    console.warn('[Facebook OAuth] Step 4: Could not check Instagram account', {
-      message: igErr.message,
-    });
-  }
-
-  // ── Step 5: Save Facebook Page connected account + token ──
-  console.log('[Facebook OAuth] Step 5: Saving Facebook connected account...');
+  // ── Step 4: Save Facebook Page connected account + token ──
+  console.log('[Facebook OAuth] Step 4: Saving Facebook connected account...');
   const fbAccount = await prisma.connectedAccount.upsert({
     where: {
       userId_platform_platformAccountId: {
@@ -274,65 +247,14 @@ export async function handleCallbackWithToken(shortLivedToken, userId) {
     },
   });
 
-  console.log('[Facebook OAuth] Step 5 complete: Facebook account saved', {
+  console.log('[Facebook OAuth] Step 4 complete: Facebook account saved', {
     accountId: fbAccount.id,
     pageId: page.id,
     pageName: page.name,
   });
 
-  // ── Step 6: If Instagram Business Account found, save it too ──
-  if (igAccount) {
-    console.log('[Facebook OAuth] Step 6: Saving Instagram connected account...');
-    const instaAccount = await prisma.connectedAccount.upsert({
-      where: {
-        userId_platform_platformAccountId: {
-          userId,
-          platform: 'instagram',
-          platformAccountId: igAccount.id,
-        },
-      },
-      update: {
-        displayName: igAccount.username || igAccount.name,
-        avatarUrl: igAccount.profile_picture_url || null,
-        status: 'active',
-      },
-      create: {
-        userId,
-        platform: 'instagram',
-        platformAccountId: igAccount.id,
-        displayName: igAccount.username || igAccount.name,
-        avatarUrl: igAccount.profile_picture_url || null,
-        status: 'active',
-      },
-    });
-
-    // Instagram messages use the Page access token
-    await prisma.authToken.upsert({
-      where: { connectedAccountId: instaAccount.id },
-      update: {
-        accessTokenEncrypted: encrypt(pageAccessToken),
-        refreshTokenEncrypted: encrypt(longLivedToken),
-        tokenType: 'page_token',
-        scopes: 'instagram_manage_messages',
-      },
-      create: {
-        connectedAccountId: instaAccount.id,
-        accessTokenEncrypted: encrypt(pageAccessToken),
-        refreshTokenEncrypted: encrypt(longLivedToken),
-        tokenType: 'page_token',
-        scopes: 'instagram_manage_messages',
-      },
-    });
-
-    console.log('[Facebook OAuth] Step 6 complete: Instagram account saved', {
-      accountId: instaAccount.id,
-      igId: igAccount.id,
-      username: igAccount.username,
-    });
-  }
-
   console.log('[Facebook OAuth] ✓ Full OAuth flow completed for user', userId);
-  return { connectedAccount: fbAccount, pages, igAccount };
+  return { connectedAccount: fbAccount, pages };
 }
 
 export async function sendMessage(connectedAccountId, recipientPsid, text) {

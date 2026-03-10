@@ -1,8 +1,8 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import api from '../services/api.js';
 import { PlatformIcon } from '../components/PlatformBadge.jsx';
-import { Link2, CheckCircle, XCircle, Trash2, Loader2 } from 'lucide-react';
+import { Link2, CheckCircle, XCircle, Trash2, Loader2, AlertCircle } from 'lucide-react';
 
 const platforms = [
   {
@@ -12,6 +12,7 @@ const platforms = [
     color: 'border-red-200 hover:border-red-400',
     bgColor: 'bg-red-50',
     iconColor: 'text-red-500',
+    btnColor: 'bg-red-600 hover:bg-red-700',
     authEndpoint: '/auth/gmail/start',
   },
   {
@@ -21,6 +22,7 @@ const platforms = [
     color: 'border-blue-200 hover:border-blue-400',
     bgColor: 'bg-blue-50',
     iconColor: 'text-blue-500',
+    btnColor: 'bg-blue-600 hover:bg-blue-700',
     authEndpoint: '/auth/facebook/start',
   },
   {
@@ -30,6 +32,7 @@ const platforms = [
     color: 'border-pink-200 hover:border-pink-400',
     bgColor: 'bg-pink-50',
     iconColor: 'text-pink-500',
+    btnColor: 'bg-pink-600 hover:bg-pink-700',
     authEndpoint: '/auth/instagram/start',
   },
   {
@@ -39,6 +42,7 @@ const platforms = [
     color: 'border-green-200 hover:border-green-400',
     bgColor: 'bg-green-50',
     iconColor: 'text-green-500',
+    btnColor: 'bg-green-600 hover:bg-green-700',
     authEndpoint: null,
   },
 ];
@@ -51,8 +55,19 @@ export default function ConnectionsPage() {
   const successPlatform = searchParams.get('success');
   const errorPlatform = searchParams.get('error');
 
-  const [waConnecting, setWaConnecting] = useState(false);
-  const [waError, setWaError] = useState('');
+  // Per-platform loading and error states
+  const [connectingPlatform, setConnectingPlatform] = useState(null);
+  const [platformError, setPlatformError] = useState(null); // { platformId, message }
+  const [disconnecting, setDisconnecting] = useState(null); // accountId being disconnected
+
+  // Auto-dismiss success/error banners after 5s
+  const [showBanner, setShowBanner] = useState(true);
+  useEffect(() => {
+    if (successPlatform || errorPlatform) {
+      const timer = setTimeout(() => setShowBanner(false), 5000);
+      return () => clearTimeout(timer);
+    }
+  }, [successPlatform, errorPlatform]);
 
   useEffect(() => {
     fetchAccounts();
@@ -75,7 +90,7 @@ export default function ConnectionsPage() {
       });
   }, [accounts, loading, successPlatform]);
 
-  async function fetchAccounts() {
+  const fetchAccounts = useCallback(async () => {
     try {
       const res = await api.get('/api/accounts');
       setAccounts(res.data.accounts);
@@ -84,20 +99,24 @@ export default function ConnectionsPage() {
     } finally {
       setLoading(false);
     }
-  }
+  }, []);
 
   async function handleConnect(platform) {
+    setPlatformError(null);
+    setConnectingPlatform(platform.id);
+
     if (platform.id === 'whatsapp') {
-      setWaConnecting(true);
-      setWaError('');
       try {
         await api.post('/auth/whatsapp/connect-env');
         fetchAccounts();
       } catch (err) {
         console.error('WhatsApp connect failed:', err);
-        setWaError(err.response?.data?.error || 'Failed to connect WhatsApp.');
+        setPlatformError({
+          platformId: 'whatsapp',
+          message: err.response?.data?.error || 'Failed to connect WhatsApp.',
+        });
       } finally {
-        setWaConnecting(false);
+        setConnectingPlatform(null);
       }
       return;
     }
@@ -107,16 +126,24 @@ export default function ConnectionsPage() {
       window.location.href = res.data.url;
     } catch (err) {
       console.error('Failed to start OAuth:', err);
+      setPlatformError({
+        platformId: platform.id,
+        message: err.response?.data?.error || `Failed to start ${platform.name} connection.`,
+      });
+      setConnectingPlatform(null);
     }
   }
 
-  async function handleDisconnect(accountId) {
-    if (!confirm('Are you sure you want to disconnect this account?')) return;
+  async function handleDisconnect(accountId, platformName) {
+    if (!confirm(`Are you sure you want to disconnect ${platformName}?`)) return;
+    setDisconnecting(accountId);
     try {
       await api.delete(`/api/accounts/${accountId}`);
       setAccounts((prev) => prev.filter((a) => a.id !== accountId));
     } catch (err) {
       console.error('Failed to disconnect:', err);
+    } finally {
+      setDisconnecting(null);
     }
   }
 
@@ -139,99 +166,119 @@ export default function ConnectionsPage() {
           </div>
         </div>
 
-        {/* Success/Error banners */}
-        {successPlatform && (
-          <div className="bg-green-50 border border-green-200 text-green-700 px-4 py-3 rounded-lg mb-4 sm:mb-6 flex items-center gap-2 text-sm">
-            <CheckCircle size={18} />
-            <span className="capitalize">{successPlatform}</span> connected successfully!
+        {/* Success/Error banners from OAuth redirect */}
+        {showBanner && successPlatform && (
+          <div className="bg-green-50 border border-green-200 text-green-700 px-4 py-3 rounded-lg mb-4 sm:mb-6 flex items-center gap-2 text-sm animate-in fade-in">
+            <CheckCircle size={18} className="flex-shrink-0" />
+            <span><span className="capitalize font-medium">{successPlatform}</span> connected successfully!</span>
           </div>
         )}
-        {errorPlatform && (
+        {showBanner && errorPlatform && (
           <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg mb-4 sm:mb-6 flex items-center gap-2 text-sm">
-            <XCircle size={18} />
-            Failed to connect <span className="capitalize">{errorPlatform}</span>. Please try again.
-          </div>
-        )}
-        {waError && (
-          <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg mb-4 sm:mb-6 flex items-center gap-2 text-sm">
-            <XCircle size={18} />
-            {waError}
+            <XCircle size={18} className="flex-shrink-0" />
+            Failed to connect <span className="capitalize font-medium">{errorPlatform}</span>. Please try again.
           </div>
         )}
 
-        {/* Platform cards */}
-        <div className="grid gap-3 sm:gap-4">
-          {platforms.map((platform) => {
-            const connected = isConnected(platform.id);
-            const account = getAccountForPlatform(platform.id);
-            const isWaLoading = platform.id === 'whatsapp' && waConnecting;
+        {/* Loading skeleton */}
+        {loading ? (
+          <div className="grid gap-3 sm:gap-4">
+            {[1, 2, 3, 4].map((i) => (
+              <div key={i} className="bg-white rounded-xl border-2 border-gray-100 p-4 sm:p-6 animate-pulse">
+                <div className="flex items-center gap-4">
+                  <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-xl bg-gray-200" />
+                  <div className="flex-1">
+                    <div className="h-4 bg-gray-200 rounded w-32 mb-2" />
+                    <div className="h-3 bg-gray-100 rounded w-56" />
+                  </div>
+                  <div className="h-9 bg-gray-200 rounded-lg w-24" />
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="grid gap-3 sm:gap-4">
+            {platforms.map((platform) => {
+              const connected = isConnected(platform.id);
+              const account = getAccountForPlatform(platform.id);
+              const isConnecting = connectingPlatform === platform.id;
+              const isDisconnecting = disconnecting === account?.id;
+              const error = platformError?.platformId === platform.id ? platformError.message : null;
 
-            return (
-              <div
-                key={platform.id}
-                className={`bg-white rounded-xl border-2 p-4 sm:p-6 transition ${
-                  connected ? 'border-green-300' : platform.color
-                }`}
-              >
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                  <div className="flex items-center gap-3 sm:gap-4">
-                    <div className={`w-10 h-10 sm:w-12 sm:h-12 rounded-xl ${platform.bgColor} ${platform.iconColor} flex items-center justify-center flex-shrink-0`}>
-                      <PlatformIcon platform={platform.id} size={22} />
-                    </div>
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <h3 className="text-base sm:text-lg font-semibold text-gray-900">{platform.name}</h3>
-                        {connected && (
-                          <span className="bg-green-100 text-green-700 text-xs font-medium px-2 py-0.5 rounded-full">
-                            Connected
-                          </span>
+              return (
+                <div
+                  key={platform.id}
+                  className={`bg-white rounded-xl border-2 p-4 sm:p-6 transition-all duration-200 ${
+                    connected ? 'border-green-300 shadow-sm' : platform.color
+                  }`}
+                >
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                    <div className="flex items-center gap-3 sm:gap-4">
+                      <div className={`w-10 h-10 sm:w-12 sm:h-12 rounded-xl ${platform.bgColor} ${platform.iconColor} flex items-center justify-center flex-shrink-0`}>
+                        <PlatformIcon platform={platform.id} size={22} />
+                      </div>
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <h3 className="text-base sm:text-lg font-semibold text-gray-900">{platform.name}</h3>
+                          {connected ? (
+                            <span className="inline-flex items-center gap-1 bg-green-100 text-green-700 text-xs font-medium px-2 py-0.5 rounded-full">
+                              <CheckCircle size={12} />
+                              Connected
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 bg-gray-100 text-gray-500 text-xs font-medium px-2 py-0.5 rounded-full">
+                              Not Connected
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-xs sm:text-sm text-gray-500 mt-0.5">{platform.description}</p>
+                        {connected && account && (
+                          <p className="text-xs text-gray-400 mt-1">
+                            {account.displayName} — Connected {new Date(account.createdAt).toLocaleDateString()}
+                          </p>
                         )}
                       </div>
-                      <p className="text-xs sm:text-sm text-gray-500 mt-0.5">{platform.description}</p>
-                      {connected && account && (
-                        <p className="text-xs text-gray-400 mt-1">
-                          {account.displayName} — Connected {new Date(account.createdAt).toLocaleDateString()}
-                        </p>
+                    </div>
+
+                    <div className="flex items-center sm:flex-shrink-0">
+                      {connected ? (
+                        <button
+                          onClick={() => handleDisconnect(account.id, platform.name)}
+                          disabled={isDisconnecting}
+                          className="flex items-center gap-2 px-4 py-2 text-sm text-red-600 hover:bg-red-50 border border-red-200 rounded-lg transition w-full sm:w-auto justify-center disabled:opacity-50"
+                        >
+                          {isDisconnecting ? (
+                            <Loader2 size={16} className="animate-spin" />
+                          ) : (
+                            <Trash2 size={16} />
+                          )}
+                          {isDisconnecting ? 'Disconnecting...' : 'Disconnect'}
+                        </button>
+                      ) : (
+                        <button
+                          onClick={() => handleConnect(platform)}
+                          disabled={isConnecting}
+                          className={`px-6 py-2.5 ${platform.btnColor} text-white text-sm font-medium rounded-lg transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 w-full sm:w-auto justify-center`}
+                        >
+                          {isConnecting && <Loader2 size={16} className="animate-spin" />}
+                          {isConnecting ? 'Connecting...' : 'Connect'}
+                        </button>
                       )}
                     </div>
                   </div>
 
-                  <div className="flex items-center sm:flex-shrink-0">
-                    {connected ? (
-                      <button
-                        onClick={() => handleDisconnect(account.id)}
-                        className="flex items-center gap-2 px-4 py-2 text-sm text-red-600 hover:bg-red-50 rounded-lg transition w-full sm:w-auto justify-center"
-                      >
-                        <Trash2 size={16} />
-                        Disconnect
-                      </button>
-                    ) : (
-                      <button
-                        onClick={() => handleConnect(platform)}
-                        disabled={isWaLoading}
-                        className="px-6 py-2.5 bg-primary-600 hover:bg-primary-700 text-white text-sm font-medium rounded-lg transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 w-full sm:w-auto justify-center"
-                      >
-                        {isWaLoading && <Loader2 size={16} className="animate-spin" />}
-                        {isWaLoading ? 'Connecting...' : 'Connect'}
-                      </button>
-                    )}
-                  </div>
+                  {/* Per-platform error */}
+                  {error && (
+                    <div className="mt-3 flex items-center gap-2 text-xs text-red-600 bg-red-50 px-3 py-2 rounded-lg">
+                      <AlertCircle size={14} className="flex-shrink-0" />
+                      {error}
+                    </div>
+                  )}
                 </div>
-              </div>
-            );
-          })}
-        </div>
-
-        {/* Info box */}
-        <div className="mt-6 sm:mt-8 bg-blue-50 border border-blue-200 rounded-xl p-4 sm:p-6">
-          <h3 className="font-semibold text-blue-900 mb-2 text-sm sm:text-base">POC Testing Notes</h3>
-          <ul className="text-xs sm:text-sm text-blue-800 space-y-1 list-disc list-inside">
-            <li>Gmail: Works in Google's testing mode — add tester emails in Google Cloud Console</li>
-            <li>Facebook: Add testers as App Testers in Meta Developer Console (Development Mode)</li>
-            <li>Instagram: Requires an Instagram Business/Creator account linked to a Facebook Page</li>
-            <li>WhatsApp: Uses server-configured credentials (WABA ID + System User Token)</li>
-          </ul>
-        </div>
+              );
+            })}
+          </div>
+        )}
       </div>
     </div>
   );
