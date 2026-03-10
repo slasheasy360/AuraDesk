@@ -49,6 +49,7 @@ export default function InboxPage() {
   const [showReplyBox, setShowReplyBox] = useState(false);
   const [collapsedMessages, setCollapsedMessages] = useState(new Set());
   const [uploadProgress, setUploadProgress] = useState(null);
+  const [loadingConversations, setLoadingConversations] = useState(true);
   const messagesEndRef = useRef(null);
   const replyBoxRef = useRef(null);
   const pollingRef = useRef(null);
@@ -63,12 +64,69 @@ export default function InboxPage() {
 
   // Fetch conversations + start polling
   useEffect(() => {
-    fetchConversations();
-    syncGmail();
-    pollingRef.current = setInterval(syncGmail, 60000);
-    syncInstagram();
-    igPollingRef.current = setInterval(syncInstagram, 60000);
+    let cancelled = false;
+
+    const initializeInbox = async () => {
+      // 1. Fetch conversations from DB (retry up to 3 times for Render cold starts)
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          const res = await api.get('/api/conversations');
+          if (!cancelled) {
+            setConversations(res.data.conversations);
+            setLoadingConversations(false);
+          }
+          break; // success
+        } catch (err) {
+          console.error(`fetchConversations attempt ${attempt + 1} failed:`, err.message);
+          if (attempt < 2) await new Promise((r) => setTimeout(r, 3000 * (attempt + 1)));
+          else if (!cancelled) setLoadingConversations(false); // give up, show whatever we have
+        }
+      }
+
+      // 2. Sync Gmail & Instagram (always refresh conversations after sync)
+      try {
+        await api.get('/api/messages/gmail/sync');
+      } catch { /* silent */ }
+      try {
+        await api.get('/api/messages/instagram/sync');
+      } catch { /* silent */ }
+
+      // 3. Always refresh conversations after sync (messages may have been created)
+      if (!cancelled) {
+        try {
+          const res = await api.get('/api/conversations');
+          setConversations(res.data.conversations);
+        } catch { /* silent — already loaded from step 1 */ }
+      }
+    };
+
+    initializeInbox();
+
+    // Set up polling intervals (sync + refresh conversations)
+    pollingRef.current = setInterval(async () => {
+      try {
+        const res = await api.get('/api/messages/gmail/sync');
+        if ((res.data?.newMessages || 0) > 0) {
+          fetchConversations();
+          const activeId = conversationIdRef.current;
+          if (activeId) fetchMessages(activeId);
+        }
+      } catch { /* silent */ }
+    }, 60000);
+
+    igPollingRef.current = setInterval(async () => {
+      try {
+        const res = await api.get('/api/messages/instagram/sync');
+        if ((res.data?.newMessages || 0) > 0) {
+          fetchConversations();
+          const activeId = conversationIdRef.current;
+          if (activeId) fetchMessages(activeId);
+        }
+      } catch { /* silent */ }
+    }, 60000);
+
     return () => {
+      cancelled = true;
       if (pollingRef.current) clearInterval(pollingRef.current);
       if (igPollingRef.current) clearInterval(igPollingRef.current);
     };
@@ -231,28 +289,6 @@ export default function InboxPage() {
     } catch (err) {
       console.error('Failed to fetch conversations:', err);
     }
-  }, []);
-
-  const syncGmail = useCallback(async () => {
-    try {
-      const res = await api.get('/api/messages/gmail/sync');
-      if ((res.data?.newMessages || 0) > 0) {
-        fetchConversations();
-        const activeId = conversationIdRef.current;
-        if (activeId) fetchMessages(activeId);
-      }
-    } catch { /* Silent */ }
-  }, []);
-
-  const syncInstagram = useCallback(async () => {
-    try {
-      const res = await api.get('/api/messages/instagram/sync');
-      if ((res.data?.newMessages || 0) > 0) {
-        fetchConversations();
-        const activeId = conversationIdRef.current;
-        if (activeId) fetchMessages(activeId);
-      }
-    } catch { /* Silent */ }
   }, []);
 
   const fetchMessages = useCallback(async (convId, forceRefresh = false) => {
@@ -531,7 +567,12 @@ export default function InboxPage() {
         </div>
 
         <div className="flex-1 overflow-y-auto">
-          {filteredConversations.length === 0 ? (
+          {loadingConversations && filteredConversations.length === 0 ? (
+            <div className="flex flex-col items-center justify-center h-full text-gray-400 px-6">
+              <RefreshCw size={24} className="mb-3 animate-spin" />
+              <p className="text-sm font-medium">Loading conversations...</p>
+            </div>
+          ) : filteredConversations.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-full text-gray-400 px-6">
               <MessageSquare size={40} className="mb-3" />
               <p className="text-sm font-medium">No conversations yet</p>
