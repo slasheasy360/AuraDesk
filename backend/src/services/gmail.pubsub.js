@@ -155,12 +155,14 @@ async function saveGmailMessage(msg, account, accountEmail, io) {
     },
   });
 
-  // Update unread count for inbound messages
+  // Update unread count for inbound messages and get accurate count
+  let currentUnreadCount = conversation.unreadCount || 0;
   if (!isOutbound) {
-    await prisma.conversation.update({
+    const updatedConversation = await prisma.conversation.update({
       where: { id: conversation.id },
       data: { unreadCount: { increment: 1 } },
     });
+    currentUnreadCount = updatedConversation.unreadCount;
   }
 
   // Emit real-time events to the user
@@ -173,7 +175,7 @@ async function saveGmailMessage(msg, account, accountEmail, io) {
   io.to(`user:${account.userId}`).emit('conversation_update', {
     conversationId: conversation.id,
     lastMessageAt: timestamp,
-    unreadCount: isOutbound ? 0 : 1,
+    unreadCount: currentUnreadCount,
   });
 
   console.log(`[Gmail PubSub] Saved message ${msg.id} (${isOutbound ? 'outbound' : 'inbound'}) for ${account.platformAccountId}`);

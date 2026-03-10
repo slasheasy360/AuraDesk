@@ -223,7 +223,19 @@ async function processMessengerWebhook(payload, io) {
         else contentType = 'file';
       }
 
-      // Upsert conversation
+      // Deduplicate: Meta webhooks use at-least-once delivery
+      const existingMsg = await prisma.message.findFirst({
+        where: {
+          platformMessageId: event.message.mid,
+          conversation: { connectedAccountId: account.id },
+        },
+      });
+      if (existingMsg) {
+        console.log('[Messenger Webhook] Duplicate message skipped:', event.message.mid);
+        continue;
+      }
+
+      // Upsert conversation WITHOUT incrementing unread (increment after message is confirmed new)
       const conversation = await prisma.conversation.upsert({
         where: {
           connectedAccountId_platformConversationId: {
@@ -233,14 +245,13 @@ async function processMessengerWebhook(payload, io) {
         },
         update: {
           lastMessageAt: new Date(),
-          unreadCount: { increment: 1 },
         },
         create: {
           connectedAccountId: account.id,
           platformConversationId: senderId,
           contactId: contact.id,
           lastMessageAt: new Date(),
-          unreadCount: 1,
+          unreadCount: 0,
         },
       });
 
@@ -259,6 +270,12 @@ async function processMessengerWebhook(payload, io) {
         },
       });
 
+      // Increment unread count AFTER message is confirmed new
+      const updatedConversation = await prisma.conversation.update({
+        where: { id: conversation.id },
+        data: { unreadCount: { increment: 1 } },
+      });
+
       console.log('[Messenger Webhook] ✓ Message saved', {
         messageId: message.id,
         conversationId: conversation.id,
@@ -275,7 +292,7 @@ async function processMessengerWebhook(payload, io) {
       io.to(`user:${account.userId}`).emit('conversation_update', {
         conversationId: conversation.id,
         lastMessageAt: new Date(),
-        unreadCount: conversation.unreadCount,
+        unreadCount: updatedConversation.unreadCount,
       });
     }
   }
@@ -388,7 +405,19 @@ async function processInstagramWebhook(payload, io) {
         else igContentType = 'file';
       }
 
-      // Upsert conversation
+      // Deduplicate: Meta webhooks use at-least-once delivery
+      const existingMsg = await prisma.message.findFirst({
+        where: {
+          platformMessageId: event.message.mid,
+          conversation: { connectedAccountId: account.id },
+        },
+      });
+      if (existingMsg) {
+        console.log('[Instagram Webhook] Duplicate message skipped:', event.message.mid);
+        continue;
+      }
+
+      // Upsert conversation WITHOUT incrementing unread (increment after message is confirmed new)
       const conversation = await prisma.conversation.upsert({
         where: {
           connectedAccountId_platformConversationId: {
@@ -398,14 +427,13 @@ async function processInstagramWebhook(payload, io) {
         },
         update: {
           lastMessageAt: new Date(),
-          unreadCount: { increment: 1 },
         },
         create: {
           connectedAccountId: account.id,
           platformConversationId: senderId,
           contactId: contact.id,
           lastMessageAt: new Date(),
-          unreadCount: 1,
+          unreadCount: 0,
         },
       });
 
@@ -424,6 +452,12 @@ async function processInstagramWebhook(payload, io) {
         },
       });
 
+      // Increment unread count AFTER message is confirmed new
+      const updatedConversation = await prisma.conversation.update({
+        where: { id: conversation.id },
+        data: { unreadCount: { increment: 1 } },
+      });
+
       console.log('[Instagram Webhook] ✓ Message saved', {
         messageId: message.id,
         conversationId: conversation.id,
@@ -438,7 +472,7 @@ async function processInstagramWebhook(payload, io) {
       io.to(`user:${account.userId}`).emit('conversation_update', {
         conversationId: conversation.id,
         lastMessageAt: new Date(),
-        unreadCount: conversation.unreadCount,
+        unreadCount: updatedConversation.unreadCount,
       });
     }
   }
@@ -539,6 +573,7 @@ async function processWhatsAppWebhook(payload, io) {
           },
         });
 
+        // Upsert conversation WITHOUT incrementing unread (increment after message is confirmed new)
         const conversation = await prisma.conversation.upsert({
           where: {
             connectedAccountId_platformConversationId: {
@@ -548,14 +583,13 @@ async function processWhatsAppWebhook(payload, io) {
           },
           update: {
             lastMessageAt: new Date(),
-            unreadCount: { increment: 1 },
           },
           create: {
             connectedAccountId: account.id,
             platformConversationId: senderPhone,
             contactId: contact.id,
             lastMessageAt: new Date(),
-            unreadCount: 1,
+            unreadCount: 0,
           },
         });
 
@@ -587,6 +621,12 @@ async function processWhatsAppWebhook(payload, io) {
           },
         });
 
+        // Increment unread count AFTER message is confirmed new
+        const updatedConversation = await prisma.conversation.update({
+          where: { id: conversation.id },
+          data: { unreadCount: { increment: 1 } },
+        });
+
         console.log('[WhatsApp Webhook] ✓ Message saved', {
           messageId: message.id,
           from: senderPhone,
@@ -601,7 +641,7 @@ async function processWhatsAppWebhook(payload, io) {
         io.to(`user:${account.userId}`).emit('conversation_update', {
           conversationId: conversation.id,
           lastMessageAt: new Date(),
-          unreadCount: conversation.unreadCount,
+          unreadCount: updatedConversation.unreadCount,
         });
       }
     }

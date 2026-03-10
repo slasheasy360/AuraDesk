@@ -92,17 +92,17 @@ export default function InboxPage() {
       if (msgId) knownMessageIds.current.add(msgId);
 
       // Update conversation sidebar (always, regardless of active conversation)
+      // NOTE: Do NOT increment unreadCount here — the backend is the single source of truth.
+      // The conversation_update event will deliver the correct count from the DB.
       setConversations((prev) => {
         const exists = prev.some((c) => c.id === convId);
         if (!exists) { fetchConversations(); return prev; }
-        const activeId = conversationIdRef.current;
         const updated = prev.map((c) =>
           c.id === convId
             ? {
                 ...c,
                 lastMessageAt: new Date().toISOString(),
                 messages: [{ content: data.message.content, direction: data.message.direction, sentAt: data.message.sentAt }],
-                unreadCount: c.id === activeId ? 0 : (c.unreadCount || 0) + 1,
               }
             : c
         );
@@ -132,11 +132,17 @@ export default function InboxPage() {
     };
 
     const handleConversationUpdate = (data) => {
+      const activeId = conversationIdRef.current;
       setConversations((prev) =>
         prev
           .map((c) =>
             c.id === data.conversationId
-              ? { ...c, lastMessageAt: data.lastMessageAt, unreadCount: data.unreadCount ?? c.unreadCount }
+              ? {
+                  ...c,
+                  lastMessageAt: data.lastMessageAt,
+                  // If this conversation is currently active/open, force unread to 0
+                  unreadCount: data.conversationId === activeId ? 0 : (data.unreadCount ?? c.unreadCount),
+                }
               : c
           )
           .sort((a, b) => new Date(b.lastMessageAt) - new Date(a.lastMessageAt))
