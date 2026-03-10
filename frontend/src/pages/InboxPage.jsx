@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback, forwardRef } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo, forwardRef, memo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import DOMPurify from 'dompurify';
 import api from '../services/api.js';
@@ -10,10 +10,33 @@ import {
 } from 'lucide-react';
 import PlatformBadge, { PlatformIcon } from '../components/PlatformBadge.jsx';
 
+// ═══════════════════════════════════════════════════════════════════
+// SESSION STORAGE HELPERS — persist state across page reloads
+// ═══════════════════════════════════════════════════════════════════
+
+const SESSION_KEYS = {
+  CONVERSATIONS: 'auradesk:conversations',
+  MESSAGES: 'auradesk:messages:', // + conversationId
+  ACTIVE_CONVERSATION: 'auradesk:activeConversation',
+};
+
+function sessionGet(key) {
+  try {
+    const raw = sessionStorage.getItem(key);
+    return raw ? JSON.parse(raw) : null;
+  } catch { return null; }
+}
+
+function sessionSet(key, value) {
+  try {
+    sessionStorage.setItem(key, JSON.stringify(value));
+  } catch { /* storage full — ignore */ }
+}
+
 export default function InboxPage() {
   const { conversationId } = useParams();
   const navigate = useNavigate();
-  const [conversations, setConversations] = useState([]);
+  const [conversations, setConversations] = useState(() => sessionGet(SESSION_KEYS.CONVERSATIONS) || []);
   const [messages, setMessages] = useState([]);
   const [activeConversation, setActiveConversation] = useState(null);
   const [newMessage, setNewMessage] = useState('');
@@ -33,6 +56,11 @@ export default function InboxPage() {
   const conversationIdRef = useRef(conversationId);
   const fileInputRef = useRef(null);
 
+  // ── Deduplication: track known message IDs to prevent duplicates ──
+  const knownMessageIds = useRef(new Set());
+  // ── Message cache: store messages per conversation to avoid refetch ──
+  const messageCache = useRef(new Map());
+
   // Fetch conversations + start polling
   useEffect(() => {
     fetchConversations();
@@ -46,32 +74,60 @@ export default function InboxPage() {
     };
   }, []);
 
-  // Listen for real-time events
+  // Listen for real-time events — use refs to avoid stale closures
+  // IMPORTANT: This effect runs ONCE (empty deps). All mutable state is
+  // accessed via refs so the handler always sees fresh values.
   useEffect(() => {
     const socket = getSocket();
     if (!socket) return;
 
     const handleNewMessage = (data) => {
+      const msgId = data.message?.id;
+      const convId = data.conversationId;
+
+      // ── DEDUP: skip if we already have this message ──
+      if (msgId && knownMessageIds.current.has(msgId)) {
+        return;
+      }
+      if (msgId) knownMessageIds.current.add(msgId);
+
+      // Update conversation sidebar (always, regardless of active conversation)
       setConversations((prev) => {
-        const exists = prev.some((c) => c.id === data.conversationId);
+        const exists = prev.some((c) => c.id === convId);
         if (!exists) { fetchConversations(); return prev; }
+        const activeId = conversationIdRef.current;
         const updated = prev.map((c) =>
-          c.id === data.conversationId
+          c.id === convId
             ? {
                 ...c,
                 lastMessageAt: new Date().toISOString(),
                 messages: [{ content: data.message.content, direction: data.message.direction, sentAt: data.message.sentAt }],
-                unreadCount: c.id === conversationId ? 0 : (c.unreadCount || 0) + 1,
+                unreadCount: c.id === activeId ? 0 : (c.unreadCount || 0) + 1,
               }
             : c
         );
         return updated.sort((a, b) => new Date(b.lastMessageAt) - new Date(a.lastMessageAt));
       });
-      if (data.conversationId === conversationId) {
+
+      // ── CHANNEL ISOLATION: only add to messages if this IS the active conversation ──
+      if (convId === conversationIdRef.current) {
         setMessages((prev) => {
-          if (data.message.id && prev.some((m) => m.id === data.message.id)) return prev;
+          // Double-check dedup against current state (handles race with optimistic add)
+          if (msgId && prev.some((m) => m.id === msgId)) return prev;
+          // Replace optimistic placeholder if it exists (match by content + direction)
+          const optimisticIdx = prev.findIndex(
+            (m) => m._optimistic && m.content === data.message.content && m.direction === data.message.direction
+          );
+          if (optimisticIdx !== -1) {
+            const next = [...prev];
+            next[optimisticIdx] = data.message;
+            return next;
+          }
           return [...prev, data.message];
         });
+
+        // Update message cache for this conversation
+        messageCache.current.set(convId, null); // invalidate so next switch refetches
       }
     };
 
@@ -80,7 +136,7 @@ export default function InboxPage() {
         prev
           .map((c) =>
             c.id === data.conversationId
-              ? { ...c, lastMessageAt: data.lastMessageAt, unreadCount: data.unreadCount }
+              ? { ...c, lastMessageAt: data.lastMessageAt, unreadCount: data.unreadCount ?? c.unreadCount }
               : c
           )
           .sort((a, b) => new Date(b.lastMessageAt) - new Date(a.lastMessageAt))
@@ -93,20 +149,29 @@ export default function InboxPage() {
       socket.off('new_message', handleNewMessage);
       socket.off('conversation_update', handleConversationUpdate);
     };
-  }, [conversationId]);
+  }, []); // ← empty deps: handler uses refs, not closure state
 
   useEffect(() => {
     const handleInboxRefresh = () => {
       fetchConversations();
-      if (conversationId) fetchMessages(conversationId);
+      const activeId = conversationIdRef.current;
+      if (activeId) fetchMessages(activeId, true); // force refresh
     };
     window.addEventListener('auradesk:refresh-inbox', handleInboxRefresh);
     return () => window.removeEventListener('auradesk:refresh-inbox', handleInboxRefresh);
-  }, [conversationId]);
+  }, []);
 
   useEffect(() => {
     conversationIdRef.current = conversationId;
     if (conversationId) {
+      // Restore from cache instantly, then fetch in background
+      const cached = messageCache.current.get(conversationId);
+      if (cached) {
+        setMessages(cached.messages);
+        setActiveConversation(cached.activeConversation);
+        // Rebuild known IDs from cache
+        cached.messages.forEach((m) => m.id && knownMessageIds.current.add(m.id));
+      }
       fetchMessages(conversationId);
       setSendError('');
       setAttachments([]);
@@ -116,6 +181,9 @@ export default function InboxPage() {
       setConversations((prev) =>
         prev.map((c) => (c.id === conversationId ? { ...c, unreadCount: 0 } : c))
       );
+    } else {
+      setMessages([]);
+      setActiveConversation(null);
     }
   }, [conversationId]);
 
@@ -127,16 +195,23 @@ export default function InboxPage() {
     }
   }, [messages, showReplyBox]);
 
-  async function fetchConversations() {
+  // ── Persist conversations to sessionStorage on change ──
+  useEffect(() => {
+    if (conversations.length > 0) {
+      sessionSet(SESSION_KEYS.CONVERSATIONS, conversations);
+    }
+  }, [conversations]);
+
+  const fetchConversations = useCallback(async () => {
     try {
       const res = await api.get('/api/conversations');
       setConversations(res.data.conversations);
     } catch (err) {
       console.error('Failed to fetch conversations:', err);
     }
-  }
+  }, []);
 
-  async function syncGmail() {
+  const syncGmail = useCallback(async () => {
     try {
       const res = await api.get('/api/messages/gmail/sync');
       if ((res.data?.newMessages || 0) > 0) {
@@ -145,9 +220,9 @@ export default function InboxPage() {
         if (activeId) fetchMessages(activeId);
       }
     } catch { /* Silent */ }
-  }
+  }, []);
 
-  async function syncInstagram() {
+  const syncInstagram = useCallback(async () => {
     try {
       const res = await api.get('/api/messages/instagram/sync');
       if ((res.data?.newMessages || 0) > 0) {
@@ -156,38 +231,93 @@ export default function InboxPage() {
         if (activeId) fetchMessages(activeId);
       }
     } catch { /* Silent */ }
-  }
+  }, []);
 
-  async function fetchMessages(convId) {
+  const fetchMessages = useCallback(async (convId, forceRefresh = false) => {
     try {
-      const res = await api.get(`/api/messages/${convId}`);
-      setMessages(res.data.messages);
-      const convRes = await api.get(`/api/conversations/${convId}`);
-      setActiveConversation(convRes.data.conversation);
+      // Skip if we already have fresh cached data (unless forced)
+      if (!forceRefresh && messageCache.current.get(convId)?.fresh) {
+        return;
+      }
+      const [msgRes, convRes] = await Promise.all([
+        api.get(`/api/messages/${convId}`),
+        api.get(`/api/conversations/${convId}`),
+      ]);
+      const msgs = msgRes.data.messages;
+      // Rebuild known IDs for this conversation
+      msgs.forEach((m) => m.id && knownMessageIds.current.add(m.id));
+      // Only update if this is still the active conversation (prevents stale writes)
+      if (conversationIdRef.current === convId) {
+        setMessages(msgs);
+        setActiveConversation(convRes.data.conversation);
+      }
+      // Cache for quick restore on re-visit
+      messageCache.current.set(convId, {
+        messages: msgs,
+        activeConversation: convRes.data.conversation,
+        fresh: true,
+      });
+      // Mark cache as stale after 30s
+      setTimeout(() => {
+        const entry = messageCache.current.get(convId);
+        if (entry) entry.fresh = false;
+      }, 30000);
+      // Persist to sessionStorage
+      sessionSet(SESSION_KEYS.MESSAGES + convId, msgs.slice(-50)); // last 50 msgs
     } catch (err) {
       console.error('Failed to fetch messages:', err);
     }
-  }
+  }, []);
 
-  async function handleSend(e) {
+  // ── Ref for activeConversation to avoid stale closures in handleSend ──
+  const activeConversationRef = useRef(activeConversation);
+  useEffect(() => { activeConversationRef.current = activeConversation; }, [activeConversation]);
+
+  const handleSend = useCallback(async (e) => {
     e.preventDefault();
-    if ((!newMessage.trim() && attachments.length === 0) || !conversationId || sending) return;
+    const activeId = conversationIdRef.current;
+    if ((!newMessage.trim() && attachments.length === 0) || !activeId || sending) return;
 
+    const trimmedMsg = newMessage.trim();
+    const currentAttachments = [...attachments];
+    const isEmail = activeConversationRef.current?.connectedAccount?.platform === 'gmail';
+
+    // ── OPTIMISTIC UI: show message instantly with "sending" status ──
+    const optimisticId = `optimistic-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const optimisticMessage = {
+      id: optimisticId,
+      conversationId: activeId,
+      direction: 'outbound',
+      content: trimmedMsg || (currentAttachments.length > 0 ? `[${currentAttachments.map(a => a.name).join(', ')}]` : ''),
+      sentAt: new Date().toISOString(),
+      status: 'sending',
+      _optimistic: true,
+      attachments: currentAttachments.map((a) => ({
+        filename: a.name,
+        mimeType: a.type,
+        size: a.size,
+      })),
+    };
+
+    // Add optimistic message immediately
+    setMessages((prev) => [...prev, optimisticMessage]);
+    setNewMessage('');
+    setAttachments([]);
     setSending(true);
     setSendError('');
     setUploadProgress(0);
+
     try {
       let res;
-      if (attachments.length > 0) {
+      if (currentAttachments.length > 0) {
         const formData = new FormData();
-        formData.append('conversationId', conversationId);
-        if (newMessage.trim()) formData.append('content', newMessage.trim());
-        // Pass subject for email replies
-        if (isEmailPlatform && replyingTo?.subject) {
+        formData.append('conversationId', activeId);
+        if (trimmedMsg) formData.append('content', trimmedMsg);
+        if (isEmail && replyingTo?.subject) {
           const subj = replyingTo.subject.startsWith('Re:') ? replyingTo.subject : `Re: ${replyingTo.subject}`;
           formData.append('subject', subj);
         }
-        for (const att of attachments) {
+        for (const att of currentAttachments) {
           formData.append('attachments', att.file);
         }
         res = await api.post('/api/messages/send', formData, {
@@ -198,18 +328,27 @@ export default function InboxPage() {
           },
         });
       } else {
-        const body = { conversationId, content: newMessage.trim() };
-        if (isEmailPlatform && replyingTo?.subject) {
+        const body = { conversationId: activeId, content: trimmedMsg };
+        if (isEmail && replyingTo?.subject) {
           body.subject = replyingTo.subject.startsWith('Re:') ? replyingTo.subject : `Re: ${replyingTo.subject}`;
         }
         res = await api.post('/api/messages/send', body);
       }
-      setMessages((prev) => [...prev, res.data.message]);
-      setNewMessage('');
-      setAttachments([]);
+
+      const realMessage = res.data.message;
+      // Register the real message ID in dedup set
+      if (realMessage.id) knownMessageIds.current.add(realMessage.id);
+
+      // Replace optimistic message with real server response
+      setMessages((prev) =>
+        prev.map((m) => (m.id === optimisticId ? realMessage : m))
+      );
+
+      // Invalidate cache for this conversation
+      messageCache.current.set(activeId, null);
+
       setUploadProgress(null);
-      // Keep reply box open for email thread continuity
-      if (!isEmailPlatform) {
+      if (!isEmail) {
         setShowReplyBox(false);
         setReplyingTo(null);
       }
@@ -217,20 +356,39 @@ export default function InboxPage() {
       console.error('Failed to send message:', err);
       setSendError(err.response?.data?.error || 'Failed to send message');
       setUploadProgress(null);
+      // Remove the optimistic message on failure
+      setMessages((prev) => prev.filter((m) => m.id !== optimisticId));
     } finally {
       setSending(false);
     }
-  }
+  }, [newMessage, attachments, sending, replyingTo]);
 
-  const handleFileSelect = useCallback((files) => {
-    const newAttachments = Array.from(files).map((file) => ({
-      id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
-      file,
-      name: file.name,
-      size: file.size,
-      type: file.type,
-      preview: file.type.startsWith('image/') ? URL.createObjectURL(file) : null,
-    }));
+  const handleFileSelect = useCallback(async (files) => {
+    const newAttachments = [];
+    for (const file of Array.from(files)) {
+      let processedFile = file;
+      let preview = null;
+
+      // ── Compress images > 500KB before attaching ──
+      if (file.type.startsWith('image/') && file.size > 512000) {
+        try {
+          processedFile = await compressImage(file, 1200, 0.8);
+        } catch { /* Use original if compression fails */ }
+      }
+
+      if (processedFile.type.startsWith('image/')) {
+        preview = URL.createObjectURL(processedFile);
+      }
+
+      newAttachments.push({
+        id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+        file: processedFile,
+        name: file.name,
+        size: processedFile.size,
+        type: processedFile.type,
+        preview,
+      });
+    }
     setAttachments((prev) => [...prev, ...newAttachments]);
   }, []);
 
@@ -266,19 +424,24 @@ export default function InboxPage() {
 
   const platform = activeConversation?.connectedAccount?.platform;
   const isEmailPlatform = platform === 'gmail';
-  const emailSubject = isEmailPlatform
-    ? (messages.find((m) => m.subject)?.subject || '(No Subject)')
-    : null;
+  const emailSubject = useMemo(
+    () => isEmailPlatform ? (messages.find((m) => m.subject)?.subject || '(No Subject)') : null,
+    [isEmailPlatform, messages]
+  );
 
-  const filteredConversations = conversations.filter((c) => {
-    if (!search) return true;
-    const contactName = c.contact?.name || c.contact?.username || '';
-    return contactName.toLowerCase().includes(search.toLowerCase());
-  });
+  // ── Memoize filtered conversations to avoid recomputing on every render ──
+  const filteredConversations = useMemo(() => {
+    if (!search) return conversations;
+    const term = search.toLowerCase();
+    return conversations.filter((c) => {
+      const contactName = c.contact?.name || c.contact?.username || '';
+      return contactName.toLowerCase().includes(term);
+    });
+  }, [conversations, search]);
 
-  const handleSelectConversation = (convId) => navigate(`/inbox/${convId}`);
-  const handleBackToList = () => navigate('/inbox');
-  const platformTheme = getPlatformTheme(platform);
+  const handleSelectConversation = useCallback((convId) => navigate(`/inbox/${convId}`), [navigate]);
+  const handleBackToList = useCallback(() => navigate('/inbox'), [navigate]);
+  const platformTheme = useMemo(() => getPlatformTheme(platform), [platform]);
 
   return (
     <div className="flex h-full">
@@ -925,18 +1088,19 @@ function MessageAttachments({ attachments }) {
 // ═══════════════════════════════════════════════════════════════════
 
 function renderWhatsAppMessage(msg, isOutbound) {
+  const isSending = msg._optimistic || msg.status === 'sending';
   return (
     <div className={`flex ${isOutbound ? 'justify-end' : 'justify-start'}`}>
       <div className={`max-w-[80%] sm:max-w-[65%] px-3 py-2 rounded-lg text-sm shadow-sm relative ${
         isOutbound ? 'bg-[#dcf8c6] text-gray-900 rounded-tr-none' : 'bg-white text-gray-900 rounded-tl-none'
-      }`}>
+      } ${isSending ? 'opacity-70' : ''}`}>
         <p className="whitespace-pre-wrap break-words">{msg.content}</p>
         <MessageAttachments attachments={msg.attachments} />
         <div className="flex items-center justify-end gap-1 mt-1">
           <span className="text-[10px] text-gray-500">{formatTime(msg.sentAt)}</span>
-          {isOutbound && msg.status && (
+          {isOutbound && (
             <span className="text-[10px] text-blue-500">
-              {msg.status === 'delivered' || msg.status === 'read' ? '✓✓' : '✓'}
+              {isSending ? '○' : msg.status === 'delivered' || msg.status === 'read' ? '✓✓' : '✓'}
             </span>
           )}
         </div>
@@ -946,17 +1110,18 @@ function renderWhatsAppMessage(msg, isOutbound) {
 }
 
 function renderInstagramMessage(msg, isOutbound) {
+  const isSending = msg._optimistic || msg.status === 'sending';
   return (
     <div className={`flex ${isOutbound ? 'justify-end' : 'justify-start'}`}>
       <div className={`max-w-[80%] sm:max-w-[65%] px-4 py-2.5 text-sm ${
         isOutbound
           ? 'bg-gradient-to-br from-purple-500 via-pink-500 to-orange-400 text-white rounded-3xl rounded-br-md'
           : 'bg-gray-200 text-gray-900 rounded-3xl rounded-bl-md'
-      }`}>
+      } ${isSending ? 'opacity-70' : ''}`}>
         <p className="whitespace-pre-wrap break-words">{msg.content}</p>
         <MessageAttachments attachments={msg.attachments} />
         <p className={`text-[10px] mt-1 text-right ${isOutbound ? 'text-white/70' : 'text-gray-400'}`}>
-          {formatTime(msg.sentAt)}
+          {isSending ? 'Sending...' : formatTime(msg.sentAt)}
         </p>
       </div>
     </div>
@@ -964,15 +1129,16 @@ function renderInstagramMessage(msg, isOutbound) {
 }
 
 function renderFacebookMessage(msg, isOutbound) {
+  const isSending = msg._optimistic || msg.status === 'sending';
   return (
     <div className={`flex ${isOutbound ? 'justify-end' : 'justify-start'}`}>
       <div className={`max-w-[80%] sm:max-w-[65%] px-4 py-2.5 rounded-3xl text-sm ${
         isOutbound ? 'bg-[#0084ff] text-white rounded-br-md' : 'bg-gray-200 text-gray-900 rounded-bl-md'
-      }`}>
+      } ${isSending ? 'opacity-70' : ''}`}>
         <p className="whitespace-pre-wrap break-words">{msg.content}</p>
         <MessageAttachments attachments={msg.attachments} />
         <p className={`text-[10px] mt-1 text-right ${isOutbound ? 'text-blue-200' : 'text-gray-400'}`}>
-          {formatTime(msg.sentAt)}
+          {isSending ? 'Sending...' : formatTime(msg.sentAt)}
         </p>
       </div>
     </div>
@@ -980,17 +1146,18 @@ function renderFacebookMessage(msg, isOutbound) {
 }
 
 function renderDefaultMessage(msg, isOutbound) {
+  const isSending = msg._optimistic || msg.status === 'sending';
   return (
     <div className={`flex ${isOutbound ? 'justify-end' : 'justify-start'}`}>
       <div className={`max-w-[80%] sm:max-w-[65%] px-4 py-2.5 rounded-2xl text-sm ${
         isOutbound
           ? 'bg-primary-500 text-white rounded-br-md'
           : 'bg-white text-gray-900 border border-gray-200 rounded-bl-md'
-      }`}>
+      } ${isSending ? 'opacity-70' : ''}`}>
         <p className="whitespace-pre-wrap break-words">{msg.content}</p>
         <MessageAttachments attachments={msg.attachments} />
         <p className={`text-xs mt-1 ${isOutbound ? 'text-primary-200' : 'text-gray-400'}`}>
-          {formatTime(msg.sentAt)}
+          {isSending ? 'Sending...' : formatTime(msg.sentAt)}
         </p>
       </div>
     </div>
@@ -1090,4 +1257,40 @@ function isSameDay(dateStr1, dateStr2) {
   const d1 = new Date(dateStr1);
   const d2 = new Date(dateStr2);
   return d1.getFullYear() === d2.getFullYear() && d1.getMonth() === d2.getMonth() && d1.getDate() === d2.getDate();
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// IMAGE COMPRESSION — reduces upload size for large images
+// ═══════════════════════════════════════════════════════════════════
+
+function compressImage(file, maxDimension = 1200, quality = 0.8) {
+  return new Promise((resolve, reject) => {
+    const img = new window.Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      let { width, height } = img;
+      if (width > maxDimension || height > maxDimension) {
+        const ratio = Math.min(maxDimension / width, maxDimension / height);
+        width = Math.round(width * ratio);
+        height = Math.round(height * ratio);
+      }
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(img, 0, 0, width, height);
+      canvas.toBlob(
+        (blob) => {
+          if (!blob) return reject(new Error('Compression failed'));
+          const compressed = new File([blob], file.name, { type: file.type, lastModified: Date.now() });
+          resolve(compressed);
+        },
+        file.type,
+        quality
+      );
+    };
+    img.onerror = reject;
+    img.src = url;
+  });
 }

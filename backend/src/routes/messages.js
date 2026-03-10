@@ -331,11 +331,12 @@ router.post('/send', authenticate, upload.array('attachments', 10), async (req, 
       data: { lastMessageAt: new Date() },
     });
 
-    // Emit socket event
+    // Emit socket event — mark as _fromSender so frontend dedup can recognize it
     const io = req.app.get('io');
     io.to(`user:${req.user.id}`).emit('new_message', {
       message,
       conversationId: conversation.id,
+      _fromSender: true, // frontend already has this message via API response
     });
 
     io.to(`user:${req.user.id}`).emit('conversation_update', {
