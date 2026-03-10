@@ -15,7 +15,8 @@
       "Bash(node -e \"import\\(''./src/middleware/upload.js''\\).then\\(\\(\\) => console.log\\(''upload.js OK''\\)\\).catch\\(e => console.error\\(''FAIL:'', e.message\\)\\)\")",
       "Bash(npx vite build)",
       "Bash(npx -y acorn --ecma2022 --module --allow-import-export-everywhere src/pages/InboxPage.jsx)",
-      "Bash(node -e \":*)"
+      "Bash(node -e \":*)",
+      "Bash(find /c/Users/gondy/OneDrive/Desktop/AuraDesk -name .env* -o -name *.env.example)"
     ]
   }
 }

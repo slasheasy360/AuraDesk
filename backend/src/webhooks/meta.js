@@ -346,6 +346,7 @@ async function processInstagramWebhook(payload, io) {
 
 async function processWhatsAppWebhook(payload, io) {
   for (const entry of payload.entry || []) {
+    const wabaId = entry.id; // The WABA ID from the webhook entry
     const changes = entry.changes || [];
 
     for (const change of changes) {
@@ -354,28 +355,69 @@ async function processWhatsAppWebhook(payload, io) {
       const value = change.value;
       const phoneNumberId = value.metadata?.phone_number_id;
 
+      // Handle message status updates (sent -> delivered -> read)
+      if (value.statuses) {
+        for (const status of value.statuses) {
+          const statusMap = { sent: 'sent', delivered: 'delivered', read: 'read', failed: 'failed' };
+          const mappedStatus = statusMap[status.status];
+          if (!mappedStatus) continue;
+
+          try {
+            const msg = await prisma.message.findFirst({
+              where: { platformMessageId: status.id },
+            });
+            if (msg) {
+              const updateData = { status: mappedStatus };
+              if (mappedStatus === 'delivered') updateData.deliveredAt = new Date(Number(status.timestamp) * 1000);
+              if (mappedStatus === 'read') updateData.readAt = new Date(Number(status.timestamp) * 1000);
+              await prisma.message.update({ where: { id: msg.id }, data: updateData });
+              console.log('[WhatsApp Webhook] Status updated:', { messageId: msg.id, status: mappedStatus });
+            }
+          } catch (err) {
+            console.warn('[WhatsApp Webhook] Failed to update status:', err.message);
+          }
+        }
+      }
+
       if (!value.messages) continue;
 
       console.log('[WhatsApp Webhook] Processing messages', {
+        wabaId,
         phoneNumberId,
         messageCount: value.messages.length,
       });
 
+      // Route to correct tenant using both wabaId AND phoneNumberId for precise multi-tenant matching
       const waAccount = await prisma.whatsappAccount.findFirst({
-        where: { phoneNumberId },
+        where: {
+          phoneNumberId,
+          ...(wabaId ? { wabaId } : {}),
+        },
         include: {
           connectedAccount: { include: { user: true } },
         },
       });
 
       if (!waAccount) {
-        console.warn('[WhatsApp Webhook] No account for phoneNumberId:', phoneNumberId);
+        console.warn('[WhatsApp Webhook] No account for wabaId:', wabaId, 'phoneNumberId:', phoneNumberId);
         continue;
       }
 
       const account = waAccount.connectedAccount;
 
       for (const msg of value.messages) {
+        // Deduplicate: Meta webhooks are at-least-once delivery
+        const existingMsg = await prisma.message.findFirst({
+          where: {
+            platformMessageId: msg.id,
+            conversation: { connectedAccountId: account.id },
+          },
+        });
+        if (existingMsg) {
+          console.log('[WhatsApp Webhook] Duplicate message skipped:', msg.id);
+          continue;
+        }
+
         const senderPhone = msg.from;
         const contactName =
           value.contacts?.find((c) => c.wa_id === senderPhone)?.profile?.name || senderPhone;
@@ -423,8 +465,8 @@ async function processWhatsAppWebhook(payload, io) {
             platformMessageId: msg.id,
             direction: 'inbound',
             sender: contactName,
-            content: msg.text?.body || msg.caption || '[Media]',
-            contentType: msg.type === 'text' ? 'text' : msg.type,
+            content: msg.text?.body || msg.caption || `[${msg.type || 'Media'}]`,
+            contentType: ['text', 'image', 'audio', 'video', 'file', 'sticker'].includes(msg.type) ? msg.type : 'file',
             status: 'delivered',
             rawPayload: msg,
           },

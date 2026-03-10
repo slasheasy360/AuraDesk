@@ -6,7 +6,7 @@ import { encrypt, decrypt } from '../utils/encryption.js';
 
 const GRAPH_API = 'https://graph.facebook.com/v21.0';
 
-export async function handleEmbeddedSignup(userId, wabaId, phoneNumberId, userAccessToken) {
+export async function handleEmbeddedSignup(userId, wabaId, phoneNumberId, userAccessToken, tokenType = 'user') {
   // Get phone number details
   let phoneNumber = phoneNumberId;
   let businessName = 'WhatsApp Business';
@@ -25,14 +25,15 @@ export async function handleEmbeddedSignup(userId, wabaId, phoneNumberId, userAc
     console.warn('[WhatsApp] Could not fetch phone details (non-fatal):', err.response?.data?.error?.message || err.message);
   }
 
-  // Subscribe webhook to WABA (non-fatal — works without it if configured manually in dashboard)
+  // Subscribe webhook to WABA for this tenant (non-fatal — can be configured manually in Meta dashboard)
   try {
     await axios.post(`${GRAPH_API}/${wabaId}/subscribed_apps`, null, {
       params: { access_token: userAccessToken },
     });
-    console.log('[WhatsApp] Webhook subscription successful');
-  } catch {
-    // (#200) Permissions error is expected for system user tokens — webhook can be configured manually in Meta dashboard instead
+    console.log('[WhatsApp] Webhook subscription successful for WABA:', wabaId);
+  } catch (err) {
+    console.warn('[WhatsApp] Webhook subscription failed (non-fatal):', err.response?.data?.error?.message || err.message);
+    // (#200) Permissions error can happen — webhook can be configured manually in Meta dashboard
   }
 
   // Upsert connected account
@@ -82,14 +83,14 @@ export async function handleEmbeddedSignup(userId, wabaId, phoneNumberId, userAc
     where: { connectedAccountId: connectedAccount.id },
     update: {
       accessTokenEncrypted: encrypt(userAccessToken),
-      tokenType: 'system_user',
-      scopes: 'whatsapp_business_messaging',
+      tokenType,
+      scopes: 'whatsapp_business_messaging,whatsapp_business_management',
     },
     create: {
       connectedAccountId: connectedAccount.id,
       accessTokenEncrypted: encrypt(userAccessToken),
-      tokenType: 'system_user',
-      scopes: 'whatsapp_business_messaging',
+      tokenType,
+      scopes: 'whatsapp_business_messaging,whatsapp_business_management',
     },
   });
 

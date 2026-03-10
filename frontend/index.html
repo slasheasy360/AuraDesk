@@ -9,5 +9,18 @@
   <body class="bg-gray-50">
     <div id="root"></div>
     <script type="module" src="/src/main.jsx"></script>
+
+    <!-- Facebook SDK for Meta Embedded Signup (WhatsApp) -->
+    <script>
+      window.fbAsyncInit = function () {
+        FB.init({
+          appId: window.__META_APP_ID__,
+          cookie: true,
+          xfbml: false,
+          version: 'v19.0',
+        });
+      };
+    </script>
+    <script async defer crossorigin="anonymous" src="https://connect.facebook.net/en_US/sdk.js"></script>
   </body>
 </html>

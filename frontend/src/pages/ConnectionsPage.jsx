@@ -38,12 +38,12 @@ const platforms = [
   {
     id: 'whatsapp',
     name: 'WhatsApp Business',
-    description: 'Connect via server credentials to send and receive WhatsApp messages',
+    description: 'Connect your WhatsApp Business Account via Meta Embedded Signup',
     color: 'border-green-200 hover:border-green-400',
     bgColor: 'bg-green-50',
     iconColor: 'text-green-500',
     btnColor: 'bg-green-600 hover:bg-green-700',
-    authEndpoint: null,
+    authEndpoint: null, // Uses Meta Embedded Signup SDK instead of OAuth redirect
   },
 ];
 
@@ -106,18 +106,51 @@ export default function ConnectionsPage() {
     setConnectingPlatform(platform.id);
 
     if (platform.id === 'whatsapp') {
-      try {
-        await api.post('/auth/whatsapp/connect-env');
-        fetchAccounts();
-      } catch (err) {
-        console.error('WhatsApp connect failed:', err);
+      // Launch Meta Embedded Signup flow
+      if (typeof window.FB === 'undefined') {
         setPlatformError({
           platformId: 'whatsapp',
-          message: err.response?.data?.error || 'Failed to connect WhatsApp.',
+          message: 'Facebook SDK not loaded. Please check your Meta App ID configuration and refresh the page.',
         });
-      } finally {
         setConnectingPlatform(null);
+        return;
       }
+
+      window.FB.login(
+        async (response) => {
+          try {
+            if (!response.authResponse) {
+              setPlatformError({
+                platformId: 'whatsapp',
+                message: 'WhatsApp signup was cancelled or failed. Please try again.',
+              });
+              setConnectingPlatform(null);
+              return;
+            }
+
+            const accessToken = response.authResponse.accessToken;
+
+            // Send the user access token to backend — it will auto-discover WABA and phone number
+            await api.post('/auth/whatsapp/connect-with-token', { accessToken });
+            await fetchAccounts();
+          } catch (err) {
+            console.error('WhatsApp connect failed:', err);
+            setPlatformError({
+              platformId: 'whatsapp',
+              message: err.response?.data?.error || 'Failed to connect WhatsApp.',
+            });
+          } finally {
+            setConnectingPlatform(null);
+          }
+        },
+        {
+          scope: 'whatsapp_business_messaging,whatsapp_business_management',
+          extras: {
+            feature: 'whatsapp_embedded_signup',
+            setup: {},
+          },
+        }
+      );
       return;
     }
 

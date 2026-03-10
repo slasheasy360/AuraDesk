@@ -28,7 +28,7 @@ router.post('/connect', authenticate, async (req, res) => {
   }
 });
 
-// Connect WhatsApp with just an access token — uses env vars or auto-discovery for WABA/phone
+// Connect WhatsApp via Embedded Signup — auto-discovers WABA and phone from the user access token
 router.post('/connect-with-token', authenticate, async (req, res) => {
   try {
     const { accessToken } = req.body;
@@ -36,33 +36,31 @@ router.post('/connect-with-token', authenticate, async (req, res) => {
       return res.status(400).json({ error: 'accessToken is required' });
     }
 
-    console.log('[WhatsApp Connect] Starting connection...');
+    console.log('[WhatsApp Connect] Starting Embedded Signup connection for user:', req.user.id);
 
-    let wabaId = process.env.WHATSAPP_WABA_ID || null;
-    let phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID || null;
+    let wabaId = null;
+    let phoneNumberId = null;
 
-    // If env vars are set, verify the token works with them
-    if (wabaId && phoneNumberId) {
-      console.log('[WhatsApp Connect] Using env vars — WABA:', wabaId, 'Phone:', phoneNumberId);
-
-      // Verify token has access to this phone number
-      try {
-        const verifyRes = await axios.get(`${GRAPH_API}/${phoneNumberId}`, {
-          params: {
-            fields: 'display_phone_number,verified_name',
-            access_token: accessToken,
-          },
-        });
-        console.log('[WhatsApp Connect] Token verified for phone:', verifyRes.data.display_phone_number);
-      } catch (verifyErr) {
-        console.warn('[WhatsApp Connect] Token verification warning:', verifyErr.response?.data?.error?.message || verifyErr.message);
-        // Continue anyway — the token might still work for messaging
+    // Strategy 1: Use debug_token to discover WABA from granted scopes
+    try {
+      const appToken = `${process.env.META_APP_ID}|${process.env.META_APP_SECRET}`;
+      const debugRes = await axios.get(`${GRAPH_API}/debug_token`, {
+        params: { input_token: accessToken, access_token: appToken },
+      });
+      const granularScopes = debugRes.data?.data?.granular_scopes || [];
+      for (const scope of granularScopes) {
+        if (scope.scope === 'whatsapp_business_management' && scope.target_ids?.length > 0) {
+          wabaId = scope.target_ids[0];
+          console.log('[WhatsApp Connect] Found WABA from token scopes:', wabaId);
+          break;
+        }
       }
-    } else {
-      // Auto-discover WABA and phone number from the token
-      console.log('[WhatsApp Connect] No env vars, attempting auto-discovery...');
+    } catch (err) {
+      console.warn('[WhatsApp Connect] debug_token failed:', err.response?.data?.error?.message || err.message);
+    }
 
-      // Try /me/businesses -> owned_whatsapp_business_accounts
+    // Strategy 2: Enumerate businesses -> owned_whatsapp_business_accounts
+    if (!wabaId) {
       try {
         const businessRes = await axios.get(`${GRAPH_API}/me/businesses`, {
           params: { fields: 'id,name', access_token: accessToken },
@@ -76,47 +74,34 @@ router.post('/connect-with-token', authenticate, async (req, res) => {
             const wabas = wabaRes.data?.data || [];
             if (wabas.length > 0) {
               wabaId = wabas[0].id;
-              const phoneRes = await axios.get(`${GRAPH_API}/${wabaId}/phone_numbers`, {
-                params: { fields: 'id,display_phone_number,verified_name', access_token: accessToken },
-              });
-              const phones = phoneRes.data?.data || [];
-              if (phones.length > 0) phoneNumberId = phones[0].id;
               break;
             }
           } catch { continue; }
         }
-      } catch {
-        // try next method
+      } catch (err) {
+        console.warn('[WhatsApp Connect] businesses discovery failed:', err.response?.data?.error?.message || err.message);
       }
+    }
 
-      // Try direct WABA endpoint
-      if (!wabaId) {
-        try {
-          const debugRes = await axios.get(`${GRAPH_API}/debug_token`, {
-            params: { input_token: accessToken, access_token: accessToken },
-          });
-          const granularScopes = debugRes.data?.data?.granular_scopes || [];
-          for (const scope of granularScopes) {
-            if (scope.scope === 'whatsapp_business_management' && scope.target_ids?.length > 0) {
-              wabaId = scope.target_ids[0];
-              console.log('[WhatsApp Connect] Found WABA from token scopes:', wabaId);
-              const phoneRes = await axios.get(`${GRAPH_API}/${wabaId}/phone_numbers`, {
-                params: { fields: 'id,display_phone_number,verified_name', access_token: accessToken },
-              });
-              const phones = phoneRes.data?.data || [];
-              if (phones.length > 0) phoneNumberId = phones[0].id;
-              break;
-            }
-          }
-        } catch {
-          // continue
+    // Discover phone number from WABA
+    if (wabaId) {
+      try {
+        const phoneRes = await axios.get(`${GRAPH_API}/${wabaId}/phone_numbers`, {
+          params: { fields: 'id,display_phone_number,verified_name', access_token: accessToken },
+        });
+        const phones = phoneRes.data?.data || [];
+        if (phones.length > 0) {
+          phoneNumberId = phones[0].id;
+          console.log('[WhatsApp Connect] Found phone number:', phones[0].display_phone_number, '(ID:', phoneNumberId, ')');
         }
+      } catch (err) {
+        console.warn('[WhatsApp Connect] phone_numbers discovery failed:', err.response?.data?.error?.message || err.message);
       }
     }
 
     if (!wabaId || !phoneNumberId) {
       return res.status(400).json({
-        error: 'Could not determine WhatsApp Business Account details. Please set WHATSAPP_WABA_ID and WHATSAPP_PHONE_NUMBER_ID environment variables on the server.',
+        error: 'Could not find a WhatsApp Business Account. Make sure you selected a WABA and phone number during signup.',
         discovered: { wabaId, phoneNumberId },
       });
     }
@@ -161,7 +146,8 @@ router.post('/connect-env', authenticate, async (req, res) => {
       req.user.id,
       wabaId,
       phoneNumberId,
-      accessToken
+      accessToken,
+      'system_user'
     );
 
     console.log('[WhatsApp Connect] ✓ Connected via env vars', { accountId: account.id });
