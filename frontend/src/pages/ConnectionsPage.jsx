@@ -117,31 +117,30 @@ export default function ConnectionsPage() {
       }
 
       window.FB.login(
-        async (response) => {
-          try {
-            if (!response.authResponse) {
-              setPlatformError({
-                platformId: 'whatsapp',
-                message: 'WhatsApp signup was cancelled or failed. Please try again.',
-              });
-              setConnectingPlatform(null);
-              return;
-            }
-
-            const accessToken = response.authResponse.accessToken;
-
-            // Send the user access token to backend — it will auto-discover WABA and phone number
-            await api.post('/auth/whatsapp/connect-with-token', { accessToken });
-            await fetchAccounts();
-          } catch (err) {
-            console.error('WhatsApp connect failed:', err);
+        function (response) {
+          if (!response.authResponse) {
             setPlatformError({
               platformId: 'whatsapp',
-              message: err.response?.data?.error || 'Failed to connect WhatsApp.',
+              message: 'WhatsApp signup was cancelled or failed. Please try again.',
             });
-          } finally {
             setConnectingPlatform(null);
+            return;
           }
+
+          const accessToken = response.authResponse.accessToken;
+
+          // Send the user access token to backend — it will auto-discover WABA and phone number
+          api.post('/auth/whatsapp/connect-with-token', { accessToken })
+            .then(function () { return fetchAccounts(); })
+            .then(function () { setConnectingPlatform(null); })
+            .catch(function (err) {
+              console.error('WhatsApp connect failed:', err);
+              setPlatformError({
+                platformId: 'whatsapp',
+                message: err.response?.data?.error || 'Failed to connect WhatsApp.',
+              });
+              setConnectingPlatform(null);
+            });
         },
         {
           scope: 'whatsapp_business_messaging,whatsapp_business_management',
