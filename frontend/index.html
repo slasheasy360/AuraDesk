@@ -18,8 +18,9 @@
       window.fbAsyncInit = function () {
         FB.init({
           appId: '%VITE_META_APP_ID%',
+          autoLogAppEvents: true,
           cookie: true,
-          xfbml: false,
+          xfbml: true,
           version: 'v20.0',
         });
       };

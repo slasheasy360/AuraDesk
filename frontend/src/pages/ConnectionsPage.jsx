@@ -119,61 +119,81 @@ export default function ConnectionsPage() {
       // Reset embedded data before launching the flow
       window.__WA_EMBEDDED_DATA__ = null;
 
-      // Listen for session info from the Embedded Signup iframe
+      // Listen for Embedded Signup postMessage events (FINISH / CANCEL)
       const sessionInfoListener = (event) => {
-        if (event.origin !== 'https://www.facebook.com' && event.origin !== 'https://web.facebook.com') return;
+        if (!event.origin.includes('facebook.com') && !event.origin.includes('fbcdn.net') && !event.origin.includes('meta.com')) return;
+        let data;
         try {
-          const data = JSON.parse(event.data);
-          if (data.type === 'WA_EMBEDDED_SIGNUP') {
-            // data.data contains { waba_id, phone_number_id }
-            if (data.data) {
-              window.__WA_EMBEDDED_DATA__ = data.data;
-              console.log('[WhatsApp Embedded Signup] Received session info:', data.data);
-            }
-          }
+          data = typeof event.data === 'string' ? JSON.parse(event.data) : event.data;
         } catch {
-          // Not a JSON message or not our event — ignore
+          return;
+        }
+
+        console.log('[WhatsApp Embedded Signup] postMessage received:', data);
+
+        if (data.type === 'WA_EMBEDDED_SIGNUP') {
+          if (data.event === 'FINISH' || data.event === 'FINISH_ONLY_WABA') {
+            const sessionData = data.data || {};
+            const authResp = data.authResponse || {};
+
+            const code = authResp.code;
+            const waba_id = sessionData.waba_id || data.waba_id;
+            const phone_number_id = sessionData.phone_number_id || data.phone_number_id;
+
+            window.__WA_EMBEDDED_DATA__ = { code, waba_id, phone_number_id };
+            console.log('[WhatsApp Embedded Signup] FINISH:', { code: code ? 'present' : 'missing', waba_id, phone_number_id });
+
+            if (code) {
+              // Send code + IDs to backend for server-side token exchange
+              api.post('/auth/whatsapp/exchange', { code, waba_id, phone_number_id })
+                .then(function () { return fetchAccounts(); })
+                .then(function () { setConnectingPlatform(null); })
+                .catch(function (err) {
+                  console.error('WhatsApp exchange failed:', err);
+                  setPlatformError({
+                    platformId: 'whatsapp',
+                    message: err.response?.data?.error || 'Failed to connect WhatsApp.',
+                  });
+                  setConnectingPlatform(null);
+                });
+            }
+          } else if (data.event === 'CANCEL') {
+            setPlatformError({
+              platformId: 'whatsapp',
+              message: 'WhatsApp signup was cancelled.',
+            });
+            setConnectingPlatform(null);
+          }
         }
       };
       window.addEventListener('message', sessionInfoListener);
 
       window.FB.login(
         function (response) {
-          window.removeEventListener('message', sessionInfoListener);
+          console.log('[WhatsApp Embedded Signup] FB.login response:', response);
+          // The actual handling is done via the postMessage listener above.
+          // FB.login callback fires but may not have the code — the postMessage FINISH event is the reliable source.
 
-          if (!response.authResponse) {
+          // If postMessage already handled it (code flow), do nothing here.
+          // If the user cancelled and postMessage didn't fire, handle it.
+          if (!response.authResponse && !window.__WA_EMBEDDED_DATA__) {
+            window.removeEventListener('message', sessionInfoListener);
             setPlatformError({
               platformId: 'whatsapp',
               message: 'WhatsApp signup was cancelled or failed. Please try again.',
             });
             setConnectingPlatform(null);
-            return;
           }
-
-          const accessToken = response.authResponse.accessToken;
-          const embeddedData = window.__WA_EMBEDDED_DATA__;
-
-          // Build payload — include WABA/phone if captured from session info
-          const payload = { accessToken };
-          if (embeddedData?.waba_id) payload.wabaId = embeddedData.waba_id;
-          if (embeddedData?.phone_number_id) payload.phoneNumberId = embeddedData.phone_number_id;
-
-          api.post('/auth/whatsapp/connect-with-token', payload)
-            .then(function () { return fetchAccounts(); })
-            .then(function () { setConnectingPlatform(null); })
-            .catch(function (err) {
-              console.error('WhatsApp connect failed:', err);
-              setPlatformError({
-                platformId: 'whatsapp',
-                message: err.response?.data?.error || 'Failed to connect WhatsApp.',
-              });
-              setConnectingPlatform(null);
-            });
         },
         {
-          scope: 'whatsapp_business_messaging,whatsapp_business_management',
+          config_id: import.meta.env.VITE_WA_CONFIG_ID,
+          response_type: 'code',
+          override_default_response_type: true,
+          scope: 'whatsapp_business_messaging,business_management,whatsapp_business_management',
           extras: {
             feature: 'whatsapp_embedded_signup',
+            version: 4,
+            featureType: 'whatsapp_business_app_onboarding',
             setup: {},
           },
         }
