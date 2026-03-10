@@ -39,7 +39,9 @@ router.post('/exchange', authenticate, async (req, res) => {
     console.log('[WhatsApp Exchange] Starting code exchange for user:', req.user.id, { waba_id, phone_number_id });
 
     // Step 1: Exchange code for access token (server-to-server)
-    const redirectUri = process.env.WHATSAPP_REDIRECT_URI || process.env.FRONTEND_URL || 'http://localhost:5173';
+    // For FB JS SDK popup flow, redirect_uri must be empty string per Meta docs
+    const redirectUri = process.env.WHATSAPP_REDIRECT_URI || '';
+    console.log('[WhatsApp Exchange] Using redirect_uri:', JSON.stringify(redirectUri));
     const tokenRes = await axios.get(`${GRAPH_API}/oauth/access_token`, {
       params: {
         client_id: process.env.META_APP_ID,
