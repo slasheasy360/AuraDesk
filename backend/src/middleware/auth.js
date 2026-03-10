@@ -4,11 +4,18 @@ import prisma from '../utils/prisma.js';
 export async function authenticate(req, res, next) {
   try {
     const header = req.headers.authorization;
-    if (!header || !header.startsWith('Bearer ')) {
-      return res.status(401).json({ error: 'No token provided' });
+    let token = null;
+
+    if (header && header.startsWith('Bearer ')) {
+      token = header.split(' ')[1];
+    } else if (req.query.token) {
+      // Allow token via query param for inline media preview (images, videos)
+      token = req.query.token;
     }
 
-    const token = header.split(' ')[1];
+    if (!token) {
+      return res.status(401).json({ error: 'No token provided' });
+    }
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
     const user = await prisma.user.findUnique({ where: { id: decoded.userId } });
 

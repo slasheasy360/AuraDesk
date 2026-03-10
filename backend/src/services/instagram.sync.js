@@ -81,10 +81,10 @@ async function syncAccountMessages(account, igUserId, pageToken, userId) {
 async function syncConversation(account, igConv, igUserId, pageToken, userId) {
   const newMessages = [];
 
-  // Fetch messages in this conversation
+  // Fetch messages in this conversation (include attachments)
   const msgRes = await axios.get(`${GRAPH_API}/${igConv.id}`, {
     params: {
-      fields: 'messages{id,message,from,to,created_time}',
+      fields: 'messages{id,message,from,to,created_time,attachments}',
       access_token: pageToken,
     },
   });
@@ -96,9 +96,10 @@ async function syncConversation(account, igConv, igUserId, pageToken, userId) {
   const participants = igConv.participants?.data || [];
   const otherParticipant = participants.find((p) => p.id !== igUserId) || participants[0];
   const senderId = otherParticipant?.id || 'unknown';
-  const senderName = otherParticipant?.username || otherParticipant?.name || `IG User ${senderId.slice(-4)}`;
+  const igUsername = otherParticipant?.username || null;
+  const senderName = igUsername || otherParticipant?.name || `IG User ${senderId.slice(-4)}`;
 
-  // Upsert contact
+  // Upsert contact with proper username field
   const contact = await prisma.contact.upsert({
     where: {
       userId_platform_platformUserId: {
@@ -107,12 +108,13 @@ async function syncConversation(account, igConv, igUserId, pageToken, userId) {
         platformUserId: senderId,
       },
     },
-    update: { name: senderName },
+    update: { name: senderName, username: igUsername },
     create: {
       userId,
       platform: 'instagram',
       platformUserId: senderId,
       name: senderName,
+      username: igUsername,
     },
   });
 
@@ -153,8 +155,32 @@ async function syncConversation(account, igConv, igUserId, pageToken, userId) {
     const isFromUs = igMsg.from?.id === igUserId;
     const messageContent = igMsg.message || '';
 
-    // Skip empty messages
-    if (!messageContent.trim()) continue;
+    // Extract attachments from synced message
+    const syncAttachments = [];
+    if (igMsg.attachments?.data) {
+      for (const att of igMsg.attachments.data) {
+        syncAttachments.push({
+          filename: att.name || `ig_${att.type || 'file'}_${Date.now()}`,
+          mimeType: att.mime_type || (att.type === 'image' ? 'image/jpeg' : att.type === 'video' ? 'video/mp4' : 'application/octet-stream'),
+          size: att.size || 0,
+          fileUrl: att.image_data?.url || att.video_data?.url || att.file_url || null,
+          type: att.type || 'file',
+        });
+      }
+    }
+
+    // Determine content type
+    let syncContentType = 'text';
+    if (syncAttachments.length > 0) {
+      const firstType = syncAttachments[0].type;
+      if (firstType === 'image' || firstType === 'animated_image') syncContentType = 'image';
+      else if (firstType === 'video') syncContentType = 'video';
+      else if (firstType === 'audio') syncContentType = 'audio';
+      else syncContentType = 'file';
+    }
+
+    // Skip only if no text AND no attachments
+    if (!messageContent.trim() && syncAttachments.length === 0) continue;
 
     const message = await prisma.message.create({
       data: {
@@ -162,8 +188,9 @@ async function syncConversation(account, igConv, igUserId, pageToken, userId) {
         platformMessageId: igMsg.id,
         direction: isFromUs ? 'outbound' : 'inbound',
         sender: isFromUs ? (account.displayName || 'You') : senderName,
-        content: messageContent,
-        contentType: 'text',
+        content: messageContent || (syncAttachments.length > 0 ? `[${syncAttachments[0].type || 'Media'}]` : ''),
+        contentType: syncContentType,
+        attachments: syncAttachments.length > 0 ? syncAttachments : undefined,
         status: 'delivered',
         sentAt: new Date(igMsg.created_time || Date.now()),
         rawPayload: igMsg,

@@ -6,7 +6,7 @@ import { getSocket } from '../services/socket.js';
 import {
   Send, Search, MessageSquare, Mail, ArrowLeft, Paperclip,
   Smile, X, FileText, Image, Reply, Forward, ChevronDown,
-  ChevronUp, Download, UploadCloud,
+  ChevronUp, Download, UploadCloud, Play, Music, File, AlertCircle, RefreshCw,
 } from 'lucide-react';
 import PlatformBadge, { PlatformIcon } from '../components/PlatformBadge.jsx';
 
@@ -273,8 +273,8 @@ export default function InboxPage() {
   const activeConversationRef = useRef(activeConversation);
   useEffect(() => { activeConversationRef.current = activeConversation; }, [activeConversation]);
 
-  const handleSend = useCallback(async (e) => {
-    e.preventDefault();
+  const handleSend = useCallback(async (e, retryCount = 0) => {
+    if (e?.preventDefault) e.preventDefault();
     const activeId = conversationIdRef.current;
     if ((!newMessage.trim() && attachments.length === 0) || !activeId || sending) return;
 
@@ -307,65 +307,105 @@ export default function InboxPage() {
     setSendError('');
     setUploadProgress(0);
 
+    const MAX_RETRIES = 2;
+
+    const doSend = async (attempt) => {
+      try {
+        let res;
+        if (currentAttachments.length > 0) {
+          const formData = new FormData();
+          formData.append('conversationId', activeId);
+          if (trimmedMsg) formData.append('content', trimmedMsg);
+          if (isEmail && replyingTo?.subject) {
+            const subj = replyingTo.subject.startsWith('Re:') ? replyingTo.subject : `Re: ${replyingTo.subject}`;
+            formData.append('subject', subj);
+          }
+          for (const att of currentAttachments) {
+            formData.append('attachments', att.file);
+          }
+          res = await api.post('/api/messages/send', formData, {
+            headers: { 'Content-Type': 'multipart/form-data' },
+            timeout: 120000, // 2 minutes for large uploads
+            onUploadProgress: (progressEvent) => {
+              const pct = Math.round((progressEvent.loaded * 100) / progressEvent.total);
+              setUploadProgress(pct);
+            },
+          });
+        } else {
+          const body = { conversationId: activeId, content: trimmedMsg };
+          if (isEmail && replyingTo?.subject) {
+            body.subject = replyingTo.subject.startsWith('Re:') ? replyingTo.subject : `Re: ${replyingTo.subject}`;
+          }
+          res = await api.post('/api/messages/send', body);
+        }
+
+        const realMessage = res.data.message;
+        if (realMessage.id) knownMessageIds.current.add(realMessage.id);
+        setMessages((prev) =>
+          prev.map((m) => (m.id === optimisticId ? realMessage : m))
+        );
+        messageCache.current.set(activeId, null);
+        setUploadProgress(null);
+        if (!isEmail) {
+          setShowReplyBox(false);
+          setReplyingTo(null);
+        }
+      } catch (err) {
+        // Retry on network/timeout errors (not on 4xx client errors)
+        const isRetryable = !err.response || err.response.status >= 500 || err.code === 'ECONNABORTED';
+        if (isRetryable && attempt < MAX_RETRIES) {
+          console.warn(`Send failed (attempt ${attempt + 1}), retrying...`, err.message);
+          setUploadProgress(0);
+          await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)));
+          return doSend(attempt + 1);
+        }
+        throw err;
+      }
+    };
+
     try {
-      let res;
-      if (currentAttachments.length > 0) {
-        const formData = new FormData();
-        formData.append('conversationId', activeId);
-        if (trimmedMsg) formData.append('content', trimmedMsg);
-        if (isEmail && replyingTo?.subject) {
-          const subj = replyingTo.subject.startsWith('Re:') ? replyingTo.subject : `Re: ${replyingTo.subject}`;
-          formData.append('subject', subj);
-        }
-        for (const att of currentAttachments) {
-          formData.append('attachments', att.file);
-        }
-        res = await api.post('/api/messages/send', formData, {
-          headers: { 'Content-Type': 'multipart/form-data' },
-          onUploadProgress: (progressEvent) => {
-            const pct = Math.round((progressEvent.loaded * 100) / progressEvent.total);
-            setUploadProgress(pct);
-          },
-        });
-      } else {
-        const body = { conversationId: activeId, content: trimmedMsg };
-        if (isEmail && replyingTo?.subject) {
-          body.subject = replyingTo.subject.startsWith('Re:') ? replyingTo.subject : `Re: ${replyingTo.subject}`;
-        }
-        res = await api.post('/api/messages/send', body);
-      }
-
-      const realMessage = res.data.message;
-      // Register the real message ID in dedup set
-      if (realMessage.id) knownMessageIds.current.add(realMessage.id);
-
-      // Replace optimistic message with real server response
-      setMessages((prev) =>
-        prev.map((m) => (m.id === optimisticId ? realMessage : m))
-      );
-
-      // Invalidate cache for this conversation
-      messageCache.current.set(activeId, null);
-
-      setUploadProgress(null);
-      if (!isEmail) {
-        setShowReplyBox(false);
-        setReplyingTo(null);
-      }
+      await doSend(0);
     } catch (err) {
       console.error('Failed to send message:', err);
-      setSendError(err.response?.data?.error || 'Failed to send message');
+      const errorMsg = err.response?.data?.error || err.message || 'Failed to send message';
+      setSendError(errorMsg);
       setUploadProgress(null);
-      // Remove the optimistic message on failure
-      setMessages((prev) => prev.filter((m) => m.id !== optimisticId));
+      // Mark optimistic message as failed instead of removing it
+      setMessages((prev) =>
+        prev.map((m) => m.id === optimisticId ? { ...m, status: 'failed', _sendError: errorMsg } : m)
+      );
     } finally {
       setSending(false);
     }
   }, [newMessage, attachments, sending, replyingTo]);
 
   const handleFileSelect = useCallback(async (files) => {
+    const ALLOWED_TYPES = [
+      'image/jpeg', 'image/png', 'image/gif', 'image/webp',
+      'application/pdf',
+      'application/msword',
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      'application/vnd.ms-excel',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'text/plain', 'text/csv',
+      'audio/mpeg', 'audio/ogg', 'audio/wav',
+      'video/mp4', 'video/webm',
+    ];
+    const MAX_FILE_SIZE = 25 * 1024 * 1024; // 25MB
+
     const newAttachments = [];
     for (const file of Array.from(files)) {
+      // Validate file type
+      if (!ALLOWED_TYPES.includes(file.type)) {
+        setSendError(`File type not supported: ${file.name} (${file.type || 'unknown'})`);
+        continue;
+      }
+      // Validate file size
+      if (file.size > MAX_FILE_SIZE) {
+        setSendError(`File too large: ${file.name} (${formatFileSize(file.size)}, max 25MB)`);
+        continue;
+      }
+
       let processedFile = file;
       let preview = null;
 
@@ -377,6 +417,8 @@ export default function InboxPage() {
       }
 
       if (processedFile.type.startsWith('image/')) {
+        preview = URL.createObjectURL(processedFile);
+      } else if (processedFile.type.startsWith('video/')) {
         preview = URL.createObjectURL(processedFile);
       }
 
@@ -496,7 +538,7 @@ export default function InboxPage() {
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center justify-between">
                       <span className={`text-sm truncate ${conv.unreadCount > 0 ? 'font-semibold text-gray-900' : 'font-medium text-gray-700'}`}>
-                        {conv.contact?.name || conv.contact?.username || 'Unknown'}
+                        {getContactDisplayName(conv.contact, convPlatform)}
                       </span>
                       <span className="text-xs text-gray-400 flex-shrink-0 ml-2">{formatTime(conv.lastMessageAt)}</span>
                     </div>
@@ -548,7 +590,7 @@ export default function InboxPage() {
               </div>
               <div className="flex-1 min-w-0">
                 <h2 className="font-semibold text-gray-900 truncate text-sm sm:text-base">
-                  {activeConversation.contact?.name || activeConversation.contact?.username || 'Unknown'}
+                  {getContactDisplayName(activeConversation.contact, platform)}
                 </h2>
                 <div className="flex items-center gap-2">
                   <PlatformBadge platform={platform} size="xs" />
@@ -591,6 +633,24 @@ export default function InboxPage() {
                         : platform === 'facebook'
                         ? renderFacebookMessage(msg, isOutbound)
                         : renderDefaultMessage(msg, isOutbound)}
+                      {msg.status === 'failed' && (
+                        <div className="flex justify-end items-center gap-2 mt-1 px-2">
+                          <AlertCircle size={12} className="text-red-500" />
+                          <span className="text-[10px] text-red-500">Failed to send</span>
+                          <button
+                            onClick={() => {
+                              // Remove failed message and restore content for retry
+                              setMessages((prev) => prev.filter((m) => m.id !== msg.id));
+                              setNewMessage(msg.content || '');
+                              setSendError('');
+                            }}
+                            className="text-[10px] text-blue-500 hover:text-blue-700 flex items-center gap-0.5"
+                          >
+                            <RefreshCw size={10} />
+                            Retry
+                          </button>
+                        </div>
+                      )}
                     </div>
                   );
                 })}
@@ -813,34 +873,7 @@ function EmailMessageCard({ msg, isOutbound, isLast, isCollapsed, onToggleCollap
 
           {/* Attachments */}
           {hasAttachments && (
-            <div className="px-4 sm:px-5 py-3 border-t border-gray-100 bg-gray-50/50">
-              <p className="text-[10px] uppercase tracking-wider text-gray-400 font-medium mb-2">
-                {msg.attachments.length} Attachment{msg.attachments.length !== 1 ? 's' : ''}
-              </p>
-              <div className="flex flex-wrap gap-2">
-                {msg.attachments.map((att, i) => (
-                  <div
-                    key={i}
-                    className="flex items-center gap-2 px-3 py-2 bg-white rounded-lg border border-gray-200 hover:border-gray-300 transition-colors cursor-default"
-                  >
-                    <div className={`w-8 h-8 rounded flex items-center justify-center ${
-                      att.mimeType?.startsWith('image/') ? 'bg-blue-50' : 'bg-gray-100'
-                    }`}>
-                      {att.mimeType?.startsWith('image/') ? (
-                        <Image size={16} className="text-blue-500" />
-                      ) : (
-                        <FileText size={16} className="text-gray-400" />
-                      )}
-                    </div>
-                    <div className="min-w-0">
-                      <p className="text-xs font-medium text-gray-700 truncate max-w-[140px]">{att.filename}</p>
-                      <p className="text-[10px] text-gray-400">{formatFileSize(att.size)}</p>
-                    </div>
-                    <Download size={14} className="text-gray-300 ml-1" />
-                  </div>
-                ))}
-              </div>
-            </div>
+            <EmailAttachments attachments={msg.attachments} messageId={msg.id} />
           )}
 
           {/* Reply/Forward footer */}
@@ -861,6 +894,97 @@ function EmailMessageCard({ msg, isOutbound, isLast, isCollapsed, onToggleCollap
           )}
         </>
       )}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// EMAIL ATTACHMENTS — with preview and download
+// ═══════════════════════════════════════════════════════════════════
+
+function EmailAttachments({ attachments, messageId }) {
+  const handleDownload = async (att, index) => {
+    if (!messageId) return;
+    try {
+      const response = await api.get(`/api/messages/${messageId}/attachments/${index}/download`, {
+        responseType: 'blob',
+      });
+      const url = window.URL.createObjectURL(response.data);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = att.filename || 'download';
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      a.remove();
+    } catch (err) {
+      console.error('Download failed:', err);
+    }
+  };
+
+  const getPreviewUrl = (index) => {
+    if (!messageId) return null;
+    const token = localStorage.getItem('token');
+    const base = api.defaults.baseURL || '';
+    return `${base}/api/messages/${messageId}/attachments/${index}/preview?token=${encodeURIComponent(token)}`;
+  };
+
+  return (
+    <div className="px-4 sm:px-5 py-3 border-t border-gray-100 bg-gray-50/50">
+      <p className="text-[10px] uppercase tracking-wider text-gray-400 font-medium mb-2">
+        {attachments.length} Attachment{attachments.length !== 1 ? 's' : ''}
+      </p>
+      {/* Inline image previews */}
+      {attachments.some(a => a.mimeType?.startsWith('image/') && (a.attachmentId || a.fileUrl || a.mediaId)) && (
+        <div className="flex flex-wrap gap-2 mb-2">
+          {attachments.map((att, i) => {
+            if (!att.mimeType?.startsWith('image/') || !(att.attachmentId || att.fileUrl || att.mediaId)) return null;
+            return (
+              <img
+                key={i}
+                src={getPreviewUrl(i)}
+                alt={att.filename}
+                className="max-h-[200px] rounded-lg cursor-pointer border border-gray-200"
+                onClick={() => window.open(getPreviewUrl(i), '_blank')}
+                loading="lazy"
+              />
+            );
+          })}
+        </div>
+      )}
+      {/* File cards */}
+      <div className="flex flex-wrap gap-2">
+        {attachments.map((att, i) => (
+          <div
+            key={i}
+            onClick={() => handleDownload(att, i)}
+            className="flex items-center gap-2 px-3 py-2 bg-white rounded-lg border border-gray-200 hover:border-blue-300 hover:shadow-sm transition-all cursor-pointer group"
+          >
+            <div className={`w-8 h-8 rounded flex items-center justify-center ${
+              att.mimeType?.startsWith('image/') ? 'bg-blue-50'
+              : att.mimeType?.includes('pdf') ? 'bg-red-50'
+              : 'bg-gray-100'
+            }`}>
+              {att.mimeType?.startsWith('image/') ? (
+                <Image size={16} className="text-blue-500" />
+              ) : att.mimeType?.includes('pdf') ? (
+                <FileText size={16} className="text-red-500" />
+              ) : att.mimeType?.startsWith('audio/') ? (
+                <Music size={16} className="text-purple-500" />
+              ) : att.mimeType?.startsWith('video/') ? (
+                <Play size={16} className="text-orange-500" />
+              ) : (
+                <FileText size={16} className="text-gray-400" />
+              )}
+            </div>
+            <div className="min-w-0">
+              <p className="text-xs font-medium text-gray-700 truncate max-w-[140px]">{att.filename}</p>
+              <p className="text-[10px] text-gray-400">{formatFileSize(att.size)}</p>
+            </div>
+            <Download size={14} className="text-gray-300 group-hover:text-blue-500 ml-1 transition-colors" />
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
@@ -1068,17 +1192,137 @@ function getPlatformAvatarStyle(platform) {
 // MESSAGE ATTACHMENT INDICATOR (for non-email platforms)
 // ═══════════════════════════════════════════════════════════════════
 
-function MessageAttachments({ attachments }) {
+function MessageAttachments({ attachments, messageId, isOutbound }) {
   if (!attachments || !Array.isArray(attachments) || attachments.length === 0) return null;
+
+  const handleDownload = async (att, index) => {
+    if (!messageId) return;
+    try {
+      const response = await api.get(`/api/messages/${messageId}/attachments/${index}/download`, {
+        responseType: 'blob',
+      });
+      const url = window.URL.createObjectURL(response.data);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = att.filename || 'download';
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      a.remove();
+    } catch (err) {
+      console.error('Download failed:', err);
+    }
+  };
+
+  const getPreviewUrl = (index) => {
+    if (!messageId) return null;
+    const token = localStorage.getItem('token');
+    const base = api.defaults.baseURL || '';
+    return `${base}/api/messages/${messageId}/attachments/${index}/preview?token=${encodeURIComponent(token)}`;
+  };
+
   return (
-    <div className="mt-2 flex flex-wrap gap-1.5">
-      {attachments.map((att, i) => (
-        <div key={i} className="flex items-center gap-1 px-2 py-1 bg-black/5 rounded text-[11px]">
-          {att.mimeType?.startsWith('image/') ? <Image size={12} /> : <FileText size={12} />}
-          <span className="truncate max-w-[120px]">{att.filename}</span>
-          <span className="text-gray-400">({formatFileSize(att.size)})</span>
-        </div>
-      ))}
+    <div className="mt-2 space-y-2">
+      {attachments.map((att, i) => {
+        const mime = att.mimeType || '';
+        const isImage = mime.startsWith('image/');
+        const isVideo = mime.startsWith('video/');
+        const isAudio = mime.startsWith('audio/');
+        const hasSource = att.mediaId || att.fileUrl || att.attachmentId;
+        const previewUrl = hasSource ? getPreviewUrl(i) : null;
+
+        if (isImage && previewUrl) {
+          return (
+            <div key={i} className="rounded-lg overflow-hidden max-w-[280px]">
+              <img
+                src={previewUrl}
+                alt={att.filename || 'Image'}
+                className="w-full max-h-[300px] object-cover rounded-lg cursor-pointer"
+                onClick={() => window.open(previewUrl, '_blank')}
+                loading="lazy"
+              />
+              <div className="flex items-center justify-between mt-1 px-1">
+                <span className="text-[10px] text-gray-500 truncate">{att.filename}</span>
+                <button
+                  onClick={(e) => { e.stopPropagation(); handleDownload(att, i); }}
+                  className={`p-1 rounded hover:bg-black/10 transition ${isOutbound ? 'text-gray-600' : 'text-gray-400'}`}
+                  title="Download"
+                >
+                  <Download size={12} />
+                </button>
+              </div>
+            </div>
+          );
+        }
+
+        if (isVideo && previewUrl) {
+          return (
+            <div key={i} className="rounded-lg overflow-hidden max-w-[280px]">
+              <video
+                src={previewUrl}
+                controls
+                preload="metadata"
+                className="w-full max-h-[300px] rounded-lg"
+              />
+              <div className="flex items-center justify-between mt-1 px-1">
+                <span className="text-[10px] text-gray-500 truncate">{att.filename}</span>
+                <button
+                  onClick={() => handleDownload(att, i)}
+                  className={`p-1 rounded hover:bg-black/10 transition ${isOutbound ? 'text-gray-600' : 'text-gray-400'}`}
+                  title="Download"
+                >
+                  <Download size={12} />
+                </button>
+              </div>
+            </div>
+          );
+        }
+
+        if (isAudio && previewUrl) {
+          return (
+            <div key={i} className="flex flex-col gap-1 max-w-[280px]">
+              <audio src={previewUrl} controls preload="metadata" className="w-full h-10" />
+              <div className="flex items-center justify-between px-1">
+                <span className="text-[10px] text-gray-500 truncate">{att.filename}</span>
+                <button
+                  onClick={() => handleDownload(att, i)}
+                  className={`p-1 rounded hover:bg-black/10 transition ${isOutbound ? 'text-gray-600' : 'text-gray-400'}`}
+                  title="Download"
+                >
+                  <Download size={12} />
+                </button>
+              </div>
+            </div>
+          );
+        }
+
+        // File card for documents, PDFs, etc.
+        return (
+          <div
+            key={i}
+            className="flex items-center gap-2.5 px-3 py-2.5 bg-black/5 rounded-lg cursor-pointer hover:bg-black/10 transition max-w-[280px]"
+            onClick={() => hasSource && handleDownload(att, i)}
+          >
+            <div className={`w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0 ${
+              mime.includes('pdf') ? 'bg-red-100 text-red-500'
+              : mime.includes('word') || mime.includes('document') ? 'bg-blue-100 text-blue-500'
+              : mime.includes('sheet') || mime.includes('excel') ? 'bg-green-100 text-green-500'
+              : 'bg-gray-200 text-gray-500'
+            }`}>
+              {mime.includes('pdf') ? <FileText size={20} /> :
+               isImage ? <Image size={20} /> :
+               isVideo ? <Play size={20} /> :
+               isAudio ? <Music size={20} /> :
+               <File size={20} />}
+            </div>
+            <div className="min-w-0 flex-1">
+              <p className="text-xs font-medium truncate">{att.filename || 'Unnamed file'}</p>
+              <p className="text-[10px] text-gray-400">{formatFileSize(att.size)}</p>
+            </div>
+            {hasSource && <Download size={14} className="text-gray-400 flex-shrink-0" />}
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -1089,13 +1333,15 @@ function MessageAttachments({ attachments }) {
 
 function renderWhatsAppMessage(msg, isOutbound) {
   const isSending = msg._optimistic || msg.status === 'sending';
+  const hasMediaContent = msg.contentType && msg.contentType !== 'text' && msg.attachments?.length > 0;
+  const textContent = msg.content && !msg.content.startsWith('[') ? msg.content : (msg.content?.startsWith('[') && msg.attachments?.length > 0 ? '' : msg.content);
   return (
     <div className={`flex ${isOutbound ? 'justify-end' : 'justify-start'}`}>
       <div className={`max-w-[80%] sm:max-w-[65%] px-3 py-2 rounded-lg text-sm shadow-sm relative ${
         isOutbound ? 'bg-[#dcf8c6] text-gray-900 rounded-tr-none' : 'bg-white text-gray-900 rounded-tl-none'
       } ${isSending ? 'opacity-70' : ''}`}>
-        <p className="whitespace-pre-wrap break-words">{msg.content}</p>
-        <MessageAttachments attachments={msg.attachments} />
+        {textContent && <p className="whitespace-pre-wrap break-words">{textContent}</p>}
+        <MessageAttachments attachments={msg.attachments} messageId={msg.id} isOutbound={isOutbound} />
         <div className="flex items-center justify-end gap-1 mt-1">
           <span className="text-[10px] text-gray-500">{formatTime(msg.sentAt)}</span>
           {isOutbound && (
@@ -1111,6 +1357,7 @@ function renderWhatsAppMessage(msg, isOutbound) {
 
 function renderInstagramMessage(msg, isOutbound) {
   const isSending = msg._optimistic || msg.status === 'sending';
+  const textContent = msg.content && !msg.content.startsWith('[') ? msg.content : (msg.content?.startsWith('[') && msg.attachments?.length > 0 ? '' : msg.content);
   return (
     <div className={`flex ${isOutbound ? 'justify-end' : 'justify-start'}`}>
       <div className={`max-w-[80%] sm:max-w-[65%] px-4 py-2.5 text-sm ${
@@ -1118,8 +1365,8 @@ function renderInstagramMessage(msg, isOutbound) {
           ? 'bg-gradient-to-br from-purple-500 via-pink-500 to-orange-400 text-white rounded-3xl rounded-br-md'
           : 'bg-gray-200 text-gray-900 rounded-3xl rounded-bl-md'
       } ${isSending ? 'opacity-70' : ''}`}>
-        <p className="whitespace-pre-wrap break-words">{msg.content}</p>
-        <MessageAttachments attachments={msg.attachments} />
+        {textContent && <p className="whitespace-pre-wrap break-words">{textContent}</p>}
+        <MessageAttachments attachments={msg.attachments} messageId={msg.id} isOutbound={isOutbound} />
         <p className={`text-[10px] mt-1 text-right ${isOutbound ? 'text-white/70' : 'text-gray-400'}`}>
           {isSending ? 'Sending...' : formatTime(msg.sentAt)}
         </p>
@@ -1130,13 +1377,14 @@ function renderInstagramMessage(msg, isOutbound) {
 
 function renderFacebookMessage(msg, isOutbound) {
   const isSending = msg._optimistic || msg.status === 'sending';
+  const textContent = msg.content && !msg.content.startsWith('[') ? msg.content : (msg.content?.startsWith('[') && msg.attachments?.length > 0 ? '' : msg.content);
   return (
     <div className={`flex ${isOutbound ? 'justify-end' : 'justify-start'}`}>
       <div className={`max-w-[80%] sm:max-w-[65%] px-4 py-2.5 rounded-3xl text-sm ${
         isOutbound ? 'bg-[#0084ff] text-white rounded-br-md' : 'bg-gray-200 text-gray-900 rounded-bl-md'
       } ${isSending ? 'opacity-70' : ''}`}>
-        <p className="whitespace-pre-wrap break-words">{msg.content}</p>
-        <MessageAttachments attachments={msg.attachments} />
+        {textContent && <p className="whitespace-pre-wrap break-words">{textContent}</p>}
+        <MessageAttachments attachments={msg.attachments} messageId={msg.id} isOutbound={isOutbound} />
         <p className={`text-[10px] mt-1 text-right ${isOutbound ? 'text-blue-200' : 'text-gray-400'}`}>
           {isSending ? 'Sending...' : formatTime(msg.sentAt)}
         </p>
@@ -1147,6 +1395,7 @@ function renderFacebookMessage(msg, isOutbound) {
 
 function renderDefaultMessage(msg, isOutbound) {
   const isSending = msg._optimistic || msg.status === 'sending';
+  const textContent = msg.content && !msg.content.startsWith('[') ? msg.content : (msg.content?.startsWith('[') && msg.attachments?.length > 0 ? '' : msg.content);
   return (
     <div className={`flex ${isOutbound ? 'justify-end' : 'justify-start'}`}>
       <div className={`max-w-[80%] sm:max-w-[65%] px-4 py-2.5 rounded-2xl text-sm ${
@@ -1154,8 +1403,8 @@ function renderDefaultMessage(msg, isOutbound) {
           ? 'bg-primary-500 text-white rounded-br-md'
           : 'bg-white text-gray-900 border border-gray-200 rounded-bl-md'
       } ${isSending ? 'opacity-70' : ''}`}>
-        <p className="whitespace-pre-wrap break-words">{msg.content}</p>
-        <MessageAttachments attachments={msg.attachments} />
+        {textContent && <p className="whitespace-pre-wrap break-words">{textContent}</p>}
+        <MessageAttachments attachments={msg.attachments} messageId={msg.id} isOutbound={isOutbound} />
         <p className={`text-xs mt-1 ${isOutbound ? 'text-primary-200' : 'text-gray-400'}`}>
           {isSending ? 'Sending...' : formatTime(msg.sentAt)}
         </p>
@@ -1222,6 +1471,34 @@ function renderComposer({ platform, newMessage, setNewMessage, handleSend, sendi
 // ═══════════════════════════════════════════════════════════════════
 // UTILITY FUNCTIONS
 // ═══════════════════════════════════════════════════════════════════
+
+/**
+ * Get the best display name for a contact based on platform.
+ * - Instagram: username (e.g., @johndoe)
+ * - Facebook: display name (e.g., John Doe)
+ * - WhatsApp: profile name or phone number
+ * - Gmail: sender name + email
+ */
+function getContactDisplayName(contact, platform) {
+  if (!contact) return 'Unknown';
+
+  switch (platform) {
+    case 'instagram':
+      return contact.username || contact.name || `IG User ${(contact.platformUserId || '').slice(-4)}`;
+    case 'facebook':
+      return contact.name || `FB User ${(contact.platformUserId || '').slice(-4)}`;
+    case 'whatsapp':
+      return contact.name || contact.platformUserId || 'Unknown';
+    case 'gmail': {
+      const name = contact.name || '';
+      const email = contact.platformUserId || '';
+      if (name && email && name !== email) return `${name} <${email}>`;
+      return name || email || 'Unknown';
+    }
+    default:
+      return contact.name || contact.username || contact.platformUserId || 'Unknown';
+  }
+}
 
 function formatFileSize(bytes) {
   if (!bytes) return '0B';

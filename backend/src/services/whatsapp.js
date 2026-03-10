@@ -198,6 +198,52 @@ export async function sendMedia(connectedAccountId, toPhoneNumber, file) {
   return res.data;
 }
 
+/**
+ * Get the download URL for a WhatsApp media file.
+ * WhatsApp media IDs must be resolved to a temporary URL via the Graph API.
+ */
+export async function getMediaUrl(connectedAccountId, mediaId) {
+  const whatsappAccount = await prisma.whatsappAccount.findUnique({
+    where: { connectedAccountId },
+    include: { connectedAccount: { include: { authToken: true } } },
+  });
+
+  if (!whatsappAccount) throw new Error('WhatsApp account not found');
+  const authToken = whatsappAccount.connectedAccount.authToken;
+  if (!authToken) throw new Error('No auth token found');
+
+  const accessToken = decrypt(authToken.accessTokenEncrypted);
+
+  // Step 1: Get the media URL from WhatsApp
+  const mediaRes = await axios.get(`${GRAPH_API}/${mediaId}`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+
+  const mediaUrl = mediaRes.data.url;
+  if (!mediaUrl) throw new Error('No URL returned for media ID');
+
+  return { url: mediaUrl, accessToken, mimeType: mediaRes.data.mime_type };
+}
+
+/**
+ * Download WhatsApp media binary data.
+ * Returns a readable stream and content type.
+ */
+export async function downloadMedia(connectedAccountId, mediaId) {
+  const { url, accessToken, mimeType } = await getMediaUrl(connectedAccountId, mediaId);
+
+  const response = await axios.get(url, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+    responseType: 'stream',
+  });
+
+  return {
+    stream: response.data,
+    contentType: mimeType || response.headers['content-type'],
+    contentLength: response.headers['content-length'],
+  };
+}
+
 export async function findAccountByPhoneNumberId(phoneNumberId) {
   return prisma.whatsappAccount.findFirst({
     where: { phoneNumberId },

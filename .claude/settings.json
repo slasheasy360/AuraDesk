@@ -16,7 +16,8 @@
       "Bash(npx vite build)",
       "Bash(npx -y acorn --ecma2022 --module --allow-import-export-everywhere src/pages/InboxPage.jsx)",
       "Bash(node -e \":*)",
-      "Bash(find /c/Users/gondy/OneDrive/Desktop/AuraDesk -name .env* -o -name *.env.example)"
+      "Bash(find /c/Users/gondy/OneDrive/Desktop/AuraDesk -name .env* -o -name *.env.example)",
+      "Read(//c/Users/gondy/.claude/projects/c--Users-gondy-OneDrive-Desktop-AuraDesk/8160a943-7a60-4a1a-9451-997b622c30d0/tool-results/**)"
     ]
   }
 }

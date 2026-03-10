@@ -135,6 +135,8 @@ async function saveGmailMessage(msg, account, accountEmail, io) {
   // Extract and clean body
   const rawBody = gmailApi.getEmailBody(msg.payload || {});
   const body = cleanBody(rawBody);
+  const htmlBody = gmailApi.getEmailHtmlBody(msg.payload || {}) || null;
+  const emailAttachments = gmailApi.getEmailAttachments(msg.payload || {});
 
   const message = await prisma.message.create({
     data: {
@@ -144,7 +146,9 @@ async function saveGmailMessage(msg, account, accountEmail, io) {
       sender: senderName,
       subject,
       content: body || subject,
+      htmlContent: htmlBody,
       contentType: 'email',
+      attachments: emailAttachments.length > 0 ? emailAttachments : undefined,
       status: isOutbound ? 'sent' : 'delivered',
       sentAt: timestamp,
       rawPayload: msg,

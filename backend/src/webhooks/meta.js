@@ -1,7 +1,10 @@
 import { Router } from 'express';
 import crypto from 'crypto';
+import axios from 'axios';
 import prisma from '../utils/prisma.js';
 import { decrypt } from '../utils/encryption.js';
+
+const GRAPH_API = 'https://graph.facebook.com/v21.0';
 
 const router = Router();
 
@@ -147,7 +150,7 @@ async function processMessengerWebhook(payload, io) {
       // Find connected account by page ID
       const account = await prisma.connectedAccount.findFirst({
         where: { platform: 'facebook', platformAccountId: pageId, status: 'active' },
-        include: { user: true },
+        include: { user: true, authToken: true },
       });
 
       if (!account) {
@@ -155,7 +158,26 @@ async function processMessengerWebhook(payload, io) {
         continue;
       }
 
-      // Upsert contact
+      // Fetch real user profile from Graph API
+      let contactName = `FB User ${senderId.slice(-4)}`;
+      let avatarUrl = null;
+      if (account.authToken) {
+        try {
+          const pageToken = decrypt(account.authToken.accessTokenEncrypted);
+          const profileRes = await axios.get(`${GRAPH_API}/${senderId}`, {
+            params: { fields: 'first_name,last_name,profile_pic', access_token: pageToken },
+          });
+          const profile = profileRes.data;
+          if (profile.first_name || profile.last_name) {
+            contactName = [profile.first_name, profile.last_name].filter(Boolean).join(' ');
+          }
+          avatarUrl = profile.profile_pic || null;
+        } catch (profileErr) {
+          console.warn('[Messenger Webhook] Could not fetch user profile:', profileErr.response?.data?.error?.message || profileErr.message);
+        }
+      }
+
+      // Upsert contact with real name
       const contact = await prisma.contact.upsert({
         where: {
           userId_platform_platformUserId: {
@@ -164,14 +186,42 @@ async function processMessengerWebhook(payload, io) {
             platformUserId: senderId,
           },
         },
-        update: {},
+        update: { name: contactName, avatarUrl },
         create: {
           userId: account.userId,
           platform: 'facebook',
           platformUserId: senderId,
-          name: `FB User ${senderId.slice(-4)}`,
+          name: contactName,
+          avatarUrl,
         },
       });
+
+      // Extract attachments from webhook payload
+      const incomingAttachments = [];
+      if (event.message.attachments && Array.isArray(event.message.attachments)) {
+        for (const att of event.message.attachments) {
+          incomingAttachments.push({
+            filename: att.payload?.title || `attachment_${Date.now()}`,
+            mimeType: att.type === 'image' ? 'image/jpeg'
+              : att.type === 'video' ? 'video/mp4'
+              : att.type === 'audio' ? 'audio/mpeg'
+              : 'application/octet-stream',
+            size: att.payload?.size || 0,
+            fileUrl: att.payload?.url || null,
+            type: att.type,
+          });
+        }
+      }
+
+      // Determine content type from attachments
+      let contentType = 'text';
+      if (incomingAttachments.length > 0) {
+        const firstType = incomingAttachments[0].type;
+        if (firstType === 'image') contentType = 'image';
+        else if (firstType === 'video') contentType = 'video';
+        else if (firstType === 'audio') contentType = 'audio';
+        else contentType = 'file';
+      }
 
       // Upsert conversation
       const conversation = await prisma.conversation.upsert({
@@ -194,15 +244,16 @@ async function processMessengerWebhook(payload, io) {
         },
       });
 
-      // Create message
+      // Create message with attachments
       const message = await prisma.message.create({
         data: {
           conversationId: conversation.id,
           platformMessageId: event.message.mid,
           direction: 'inbound',
           sender: contact.name,
-          content: event.message.text || '',
-          contentType: event.message.attachments ? 'image' : 'text',
+          content: event.message.text || (incomingAttachments.length > 0 ? `[${incomingAttachments[0].type || 'Media'}]` : ''),
+          contentType,
+          attachments: incomingAttachments.length > 0 ? incomingAttachments : undefined,
           status: 'delivered',
           rawPayload: event,
         },
@@ -253,14 +304,14 @@ async function processInstagramWebhook(payload, io) {
       // Find connected Instagram account — try recipientId first (inbound), then senderId (echo/outbound)
       let account = await prisma.connectedAccount.findFirst({
         where: { platform: 'instagram', platformAccountId: recipientId, status: 'active' },
-        include: { user: true },
+        include: { user: true, authToken: true },
       });
 
       // If not found by recipientId, this might be an echo (outbound) — sender is our account
       if (!account) {
         account = await prisma.connectedAccount.findFirst({
           where: { platform: 'instagram', platformAccountId: senderId, status: 'active' },
-          include: { user: true },
+          include: { user: true, authToken: true },
         });
         if (account) {
           // This is an echo of our own outbound message — skip it
@@ -271,7 +322,26 @@ async function processInstagramWebhook(payload, io) {
         continue;
       }
 
-      // Upsert contact
+      // Fetch real Instagram username via Graph API
+      let contactName = `IG User ${senderId.slice(-4)}`;
+      let igUsername = null;
+      let avatarUrl = null;
+      if (account.authToken) {
+        try {
+          const pageToken = decrypt(account.authToken.accessTokenEncrypted);
+          const profileRes = await axios.get(`${GRAPH_API}/${senderId}`, {
+            params: { fields: 'name,username,profile_pic', access_token: pageToken },
+          });
+          const profile = profileRes.data;
+          igUsername = profile.username || null;
+          contactName = profile.username || profile.name || contactName;
+          avatarUrl = profile.profile_pic || null;
+        } catch (profileErr) {
+          console.warn('[Instagram Webhook] Could not fetch IG user profile:', profileErr.response?.data?.error?.message || profileErr.message);
+        }
+      }
+
+      // Upsert contact with real username
       const contact = await prisma.contact.upsert({
         where: {
           userId_platform_platformUserId: {
@@ -280,14 +350,43 @@ async function processInstagramWebhook(payload, io) {
             platformUserId: senderId,
           },
         },
-        update: {},
+        update: { name: contactName, username: igUsername, avatarUrl },
         create: {
           userId: account.userId,
           platform: 'instagram',
           platformUserId: senderId,
-          name: `IG User ${senderId.slice(-4)}`,
+          name: contactName,
+          username: igUsername,
+          avatarUrl,
         },
       });
+
+      // Extract attachments from Instagram webhook payload
+      const igAttachments = [];
+      if (event.message.attachments && Array.isArray(event.message.attachments)) {
+        for (const att of event.message.attachments) {
+          igAttachments.push({
+            filename: att.payload?.title || `ig_attachment_${Date.now()}`,
+            mimeType: att.type === 'image' ? 'image/jpeg'
+              : att.type === 'video' ? 'video/mp4'
+              : att.type === 'audio' ? 'audio/mpeg'
+              : 'application/octet-stream',
+            size: att.payload?.size || 0,
+            fileUrl: att.payload?.url || null,
+            type: att.type,
+          });
+        }
+      }
+
+      // Determine content type
+      let igContentType = 'text';
+      if (igAttachments.length > 0) {
+        const firstType = igAttachments[0].type;
+        if (firstType === 'image') igContentType = 'image';
+        else if (firstType === 'video') igContentType = 'video';
+        else if (firstType === 'audio') igContentType = 'audio';
+        else igContentType = 'file';
+      }
 
       // Upsert conversation
       const conversation = await prisma.conversation.upsert({
@@ -310,15 +409,16 @@ async function processInstagramWebhook(payload, io) {
         },
       });
 
-      // Create message
+      // Create message with attachments
       const message = await prisma.message.create({
         data: {
           conversationId: conversation.id,
           platformMessageId: event.message.mid,
           direction: 'inbound',
           sender: contact.name,
-          content: event.message.text || '',
-          contentType: 'text',
+          content: event.message.text || (igAttachments.length > 0 ? `[${igAttachments[0].type || 'Media'}]` : ''),
+          contentType: igContentType,
+          attachments: igAttachments.length > 0 ? igAttachments : undefined,
           status: 'delivered',
           rawPayload: event,
         },
@@ -459,14 +559,29 @@ async function processWhatsAppWebhook(payload, io) {
           },
         });
 
+        // Extract WhatsApp media attachment metadata
+        const waAttachments = [];
+        const mediaTypes = ['image', 'video', 'audio', 'document', 'sticker'];
+        if (mediaTypes.includes(msg.type) && msg[msg.type]) {
+          const media = msg[msg.type];
+          waAttachments.push({
+            filename: media.filename || `${msg.type}_${Date.now()}`,
+            mimeType: media.mime_type || 'application/octet-stream',
+            size: media.file_size || 0,
+            mediaId: media.id,
+            type: msg.type,
+          });
+        }
+
         const message = await prisma.message.create({
           data: {
             conversationId: conversation.id,
             platformMessageId: msg.id,
             direction: 'inbound',
             sender: contactName,
-            content: msg.text?.body || msg.caption || `[${msg.type || 'Media'}]`,
+            content: msg.text?.body || msg.caption || (waAttachments.length > 0 ? `[${msg.type || 'Media'}]` : ''),
             contentType: ['text', 'image', 'audio', 'video', 'file', 'sticker'].includes(msg.type) ? msg.type : 'file',
+            attachments: waAttachments.length > 0 ? waAttachments : undefined,
             status: 'delivered',
             rawPayload: msg,
           },

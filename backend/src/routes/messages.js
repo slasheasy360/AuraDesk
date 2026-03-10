@@ -9,6 +9,7 @@ import * as whatsappService from '../services/whatsapp.js';
 import * as gmailService from '../services/gmail.js';
 import { syncGmailMessagesController, gmailDiagnosticController } from '../controllers/gmail.controller.js';
 import { syncInstagramMessages } from '../services/instagram.sync.js';
+import axios from 'axios';
 
 const router = Router();
 
@@ -115,6 +116,135 @@ router.get('/:conversationId', authenticate, async (req, res) => {
   } catch (err) {
     console.error('Get messages error:', err);
     res.status(500).json({ error: 'Failed to fetch messages' });
+  }
+});
+
+// Download an attachment from a message
+router.get('/:messageId/attachments/:index/download', authenticate, async (req, res) => {
+  try {
+    const { messageId, index } = req.params;
+    const attIndex = parseInt(index, 10);
+
+    const message = await prisma.message.findFirst({
+      where: {
+        id: messageId,
+        conversation: { connectedAccount: { userId: req.user.id } },
+      },
+      include: {
+        conversation: { include: { connectedAccount: true } },
+      },
+    });
+
+    if (!message) return res.status(404).json({ error: 'Message not found' });
+
+    const attachments = message.attachments;
+    if (!attachments || !Array.isArray(attachments) || attIndex < 0 || attIndex >= attachments.length) {
+      return res.status(404).json({ error: 'Attachment not found' });
+    }
+
+    const att = attachments[attIndex];
+    const platform = message.conversation.connectedAccount.platform;
+    const connectedAccountId = message.conversation.connectedAccountId;
+
+    if (platform === 'whatsapp' && att.mediaId) {
+      // WhatsApp: download via Graph API media endpoint
+      const { stream, contentType, contentLength } = await whatsappService.downloadMedia(connectedAccountId, att.mediaId);
+      res.setHeader('Content-Type', contentType || att.mimeType || 'application/octet-stream');
+      res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(att.filename || 'download')}"`);
+      if (contentLength) res.setHeader('Content-Length', contentLength);
+      stream.pipe(res);
+    } else if ((platform === 'facebook' || platform === 'instagram') && att.fileUrl) {
+      // Facebook/Instagram: proxy the attachment URL
+      const response = await axios.get(att.fileUrl, { responseType: 'stream' });
+      res.setHeader('Content-Type', response.headers['content-type'] || att.mimeType || 'application/octet-stream');
+      res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(att.filename || 'download')}"`);
+      if (response.headers['content-length']) res.setHeader('Content-Length', response.headers['content-length']);
+      response.data.pipe(res);
+    } else if (platform === 'gmail' && att.attachmentId) {
+      // Gmail: fetch attachment data via Gmail API
+      const gmail = await gmailService.getGmailClient(connectedAccountId);
+      const gmailMsgId = message.platformMessageId;
+      const attRes = await gmail.users.messages.attachments.get({
+        userId: 'me',
+        messageId: gmailMsgId,
+        id: att.attachmentId,
+      });
+      const data = attRes.data.data; // base64url encoded
+      const buffer = Buffer.from(data, 'base64url');
+      res.setHeader('Content-Type', att.mimeType || 'application/octet-stream');
+      res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(att.filename || 'download')}"`);
+      res.setHeader('Content-Length', buffer.length);
+      res.send(buffer);
+    } else {
+      return res.status(400).json({ error: 'Attachment cannot be downloaded — no media reference found' });
+    }
+  } catch (err) {
+    console.error('Download attachment error:', err);
+    res.status(500).json({ error: 'Failed to download attachment' });
+  }
+});
+
+// Proxy attachment for inline preview (same as download but Content-Disposition: inline)
+router.get('/:messageId/attachments/:index/preview', authenticate, async (req, res) => {
+  try {
+    const { messageId, index } = req.params;
+    const attIndex = parseInt(index, 10);
+
+    const message = await prisma.message.findFirst({
+      where: {
+        id: messageId,
+        conversation: { connectedAccount: { userId: req.user.id } },
+      },
+      include: {
+        conversation: { include: { connectedAccount: true } },
+      },
+    });
+
+    if (!message) return res.status(404).json({ error: 'Message not found' });
+
+    const attachments = message.attachments;
+    if (!attachments || !Array.isArray(attachments) || attIndex < 0 || attIndex >= attachments.length) {
+      return res.status(404).json({ error: 'Attachment not found' });
+    }
+
+    const att = attachments[attIndex];
+    const platform = message.conversation.connectedAccount.platform;
+    const connectedAccountId = message.conversation.connectedAccountId;
+
+    // Set cache headers for previews
+    res.setHeader('Cache-Control', 'private, max-age=3600');
+
+    if (platform === 'whatsapp' && att.mediaId) {
+      const { stream, contentType, contentLength } = await whatsappService.downloadMedia(connectedAccountId, att.mediaId);
+      res.setHeader('Content-Type', contentType || att.mimeType || 'application/octet-stream');
+      res.setHeader('Content-Disposition', 'inline');
+      if (contentLength) res.setHeader('Content-Length', contentLength);
+      stream.pipe(res);
+    } else if ((platform === 'facebook' || platform === 'instagram') && att.fileUrl) {
+      const response = await axios.get(att.fileUrl, { responseType: 'stream' });
+      res.setHeader('Content-Type', response.headers['content-type'] || att.mimeType || 'application/octet-stream');
+      res.setHeader('Content-Disposition', 'inline');
+      if (response.headers['content-length']) res.setHeader('Content-Length', response.headers['content-length']);
+      response.data.pipe(res);
+    } else if (platform === 'gmail' && att.attachmentId) {
+      const gmail = await gmailService.getGmailClient(connectedAccountId);
+      const gmailMsgId = message.platformMessageId;
+      const attRes = await gmail.users.messages.attachments.get({
+        userId: 'me',
+        messageId: gmailMsgId,
+        id: att.attachmentId,
+      });
+      const buffer = Buffer.from(attRes.data.data, 'base64url');
+      res.setHeader('Content-Type', att.mimeType || 'application/octet-stream');
+      res.setHeader('Content-Disposition', 'inline');
+      res.setHeader('Content-Length', buffer.length);
+      res.send(buffer);
+    } else {
+      return res.status(404).json({ error: 'No preview available' });
+    }
+  } catch (err) {
+    console.error('Preview attachment error:', err);
+    res.status(500).json({ error: 'Failed to preview attachment' });
   }
 });
 
