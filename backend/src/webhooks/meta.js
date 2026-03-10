@@ -613,7 +613,7 @@ async function processWhatsAppWebhook(payload, io) {
             platformMessageId: msg.id,
             direction: 'inbound',
             sender: contactName,
-            content: msg.text?.body || msg.caption || (waAttachments.length > 0 ? `[${msg.type || 'Media'}]` : ''),
+            content: msg.text?.body || msg[msg.type]?.caption || (waAttachments.length > 0 ? `[${msg.type || 'Media'}]` : ''),
             contentType: ['text', 'image', 'audio', 'video', 'file', 'sticker'].includes(msg.type) ? msg.type : 'file',
             attachments: waAttachments.length > 0 ? waAttachments : undefined,
             status: 'delivered',

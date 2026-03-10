@@ -5,7 +5,7 @@ import api from '../services/api.js';
 import { getSocket } from '../services/socket.js';
 import {
   Send, Search, MessageSquare, Mail, ArrowLeft, Paperclip,
-  Smile, X, FileText, Image, Reply, Forward, ChevronDown,
+  Smile, X, FileText, Image, Reply, ChevronDown,
   ChevronUp, Download, UploadCloud, Play, Music, File, AlertCircle, RefreshCw,
 } from 'lucide-react';
 import PlatformBadge, { PlatformIcon } from '../components/PlatformBadge.jsx';
@@ -50,6 +50,8 @@ export default function InboxPage() {
   const [collapsedMessages, setCollapsedMessages] = useState(new Set());
   const [uploadProgress, setUploadProgress] = useState(null);
   const [loadingConversations, setLoadingConversations] = useState(true);
+  const [loadingMessages, setLoadingMessages] = useState(false);
+  const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const messagesEndRef = useRef(null);
   const replyBoxRef = useRef(null);
   const pollingRef = useRef(null);
@@ -133,11 +135,27 @@ export default function InboxPage() {
   }, []);
 
   // Listen for real-time events — use refs to avoid stale closures
-  // IMPORTANT: This effect runs ONCE (empty deps). All mutable state is
-  // accessed via refs so the handler always sees fresh values.
+  // IMPORTANT: Polls for socket availability (handles race with DashboardLayout connectSocket)
+  // and re-registers listeners on reconnection to catch missed messages.
   useEffect(() => {
-    const socket = getSocket();
-    if (!socket) return;
+    let cleanupFn = null;
+    let pollTimer = null;
+
+    const setupSocketListeners = () => {
+      const socket = getSocket();
+      if (!socket) return false;
+
+      // Clean up previous listeners if any
+      if (cleanupFn) cleanupFn();
+
+      const handleReconnect = () => {
+        // After reconnection, fetch any messages missed while offline
+        fetchConversations();
+        const activeId = conversationIdRef.current;
+        if (activeId) fetchMessages(activeId, true);
+      };
+
+      socket.on('connect', handleReconnect);
 
     const handleNewMessage = (data) => {
       const msgId = data.message?.id;
@@ -213,11 +231,27 @@ export default function InboxPage() {
       );
     };
 
-    socket.on('new_message', handleNewMessage);
-    socket.on('conversation_update', handleConversationUpdate);
+      socket.on('new_message', handleNewMessage);
+      socket.on('conversation_update', handleConversationUpdate);
+
+      cleanupFn = () => {
+        socket.off('connect', handleReconnect);
+        socket.off('new_message', handleNewMessage);
+        socket.off('conversation_update', handleConversationUpdate);
+      };
+      return true; // successfully set up
+    };
+
+    // Try immediately, then poll every 500ms until socket is available
+    if (!setupSocketListeners()) {
+      pollTimer = setInterval(() => {
+        if (setupSocketListeners()) clearInterval(pollTimer);
+      }, 500);
+    }
+
     return () => {
-      socket.off('new_message', handleNewMessage);
-      socket.off('conversation_update', handleConversationUpdate);
+      if (pollTimer) clearInterval(pollTimer);
+      if (cleanupFn) cleanupFn();
     };
   }, []); // ← empty deps: handler uses refs, not closure state
 
@@ -267,11 +301,16 @@ export default function InboxPage() {
     }
   }, [conversationId]);
 
+  const prevMsgCountRef = useRef(0);
   useEffect(() => {
-    if (showReplyBox && replyBoxRef.current) {
-      replyBoxRef.current.scrollIntoView({ behavior: 'smooth', block: 'end' });
-    } else {
-      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    // Only auto-scroll when messages actually change count (new message added)
+    if (messages.length !== prevMsgCountRef.current || showReplyBox) {
+      prevMsgCountRef.current = messages.length;
+      if (showReplyBox && replyBoxRef.current) {
+        replyBoxRef.current.scrollIntoView({ behavior: 'smooth', block: 'end' });
+      } else {
+        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+      }
     }
   }, [messages, showReplyBox]);
 
@@ -297,6 +336,7 @@ export default function InboxPage() {
       if (!forceRefresh && messageCache.current.get(convId)?.fresh) {
         return;
       }
+      setLoadingMessages(true);
       const [msgRes, convRes] = await Promise.all([
         api.get(`/api/messages/${convId}`),
         api.get(`/api/conversations/${convId}`),
@@ -325,6 +365,8 @@ export default function InboxPage() {
       sessionSet(SESSION_KEYS.ACTIVE_CONVERSATION, convRes.data.conversation);
     } catch (err) {
       console.error('Failed to fetch messages:', err);
+    } finally {
+      setLoadingMessages(false);
     }
   }, []);
 
@@ -568,10 +610,7 @@ export default function InboxPage() {
 
         <div className="flex-1 overflow-y-auto">
           {loadingConversations && filteredConversations.length === 0 ? (
-            <div className="flex flex-col items-center justify-center h-full text-gray-400 px-6">
-              <RefreshCw size={24} className="mb-3 animate-spin" />
-              <p className="text-sm font-medium">Loading conversations...</p>
-            </div>
+            <ConversationListSkeleton />
           ) : filteredConversations.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-full text-gray-400 px-6">
               <MessageSquare size={40} className="mb-3" />
@@ -666,7 +705,9 @@ export default function InboxPage() {
             </div>
 
             {/* Messages area */}
-            {isEmailPlatform ? (
+            {loadingMessages && messages.length === 0 ? (
+              <MessagesSkeleton />
+            ) : isEmailPlatform ? (
               <EmailThreadView
                 messages={messages}
                 emailSubject={emailSubject}
@@ -776,6 +817,8 @@ export default function InboxPage() {
                   sending,
                   attachments,
                   onAttachClick: () => fileInputRef.current?.click(),
+                  showEmojiPicker,
+                  setShowEmojiPicker,
                 })}
               </>
             )}
@@ -949,10 +992,6 @@ function EmailMessageCard({ msg, isOutbound, isLast, isCollapsed, onToggleCollap
               >
                 <Reply size={14} />
                 Reply
-              </button>
-              <button className="flex items-center gap-1.5 px-4 py-2 text-sm text-gray-600 bg-white border border-gray-200 rounded-full hover:bg-gray-50 hover:border-gray-300 transition">
-                <Forward size={14} />
-                Forward
               </button>
             </div>
           )}
@@ -1224,6 +1263,67 @@ function AttachmentPreview({ attachments, onRemove, uploadProgress }) {
 }
 
 // ═══════════════════════════════════════════════════════════════════
+// SKELETON LOADING COMPONENTS
+// ═══════════════════════════════════════════════════════════════════
+
+function SkeletonPulse({ className }) {
+  return <div className={`animate-pulse bg-gray-200 rounded ${className}`} />;
+}
+
+function ConversationListSkeleton() {
+  return (
+    <div className="flex flex-col">
+      {Array.from({ length: 8 }).map((_, i) => (
+        <div key={i} className="px-4 py-3.5 flex items-center gap-3 border-b border-gray-100">
+          <SkeletonPulse className="w-11 h-11 rounded-full flex-shrink-0" />
+          <div className="flex-1 min-w-0 space-y-2">
+            <div className="flex items-center justify-between">
+              <SkeletonPulse className={`h-3.5 ${i % 3 === 0 ? 'w-28' : i % 3 === 1 ? 'w-36' : 'w-24'}`} />
+              <SkeletonPulse className="h-3 w-10" />
+            </div>
+            <SkeletonPulse className={`h-3 ${i % 2 === 0 ? 'w-48' : 'w-40'}`} />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function MessagesSkeleton() {
+  return (
+    <div className="flex-1 overflow-hidden px-3 sm:px-6 py-4 space-y-4">
+      {/* Date badge skeleton */}
+      <div className="flex justify-center">
+        <SkeletonPulse className="h-5 w-20 rounded-full" />
+      </div>
+      {/* Inbound messages */}
+      <div className="flex justify-start">
+        <SkeletonPulse className="h-10 w-48 rounded-2xl rounded-tl-md" />
+      </div>
+      <div className="flex justify-start">
+        <SkeletonPulse className="h-16 w-56 rounded-2xl rounded-tl-md" />
+      </div>
+      {/* Outbound messages */}
+      <div className="flex justify-end">
+        <SkeletonPulse className="h-10 w-40 rounded-2xl rounded-tr-md" />
+      </div>
+      <div className="flex justify-start">
+        <SkeletonPulse className="h-10 w-52 rounded-2xl rounded-tl-md" />
+      </div>
+      <div className="flex justify-end">
+        <SkeletonPulse className="h-20 w-60 rounded-2xl rounded-tr-md" />
+      </div>
+      <div className="flex justify-start">
+        <SkeletonPulse className="h-10 w-44 rounded-2xl rounded-tl-md" />
+      </div>
+      <div className="flex justify-end">
+        <SkeletonPulse className="h-12 w-36 rounded-2xl rounded-tr-md" />
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════
 // PLATFORM THEMES & STYLES
 // ═══════════════════════════════════════════════════════════════════
 
@@ -1256,7 +1356,7 @@ function getPlatformAvatarStyle(platform) {
 // MESSAGE ATTACHMENT INDICATOR (for non-email platforms)
 // ═══════════════════════════════════════════════════════════════════
 
-function MessageAttachments({ attachments, messageId, isOutbound }) {
+const MessageAttachments = memo(function MessageAttachments({ attachments, messageId, isOutbound }) {
   if (!attachments || !Array.isArray(attachments) || attachments.length === 0) return null;
 
   const handleDownload = async (att, index) => {
@@ -1389,7 +1489,7 @@ function MessageAttachments({ attachments, messageId, isOutbound }) {
       })}
     </div>
   );
-}
+});
 
 // ═══════════════════════════════════════════════════════════════════
 // PLATFORM-SPECIFIC CHAT BUBBLES
@@ -1397,8 +1497,8 @@ function MessageAttachments({ attachments, messageId, isOutbound }) {
 
 function renderWhatsAppMessage(msg, isOutbound) {
   const isSending = msg._optimistic || msg.status === 'sending';
-  const hasMediaContent = msg.contentType && msg.contentType !== 'text' && msg.attachments?.length > 0;
-  const textContent = msg.content && !msg.content.startsWith('[') ? msg.content : (msg.content?.startsWith('[') && msg.attachments?.length > 0 ? '' : msg.content);
+  const isPlaceholder = msg.attachments?.length > 0 && msg.content && /^\[[\w\s.,_-]+\]$/.test(msg.content.trim());
+  const textContent = isPlaceholder ? '' : (msg.content || '');
   return (
     <div className={`flex ${isOutbound ? 'justify-end' : 'justify-start'}`}>
       <div className={`max-w-[80%] sm:max-w-[65%] px-3 py-2 rounded-lg text-sm shadow-sm relative ${
@@ -1421,7 +1521,8 @@ function renderWhatsAppMessage(msg, isOutbound) {
 
 function renderInstagramMessage(msg, isOutbound) {
   const isSending = msg._optimistic || msg.status === 'sending';
-  const textContent = msg.content && !msg.content.startsWith('[') ? msg.content : (msg.content?.startsWith('[') && msg.attachments?.length > 0 ? '' : msg.content);
+  const isPlaceholder = msg.attachments?.length > 0 && msg.content && /^\[[\w\s.,_-]+\]$/.test(msg.content.trim());
+  const textContent = isPlaceholder ? '' : (msg.content || '');
   return (
     <div className={`flex ${isOutbound ? 'justify-end' : 'justify-start'}`}>
       <div className={`max-w-[80%] sm:max-w-[65%] px-4 py-2.5 text-sm ${
@@ -1441,7 +1542,8 @@ function renderInstagramMessage(msg, isOutbound) {
 
 function renderFacebookMessage(msg, isOutbound) {
   const isSending = msg._optimistic || msg.status === 'sending';
-  const textContent = msg.content && !msg.content.startsWith('[') ? msg.content : (msg.content?.startsWith('[') && msg.attachments?.length > 0 ? '' : msg.content);
+  const isPlaceholder = msg.attachments?.length > 0 && msg.content && /^\[[\w\s.,_-]+\]$/.test(msg.content.trim());
+  const textContent = isPlaceholder ? '' : (msg.content || '');
   return (
     <div className={`flex ${isOutbound ? 'justify-end' : 'justify-start'}`}>
       <div className={`max-w-[80%] sm:max-w-[65%] px-4 py-2.5 rounded-3xl text-sm ${
@@ -1459,7 +1561,8 @@ function renderFacebookMessage(msg, isOutbound) {
 
 function renderDefaultMessage(msg, isOutbound) {
   const isSending = msg._optimistic || msg.status === 'sending';
-  const textContent = msg.content && !msg.content.startsWith('[') ? msg.content : (msg.content?.startsWith('[') && msg.attachments?.length > 0 ? '' : msg.content);
+  const isPlaceholder = msg.attachments?.length > 0 && msg.content && /^\[[\w\s.,_-]+\]$/.test(msg.content.trim());
+  const textContent = isPlaceholder ? '' : (msg.content || '');
   return (
     <div className={`flex ${isOutbound ? 'justify-end' : 'justify-start'}`}>
       <div className={`max-w-[80%] sm:max-w-[65%] px-4 py-2.5 rounded-2xl text-sm ${
@@ -1478,22 +1581,86 @@ function renderDefaultMessage(msg, isOutbound) {
 }
 
 // ═══════════════════════════════════════════════════════════════════
+// EMOJI PICKER — lightweight inline picker for WhatsApp composer
+// ═══════════════════════════════════════════════════════════════════
+
+const EMOJI_CATEGORIES = {
+  'Smileys': ['😀','😃','😄','😁','😆','😅','🤣','😂','🙂','😊','😇','🥰','😍','🤩','😘','😗','😚','😙','🥲','😋','😛','😜','🤪','😝','🤑','🤗','🤭','🤫','🤔','🫡','🤐','🤨','😐','😑','😶','🫥','😏','😒','🙄','😬','🤥','😌','😔','😪','🤤','😴','😷','🤒','🤕','🤢','🤮','🥵','🥶','🥴','😵','🤯','🤠','🥳','🥸','😎','🤓','🧐'],
+  'Gestures': ['👋','🤚','🖐️','✋','🖖','🫱','🫲','👌','🤌','🤏','✌️','🤞','🫰','🤟','🤘','🤙','👈','👉','👆','🖕','👇','☝️','🫵','👍','👎','✊','👊','🤛','🤜','👏','🙌','🫶','👐','🤲','🤝','🙏'],
+  'Hearts': ['❤️','🧡','💛','💚','💙','💜','🖤','🤍','🤎','💔','❤️‍🔥','❤️‍🩹','💕','💞','💓','💗','💖','💘','💝','💟'],
+  'Objects': ['🎉','🎊','🎈','🎁','🎀','🏆','🥇','⭐','🌟','💫','✨','🔥','💯','👑','💎','📱','💻','📷','🎵','🎶','☀️','🌈','🌸','🍕','🍔','☕','🍺','🥂'],
+};
+
+function EmojiPicker({ onSelect, onClose }) {
+  const [activeCategory, setActiveCategory] = useState(Object.keys(EMOJI_CATEGORIES)[0]);
+  const pickerRef = useRef(null);
+
+  useEffect(() => {
+    const handleClickOutside = (e) => {
+      if (pickerRef.current && !pickerRef.current.contains(e.target)) onClose();
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [onClose]);
+
+  return (
+    <div ref={pickerRef} className="absolute bottom-full left-0 mb-2 bg-white rounded-xl shadow-xl border border-gray-200 w-72 sm:w-80 z-20">
+      <div className="flex border-b border-gray-100 px-2 pt-2 gap-1 overflow-x-auto">
+        {Object.keys(EMOJI_CATEGORIES).map((cat) => (
+          <button
+            key={cat}
+            type="button"
+            onClick={() => setActiveCategory(cat)}
+            className={`px-2.5 py-1.5 text-xs font-medium rounded-t-lg whitespace-nowrap transition ${
+              activeCategory === cat ? 'bg-gray-100 text-gray-900' : 'text-gray-400 hover:text-gray-600'
+            }`}
+          >
+            {cat}
+          </button>
+        ))}
+      </div>
+      <div className="grid grid-cols-8 gap-0.5 p-2 max-h-48 overflow-y-auto">
+        {EMOJI_CATEGORIES[activeCategory].map((emoji) => (
+          <button
+            key={emoji}
+            type="button"
+            onClick={() => onSelect(emoji)}
+            className="w-8 h-8 flex items-center justify-center text-xl hover:bg-gray-100 rounded transition"
+          >
+            {emoji}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════
 // NON-EMAIL COMPOSER
 // ═══════════════════════════════════════════════════════════════════
 
-function renderComposer({ platform, newMessage, setNewMessage, handleSend, sending, attachments, onAttachClick }) {
+function renderComposer({ platform, newMessage, setNewMessage, handleSend, sending, attachments, onAttachClick, showEmojiPicker, setShowEmojiPicker }) {
   const hasContent = newMessage.trim() || attachments.length > 0;
+
+  const insertEmoji = (emoji) => {
+    setNewMessage((prev) => prev + emoji);
+  };
 
   if (platform === 'whatsapp') {
     return (
-      <form onSubmit={handleSend} className="bg-[#f0f0f0] px-3 sm:px-4 py-2.5">
-        <div className="flex items-center gap-2">
-          <button type="button" className="text-gray-500 hover:text-gray-700 transition p-1.5"><Smile size={22} /></button>
-          <button type="button" onClick={onAttachClick} className="text-gray-500 hover:text-gray-700 transition p-1.5" title="Attach file"><Paperclip size={20} /></button>
-          <input type="text" value={newMessage} onChange={(e) => setNewMessage(e.target.value)} placeholder="Type a message" className="flex-1 px-4 py-2.5 bg-white rounded-full border-none outline-none text-sm" />
-          <button type="submit" disabled={!hasContent || sending} className="bg-[#075e54] hover:bg-[#064e45] text-white p-2.5 rounded-full transition disabled:opacity-50 disabled:cursor-not-allowed"><Send size={18} /></button>
-        </div>
-      </form>
+      <div className="relative">
+        {showEmojiPicker && (
+          <EmojiPicker onSelect={insertEmoji} onClose={() => setShowEmojiPicker(false)} />
+        )}
+        <form onSubmit={handleSend} className="bg-[#f0f0f0] px-3 sm:px-4 py-2.5">
+          <div className="flex items-center gap-2">
+            <button type="button" onClick={() => setShowEmojiPicker((p) => !p)} className={`transition p-1.5 ${showEmojiPicker ? 'text-[#075e54]' : 'text-gray-500 hover:text-gray-700'}`}><Smile size={22} /></button>
+            <button type="button" onClick={onAttachClick} className="text-gray-500 hover:text-gray-700 transition p-1.5" title="Attach file"><Paperclip size={20} /></button>
+            <input type="text" value={newMessage} onChange={(e) => setNewMessage(e.target.value)} placeholder="Type a message" className="flex-1 px-4 py-2.5 bg-white rounded-full border-none outline-none text-sm" />
+            <button type="submit" disabled={!hasContent || sending} className="bg-[#075e54] hover:bg-[#064e45] text-white p-2.5 rounded-full transition disabled:opacity-50 disabled:cursor-not-allowed"><Send size={18} /></button>
+          </div>
+        </form>
+      </div>
     );
   }
 
