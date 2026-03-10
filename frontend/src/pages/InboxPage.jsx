@@ -64,6 +64,8 @@ export default function InboxPage() {
   const [sending, setSending] = useState(false);
   const [search, setSearch] = useState('');
   const [sendError, setSendError] = useState('');
+  const [fileError, setFileError] = useState(null); // { message, details }
+  const fileErrorTimerRef = useRef(null);
   const [attachments, setAttachments] = useState([]);
   const [dragOver, setDragOver] = useState(false);
   const [replyingTo, setReplyingTo] = useState(null); // for email reply context
@@ -506,6 +508,15 @@ export default function InboxPage() {
     }
   }, [newMessage, attachments, sending, replyingTo]);
 
+  const showFileError = useCallback((message, details) => {
+    clearTimeout(fileErrorTimerRef.current);
+    setFileError({ message, details });
+    fileErrorTimerRef.current = setTimeout(() => setFileError(null), 5000);
+  }, []);
+
+  // Clean up file error timer on unmount
+  useEffect(() => () => clearTimeout(fileErrorTimerRef.current), []);
+
   const handleFileSelect = useCallback(async (files) => {
     const ALLOWED_TYPES = [
       'image/jpeg', 'image/png', 'image/gif', 'image/webp',
@@ -519,17 +530,24 @@ export default function InboxPage() {
       'video/mp4', 'video/webm',
     ];
     const MAX_FILE_SIZE = 25 * 1024 * 1024; // 25MB
+    const SUPPORTED_FORMATS = 'JPG, PNG, GIF, WebP, PDF, DOC, DOCX, XLS, XLSX, TXT, CSV, MP3, OGG, WAV, MP4, WebM';
 
     const newAttachments = [];
     for (const file of Array.from(files)) {
       // Validate file type
       if (!ALLOWED_TYPES.includes(file.type)) {
-        setSendError(`File type not supported: ${file.name} (${file.type || 'unknown'})`);
+        showFileError(
+          `"${file.name}" is not a supported file type`,
+          `Supported formats: ${SUPPORTED_FORMATS}`
+        );
         continue;
       }
       // Validate file size
       if (file.size > MAX_FILE_SIZE) {
-        setSendError(`File too large: ${file.name} (${formatFileSize(file.size)}, max 25MB)`);
+        showFileError(
+          `"${file.name}" exceeds the 25 MB size limit (${formatFileSize(file.size)})`,
+          `Maximum file size: 25 MB. Supported formats: ${SUPPORTED_FORMATS}`
+        );
         continue;
       }
 
@@ -808,6 +826,27 @@ export default function InboxPage() {
             {sendError && (
               <div className="px-4 sm:px-6 py-2 bg-red-50 border-t border-red-200">
                 <p className="text-xs text-red-600">{sendError}</p>
+              </div>
+            )}
+
+            {/* File validation toast */}
+            {fileError && (
+              <div className="absolute bottom-24 left-1/2 -translate-x-1/2 z-50 w-[90%] max-w-md animate-fade-in">
+                <div className="bg-red-600 text-white rounded-xl shadow-lg px-4 py-3 flex items-start gap-3">
+                  <AlertCircle size={18} className="flex-shrink-0 mt-0.5" />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium leading-snug">{fileError.message}</p>
+                    {fileError.details && (
+                      <p className="text-xs text-red-200 mt-1 leading-snug">{fileError.details}</p>
+                    )}
+                  </div>
+                  <button
+                    onClick={() => { clearTimeout(fileErrorTimerRef.current); setFileError(null); }}
+                    className="flex-shrink-0 text-red-200 hover:text-white transition"
+                  >
+                    <X size={16} />
+                  </button>
+                </div>
               </div>
             )}
 
