@@ -31,18 +31,23 @@ router.post('/connect', authenticate, async (req, res) => {
 // Connect WhatsApp via Embedded Signup — auto-discovers WABA and phone from the user access token
 router.post('/connect-with-token', authenticate, async (req, res) => {
   try {
-    const { accessToken } = req.body;
+    const { accessToken, wabaId: frontendWabaId, phoneNumberId: frontendPhoneNumberId } = req.body;
     if (!accessToken) {
       return res.status(400).json({ error: 'accessToken is required' });
     }
 
     console.log('[WhatsApp Connect] Starting Embedded Signup connection for user:', req.user.id);
 
-    let wabaId = null;
-    let phoneNumberId = null;
+    // Use IDs from Embedded Signup sessionInfoListener if provided
+    let wabaId = frontendWabaId || null;
+    let phoneNumberId = frontendPhoneNumberId || null;
+
+    if (wabaId && phoneNumberId) {
+      console.log('[WhatsApp Connect] Using WABA/phone from Embedded Signup session:', { wabaId, phoneNumberId });
+    }
 
     // Strategy 1: Use debug_token to discover WABA from granted scopes
-    try {
+    if (!wabaId) try {
       const appToken = `${process.env.META_APP_ID}|${process.env.META_APP_SECRET}`;
       const debugRes = await axios.get(`${GRAPH_API}/debug_token`, {
         params: { input_token: accessToken, access_token: appToken },

@@ -116,8 +116,31 @@ export default function ConnectionsPage() {
         return;
       }
 
+      // Reset embedded data before launching the flow
+      window.__WA_EMBEDDED_DATA__ = null;
+
+      // Listen for session info from the Embedded Signup iframe
+      const sessionInfoListener = (event) => {
+        if (event.origin !== 'https://www.facebook.com' && event.origin !== 'https://web.facebook.com') return;
+        try {
+          const data = JSON.parse(event.data);
+          if (data.type === 'WA_EMBEDDED_SIGNUP') {
+            // data.data contains { waba_id, phone_number_id }
+            if (data.data) {
+              window.__WA_EMBEDDED_DATA__ = data.data;
+              console.log('[WhatsApp Embedded Signup] Received session info:', data.data);
+            }
+          }
+        } catch {
+          // Not a JSON message or not our event — ignore
+        }
+      };
+      window.addEventListener('message', sessionInfoListener);
+
       window.FB.login(
         function (response) {
+          window.removeEventListener('message', sessionInfoListener);
+
           if (!response.authResponse) {
             setPlatformError({
               platformId: 'whatsapp',
@@ -128,9 +151,14 @@ export default function ConnectionsPage() {
           }
 
           const accessToken = response.authResponse.accessToken;
+          const embeddedData = window.__WA_EMBEDDED_DATA__;
 
-          // Send the user access token to backend — it will auto-discover WABA and phone number
-          api.post('/auth/whatsapp/connect-with-token', { accessToken })
+          // Build payload — include WABA/phone if captured from session info
+          const payload = { accessToken };
+          if (embeddedData?.waba_id) payload.wabaId = embeddedData.waba_id;
+          if (embeddedData?.phone_number_id) payload.phoneNumberId = embeddedData.phone_number_id;
+
+          api.post('/auth/whatsapp/connect-with-token', payload)
             .then(function () { return fetchAccounts(); })
             .then(function () { setConnectingPlatform(null); })
             .catch(function (err) {

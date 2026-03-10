@@ -12,12 +12,15 @@
 
     <!-- Facebook SDK for Meta Embedded Signup (WhatsApp) -->
     <script>
+      // Storage for WABA/phone data returned by Embedded Signup sessionInfoListener
+      window.__WA_EMBEDDED_DATA__ = null;
+
       window.fbAsyncInit = function () {
         FB.init({
-          appId: window.__META_APP_ID__,
+          appId: '%VITE_META_APP_ID%',
           cookie: true,
           xfbml: false,
-          version: 'v19.0',
+          version: 'v20.0',
         });
       };
     </script>
