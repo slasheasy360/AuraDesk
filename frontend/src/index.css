@@ -53,6 +53,26 @@ body {
   transition: opacity 250ms ease-in;
 }
 
+/* ─── Skeleton to Content Transition ─── */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.animate-fade-in {
+  animation: fadeIn 0.25s ease-out both;
+}
+
+/* Skeleton shimmer — more polished than plain pulse */
+@keyframes shimmer {
+  0%   { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+.skeleton-shimmer {
+  background: linear-gradient(90deg, #e5e7eb 25%, #f3f4f6 50%, #e5e7eb 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s ease-in-out infinite;
+}
+
 /* ─── HTML Email Content Styles (Gmail-like) ─── */
 .email-html-content {
   overflow-wrap: break-word;

@@ -223,6 +223,13 @@ async function processMessengerWebhook(payload, io) {
         else contentType = 'file';
       }
 
+      // Skip messages with a timestamp older than the account connection time
+      const fbMsgTimestamp = event.timestamp ? new Date(event.timestamp) : null;
+      if (fbMsgTimestamp && fbMsgTimestamp < new Date(account.createdAt)) {
+        console.log('[Messenger Webhook] Skipping pre-connection message:', event.message.mid);
+        continue;
+      }
+
       // Deduplicate: Meta webhooks use at-least-once delivery
       const existingMsg = await prisma.message.findFirst({
         where: {
@@ -405,6 +412,13 @@ async function processInstagramWebhook(payload, io) {
         else igContentType = 'file';
       }
 
+      // Skip messages with a timestamp older than the account connection time
+      const igMsgTimestamp = event.timestamp ? new Date(event.timestamp) : null;
+      if (igMsgTimestamp && igMsgTimestamp < new Date(account.createdAt)) {
+        console.log('[Instagram Webhook] Skipping pre-connection message:', event.message.mid);
+        continue;
+      }
+
       // Deduplicate: Meta webhooks use at-least-once delivery
       const existingMsg = await prisma.message.findFirst({
         where: {
@@ -540,6 +554,13 @@ async function processWhatsAppWebhook(payload, io) {
       const account = waAccount.connectedAccount;
 
       for (const msg of value.messages) {
+        // Skip messages with a timestamp older than the account connection time
+        const waMsgTimestamp = msg.timestamp ? new Date(Number(msg.timestamp) * 1000) : null;
+        if (waMsgTimestamp && waMsgTimestamp < new Date(account.createdAt)) {
+          console.log('[WhatsApp Webhook] Skipping pre-connection message:', msg.id);
+          continue;
+        }
+
         // Deduplicate: Meta webhooks are at-least-once delivery
         const existingMsg = await prisma.message.findFirst({
           where: {

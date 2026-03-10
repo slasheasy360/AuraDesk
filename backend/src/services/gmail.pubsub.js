@@ -64,6 +64,13 @@ export async function processGmailHistory(account, io) {
  * Save a single Gmail message to the DB and emit socket events.
  */
 async function saveGmailMessage(msg, account, accountEmail, io) {
+  // Skip messages that existed before the account was connected
+  const msgTimestamp = Number(msg.internalDate);
+  const connectedAt = new Date(account.createdAt).getTime();
+  if (Number.isFinite(msgTimestamp) && msgTimestamp < connectedAt) {
+    return;
+  }
+
   const headers = msg.payload?.headers || [];
   const fromHeader = extractHeader(headers, 'From');
   const toHeader = extractHeader(headers, 'To');

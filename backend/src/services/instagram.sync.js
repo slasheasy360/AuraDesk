@@ -140,8 +140,13 @@ async function syncConversation(account, igConv, igUserId, pageToken, userId) {
 
   // Process messages (oldest first)
   const sortedMessages = igMessages.reverse();
+  const connectedAt = new Date(account.createdAt);
 
   for (const igMsg of sortedMessages) {
+    // Skip messages that existed before the account was connected
+    const msgTime = igMsg.created_time ? new Date(igMsg.created_time) : null;
+    if (msgTime && msgTime < connectedAt) continue;
+
     // Check if message already exists
     const existing = await prisma.message.findFirst({
       where: {

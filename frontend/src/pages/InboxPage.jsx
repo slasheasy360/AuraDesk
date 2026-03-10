@@ -11,6 +11,27 @@ import {
 import PlatformBadge, { PlatformIcon } from '../components/PlatformBadge.jsx';
 
 // ═══════════════════════════════════════════════════════════════════
+// DEFERRED LOADING HOOK — avoids skeleton flash for fast loads
+// ═══════════════════════════════════════════════════════════════════
+
+function useDeferredLoading(isLoading, delayMs = 200) {
+  const [showSkeleton, setShowSkeleton] = useState(false);
+  const timerRef = useRef(null);
+
+  useEffect(() => {
+    if (isLoading) {
+      timerRef.current = setTimeout(() => setShowSkeleton(true), delayMs);
+    } else {
+      clearTimeout(timerRef.current);
+      setShowSkeleton(false);
+    }
+    return () => clearTimeout(timerRef.current);
+  }, [isLoading, delayMs]);
+
+  return showSkeleton;
+}
+
+// ═══════════════════════════════════════════════════════════════════
 // SESSION STORAGE HELPERS — persist state across page reloads
 // ═══════════════════════════════════════════════════════════════════
 
@@ -52,6 +73,11 @@ export default function InboxPage() {
   const [loadingConversations, setLoadingConversations] = useState(true);
   const [loadingMessages, setLoadingMessages] = useState(false);
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
+
+  // Deferred skeletons — only show after 200ms to avoid flash on fast loads
+  const showConversationSkeleton = useDeferredLoading(loadingConversations, 150);
+  const showMessageSkeleton = useDeferredLoading(loadingMessages, 200);
+
   const messagesEndRef = useRef(null);
   const replyBoxRef = useRef(null);
   const pollingRef = useRef(null);
@@ -609,15 +635,15 @@ export default function InboxPage() {
         </div>
 
         <div className="flex-1 overflow-y-auto">
-          {loadingConversations && filteredConversations.length === 0 ? (
+          {showConversationSkeleton && filteredConversations.length === 0 ? (
             <ConversationListSkeleton />
-          ) : filteredConversations.length === 0 ? (
+          ) : filteredConversations.length === 0 && !loadingConversations ? (
             <div className="flex flex-col items-center justify-center h-full text-gray-400 px-6">
               <MessageSquare size={40} className="mb-3" />
               <p className="text-sm font-medium">No conversations yet</p>
               <p className="text-xs mt-1">Connect an account to start</p>
             </div>
-          ) : (
+          ) : filteredConversations.length === 0 ? null : (
             filteredConversations.map((conv) => {
               const lastMessage = conv.messages?.[0];
               const preview = lastMessage?.content
@@ -681,7 +707,22 @@ export default function InboxPage() {
           </div>
         )}
 
-        {conversationId && activeConversation ? (
+        {conversationId && !activeConversation ? (
+          /* Chat loading skeleton — conversationId is set but data hasn't arrived yet */
+          <>
+            <div className="border-b px-4 sm:px-6 py-3 flex items-center gap-3 bg-white border-gray-200">
+              <button onClick={handleBackToList} className="md:hidden text-gray-600 hover:text-gray-900 transition flex-shrink-0">
+                <ArrowLeft size={20} />
+              </button>
+              <div className="w-10 h-10 rounded-full bg-gray-200 animate-pulse flex-shrink-0" />
+              <div className="flex-1 min-w-0 space-y-2">
+                <div className="h-4 w-32 bg-gray-200 rounded animate-pulse" />
+                <div className="h-3 w-20 bg-gray-100 rounded animate-pulse" />
+              </div>
+            </div>
+            <MessagesSkeleton />
+          </>
+        ) : conversationId && activeConversation ? (
           <>
             {/* Chat header */}
             <div className={`border-b px-4 sm:px-6 py-3 flex items-center gap-3 ${platformTheme.headerBg} ${platformTheme.headerBorder}`}>
@@ -705,7 +746,7 @@ export default function InboxPage() {
             </div>
 
             {/* Messages area */}
-            {loadingMessages && messages.length === 0 ? (
+            {showMessageSkeleton && messages.length === 0 ? (
               <MessagesSkeleton />
             ) : isEmailPlatform ? (
               <EmailThreadView
@@ -717,7 +758,7 @@ export default function InboxPage() {
                 messagesEndRef={messagesEndRef}
               />
             ) : (
-              <div className="flex-1 overflow-y-auto px-3 sm:px-6 py-4 space-y-3">
+              <div className="flex-1 overflow-y-auto px-3 sm:px-6 py-4 space-y-3 animate-fade-in">
                 {messages.map((msg, idx) => {
                   const isOutbound = msg.direction === 'outbound';
                   const prevMsg = idx > 0 ? messages[idx - 1] : null;
@@ -1043,14 +1084,16 @@ function EmailAttachments({ attachments, messageId }) {
           {attachments.map((att, i) => {
             if (!att.mimeType?.startsWith('image/') || !(att.attachmentId || att.fileUrl || att.mediaId)) return null;
             return (
-              <img
-                key={i}
-                src={getPreviewUrl(i)}
-                alt={att.filename}
-                className="max-h-[200px] rounded-lg cursor-pointer border border-gray-200"
-                onClick={() => window.open(getPreviewUrl(i), '_blank')}
-                loading="lazy"
-              />
+              <div key={i} className="relative bg-gray-200 animate-pulse rounded-lg min-h-[80px] min-w-[80px]">
+                <img
+                  src={getPreviewUrl(i)}
+                  alt={att.filename}
+                  className="max-h-[200px] rounded-lg cursor-pointer border border-gray-200 relative z-[1]"
+                  onClick={() => window.open(getPreviewUrl(i), '_blank')}
+                  loading="lazy"
+                  onLoad={(e) => { e.target.parentElement.classList.remove('animate-pulse', 'bg-gray-200'); e.target.parentElement.style.minHeight = ''; e.target.parentElement.style.minWidth = ''; }}
+                />
+              </div>
             );
           })}
         </div>
@@ -1267,7 +1310,7 @@ function AttachmentPreview({ attachments, onRemove, uploadProgress }) {
 // ═══════════════════════════════════════════════════════════════════
 
 function SkeletonPulse({ className }) {
-  return <div className={`animate-pulse bg-gray-200 rounded ${className}`} />;
+  return <div className={`skeleton-shimmer rounded ${className}`} />;
 }
 
 function ConversationListSkeleton() {
@@ -1290,35 +1333,33 @@ function ConversationListSkeleton() {
 }
 
 function MessagesSkeleton() {
+  const bubbles = [
+    { align: 'start', w: 'w-48', h: 'h-10', lines: 1 },
+    { align: 'start', w: 'w-56', h: 'h-16', lines: 2 },
+    { align: 'end',   w: 'w-40', h: 'h-10', lines: 1 },
+    { align: 'start', w: 'w-52', h: 'h-10', lines: 1 },
+    { align: 'end',   w: 'w-60', h: 'h-20', lines: 3, hasImage: true },
+    { align: 'start', w: 'w-44', h: 'h-10', lines: 1 },
+    { align: 'end',   w: 'w-36', h: 'h-12', lines: 1 },
+  ];
+
   return (
-    <div className="flex-1 overflow-hidden px-3 sm:px-6 py-4 space-y-4">
+    <div className="flex-1 overflow-hidden px-3 sm:px-6 py-4 space-y-3">
       {/* Date badge skeleton */}
-      <div className="flex justify-center">
+      <div className="flex justify-center my-2">
         <SkeletonPulse className="h-5 w-20 rounded-full" />
       </div>
-      {/* Inbound messages */}
-      <div className="flex justify-start">
-        <SkeletonPulse className="h-10 w-48 rounded-2xl rounded-tl-md" />
-      </div>
-      <div className="flex justify-start">
-        <SkeletonPulse className="h-16 w-56 rounded-2xl rounded-tl-md" />
-      </div>
-      {/* Outbound messages */}
-      <div className="flex justify-end">
-        <SkeletonPulse className="h-10 w-40 rounded-2xl rounded-tr-md" />
-      </div>
-      <div className="flex justify-start">
-        <SkeletonPulse className="h-10 w-52 rounded-2xl rounded-tl-md" />
-      </div>
-      <div className="flex justify-end">
-        <SkeletonPulse className="h-20 w-60 rounded-2xl rounded-tr-md" />
-      </div>
-      <div className="flex justify-start">
-        <SkeletonPulse className="h-10 w-44 rounded-2xl rounded-tl-md" />
-      </div>
-      <div className="flex justify-end">
-        <SkeletonPulse className="h-12 w-36 rounded-2xl rounded-tr-md" />
-      </div>
+      {bubbles.map((b, i) => (
+        <div key={i} className={`flex ${b.align === 'end' ? 'justify-end' : 'justify-start'}`}>
+          <div className={`${b.w} max-w-[65%] rounded-2xl ${b.align === 'start' ? 'rounded-tl-md' : 'rounded-tr-md'} bg-gray-200/60 animate-pulse p-3 space-y-1.5`}>
+            {b.hasImage && <SkeletonPulse className="w-full h-28 rounded-lg !bg-gray-300/50" />}
+            {Array.from({ length: b.lines }).map((_, j) => (
+              <SkeletonPulse key={j} className={`h-3 !bg-gray-300/50 rounded ${j === b.lines - 1 && b.lines > 1 ? 'w-3/4' : 'w-full'}`} />
+            ))}
+            <SkeletonPulse className={`h-2 w-12 !bg-gray-300/40 rounded mt-1 ${b.align === 'end' ? 'ml-auto' : ''}`} />
+          </div>
+        </div>
+      ))}
     </div>
   );
 }
@@ -1398,13 +1439,16 @@ const MessageAttachments = memo(function MessageAttachments({ attachments, messa
         if (isImage && previewUrl) {
           return (
             <div key={i} className="rounded-lg overflow-hidden max-w-[280px]">
-              <img
-                src={previewUrl}
-                alt={att.filename || 'Image'}
-                className="w-full max-h-[300px] object-cover rounded-lg cursor-pointer"
-                onClick={() => window.open(previewUrl, '_blank')}
-                loading="lazy"
-              />
+              <div className="relative bg-gray-200/60 animate-pulse rounded-lg min-h-[100px]">
+                <img
+                  src={previewUrl}
+                  alt={att.filename || 'Image'}
+                  className="w-full max-h-[300px] object-cover rounded-lg cursor-pointer relative z-[1]"
+                  onClick={() => window.open(previewUrl, '_blank')}
+                  loading="lazy"
+                  onLoad={(e) => { e.target.parentElement.classList.remove('animate-pulse', 'bg-gray-200/60'); e.target.parentElement.style.minHeight = ''; }}
+                />
+              </div>
               <div className="flex items-center justify-between mt-1 px-1">
                 <span className="text-[10px] text-gray-500 truncate">{att.filename}</span>
                 <button

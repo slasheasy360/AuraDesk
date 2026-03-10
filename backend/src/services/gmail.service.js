@@ -143,9 +143,8 @@ export async function getGmailMessages(userId) {
   const all = [];
 
   for (const account of accounts) {
-    // Fetch emails from 7 days before the account was connected
+    // Only fetch emails received after the account was connected
     const afterDate = new Date(account.createdAt);
-    afterDate.setDate(afterDate.getDate() - 7);
     const messages = await fetchMessagesForAccount(account.id, afterDate);
 
     const accountEmail = (account.platformAccountId || '').toLowerCase();
