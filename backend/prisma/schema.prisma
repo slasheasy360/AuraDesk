@@ -1,0 +1,200 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id            String   @id @default(uuid())
+  email         String   @unique
+  name          String
+  passwordHash  String   @map("password_hash")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  connectedAccounts ConnectedAccount[]
+  contacts          Contact[]
+
+  @@map("users")
+}
+
+model ConnectedAccount {
+  id                     String   @id @default(uuid())
+  userId                 String   @map("user_id")
+  platform               Platform
+  platformAccountId      String   @map("platform_account_id")
+  displayName            String?  @map("display_name")
+  avatarUrl              String?  @map("avatar_url")
+  status                 AccountStatus @default(active)
+  gmailHistoryId         String?  @map("gmail_history_id")
+  gmailWatchExpiration   DateTime? @map("gmail_watch_expiration")
+  createdAt              DateTime @default(now()) @map("created_at")
+
+  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  authToken         AuthToken?
+  whatsappAccount   WhatsappAccount?
+  conversations     Conversation[]
+  webhookSubscriptions WebhookSubscription[]
+
+  @@unique([userId, platform, platformAccountId])
+  @@map("connected_accounts")
+}
+
+model AuthToken {
+  id                     String   @id @default(uuid())
+  connectedAccountId     String   @unique @map("connected_account_id")
+  accessTokenEncrypted   String   @map("access_token_encrypted")
+  refreshTokenEncrypted  String?  @map("refresh_token_encrypted")
+  expiresAt              DateTime? @map("expires_at")
+  tokenType              String?  @map("token_type")
+  scopes                 String?
+  createdAt              DateTime @default(now()) @map("created_at")
+  updatedAt              DateTime @updatedAt @map("updated_at")
+
+  connectedAccount       ConnectedAccount @relation(fields: [connectedAccountId], references: [id], onDelete: Cascade)
+
+  @@map("auth_tokens")
+}
+
+model WhatsappAccount {
+  id                String   @id @default(uuid())
+  connectedAccountId String  @unique @map("connected_account_id")
+  wabaId            String   @map("waba_id")
+  phoneNumberId     String   @map("phone_number_id")
+  phoneNumber       String   @map("phone_number")
+  businessName      String?  @map("business_name")
+  webhookVerified   Boolean  @default(false) @map("webhook_verified")
+  createdAt         DateTime @default(now()) @map("created_at")
+
+  connectedAccount  ConnectedAccount @relation(fields: [connectedAccountId], references: [id], onDelete: Cascade)
+
+  @@map("whatsapp_accounts")
+}
+
+model Contact {
+  id              String   @id @default(uuid())
+  userId          String   @map("user_id")
+  platform        Platform
+  platformUserId  String   @map("platform_user_id")
+  name            String?
+  username        String?
+  avatarUrl       String?  @map("avatar_url")
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  conversations   Conversation[]
+
+  @@unique([userId, platform, platformUserId])
+  @@map("contacts")
+}
+
+model Conversation {
+  id                       String   @id @default(uuid())
+  connectedAccountId       String   @map("connected_account_id")
+  platformConversationId   String   @map("platform_conversation_id")
+  contactId                String?  @map("contact_id")
+  lastMessageAt            DateTime? @map("last_message_at")
+  status                   ConversationStatus @default(open)
+  unreadCount              Int      @default(0) @map("unread_count")
+  createdAt                DateTime @default(now()) @map("created_at")
+
+  connectedAccount         ConnectedAccount @relation(fields: [connectedAccountId], references: [id], onDelete: Cascade)
+  contact                  Contact? @relation(fields: [contactId], references: [id])
+  messages                 Message[]
+
+  @@unique([connectedAccountId, platformConversationId])
+  @@map("conversations")
+}
+
+model Message {
+  id                  String   @id @default(uuid())
+  conversationId      String   @map("conversation_id")
+  platformMessageId   String?  @map("platform_message_id")
+  direction           MessageDirection
+  sender              String?
+  subject             String?
+  content             String?
+  htmlContent         String?  @map("html_content")
+  contentType         ContentType @default(text) @map("content_type")
+  attachments         Json?
+  sentAt              DateTime @default(now()) @map("sent_at")
+  deliveredAt         DateTime? @map("delivered_at")
+  readAt              DateTime? @map("read_at")
+  status              MessageStatus @default(sent)
+  rawPayload          Json?    @map("raw_payload")
+
+  conversation        Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@map("messages")
+}
+
+model WebhookSubscription {
+  id                 String   @id @default(uuid())
+  connectedAccountId String   @map("connected_account_id")
+  platform           Platform
+  subscriptionId     String?  @map("subscription_id")
+  subscribedFields   String?  @map("subscribed_fields")
+  verifiedAt         DateTime? @map("verified_at")
+  createdAt          DateTime @default(now()) @map("created_at")
+
+  connectedAccount   ConnectedAccount @relation(fields: [connectedAccountId], references: [id], onDelete: Cascade)
+
+  @@map("webhook_subscriptions")
+}
+
+model WebhookEventLog {
+  id         String   @id @default(uuid())
+  platform   Platform
+  receivedAt DateTime @default(now()) @map("received_at")
+  payload    Json
+  processed  Boolean  @default(false)
+  error      String?
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  @@map("webhook_events_log")
+}
+
+enum Platform {
+  facebook
+  instagram
+  whatsapp
+  gmail
+}
+
+enum AccountStatus {
+  active
+  token_expired
+  disconnected
+  pending_review
+}
+
+enum ConversationStatus {
+  open
+  closed
+  archived
+}
+
+enum MessageDirection {
+  inbound
+  outbound
+}
+
+enum MessageStatus {
+  pending
+  sent
+  delivered
+  read
+  failed
+}
+
+enum ContentType {
+  text
+  image
+  audio
+  video
+  file
+  sticker
+  email
+}

@@ -1,0 +1,175 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
+
+/* Sidebar slide animation */
+.sidebar-enter {
+  transform: translateX(-100%);
+}
+.sidebar-enter-active {
+  transform: translateX(0);
+  transition: transform 300ms ease-out;
+}
+.sidebar-exit {
+  transform: translateX(0);
+}
+.sidebar-exit-active {
+  transform: translateX(-100%);
+  transition: transform 250ms ease-in;
+}
+
+/* Overlay fade */
+.overlay-enter {
+  opacity: 0;
+}
+.overlay-enter-active {
+  opacity: 1;
+  transition: opacity 300ms ease-out;
+}
+.overlay-exit {
+  opacity: 1;
+}
+.overlay-exit-active {
+  opacity: 0;
+  transition: opacity 250ms ease-in;
+}
+
+/* ─── Skeleton to Content Transition ─── */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.animate-fade-in {
+  animation: fadeIn 0.25s ease-out both;
+}
+
+/* Skeleton shimmer — more polished than plain pulse */
+@keyframes shimmer {
+  0%   { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+.skeleton-shimmer {
+  background: linear-gradient(90deg, #e5e7eb 25%, #f3f4f6 50%, #e5e7eb 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s ease-in-out infinite;
+}
+
+/* ─── HTML Email Content Styles (Gmail-like) ─── */
+.email-html-content {
+  overflow-wrap: break-word;
+  word-break: break-word;
+  line-height: 1.6;
+  color: #1f2937;
+  font-size: 14px;
+}
+.email-html-content img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 6px;
+  margin: 4px 0;
+}
+.email-html-content a {
+  color: #1a73e8;
+  text-decoration: none;
+}
+.email-html-content a:hover {
+  text-decoration: underline;
+}
+.email-html-content blockquote {
+  border-left: 3px solid #dadce0;
+  padding-left: 12px;
+  margin: 8px 0;
+  color: #5f6368;
+}
+.email-html-content pre {
+  background: #f1f3f4;
+  padding: 12px;
+  border-radius: 8px;
+  overflow-x: auto;
+  font-size: 13px;
+}
+.email-html-content code {
+  background: #f1f3f4;
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-size: 13px;
+}
+.email-html-content table {
+  border-collapse: collapse;
+  max-width: 100%;
+  margin: 8px 0;
+}
+.email-html-content td,
+.email-html-content th {
+  border: 1px solid #dadce0;
+  padding: 8px 12px;
+  text-align: left;
+}
+.email-html-content th {
+  background: #f1f3f4;
+  font-weight: 600;
+}
+.email-html-content h1 {
+  font-size: 1.5em;
+  margin: 20px 0 8px;
+  font-weight: 600;
+}
+.email-html-content h2 {
+  font-size: 1.3em;
+  margin: 16px 0 8px;
+  font-weight: 600;
+}
+.email-html-content h3 {
+  font-size: 1.1em;
+  margin: 14px 0 6px;
+  font-weight: 600;
+}
+.email-html-content p {
+  margin-bottom: 8px;
+}
+.email-html-content ul,
+.email-html-content ol {
+  padding-left: 24px;
+  margin-bottom: 8px;
+}
+.email-html-content li {
+  margin-bottom: 2px;
+}
+.email-html-content hr {
+  border: none;
+  border-top: 1px solid #dadce0;
+  margin: 16px 0;
+}
+/* Signature styling */
+.email-html-content .gmail_signature,
+.email-html-content [data-smartmail="gmail_signature"] {
+  color: #5f6368;
+  font-size: 13px;
+}
+/* Quoted text styling */
+.email-html-content .gmail_quote,
+.email-html-content .gmail_extra {
+  color: #5f6368;
+  border-left: 2px solid #dadce0;
+  padding-left: 10px;
+  margin-top: 12px;
+}
