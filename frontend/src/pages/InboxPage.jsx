@@ -1164,7 +1164,7 @@ function EmailAttachments({ attachments, messageId }) {
             </div>
             <div className="min-w-0">
               <p className="text-xs font-medium text-gray-700 truncate max-w-[140px]">{att.filename}</p>
-              <p className="text-[10px] text-gray-400">{formatFileSize(att.size)}</p>
+              {formatFileSize(att.size) && <p className="text-[10px] text-gray-400">{formatFileSize(att.size)}</p>}
             </div>
             <Download size={14} className="text-gray-300 group-hover:text-blue-500 ml-1 transition-colors" />
           </div>
@@ -1242,7 +1242,7 @@ const EmailReplyBox = forwardRef(function EmailReplyBox(
                       )}
                       <div className="min-w-0">
                         <p className="truncate max-w-[100px] font-medium text-gray-700">{att.name}</p>
-                        <p className="text-[10px] text-gray-400">{formatFileSize(att.size)}</p>
+                        {formatFileSize(att.size) && <p className="text-[10px] text-gray-400">{formatFileSize(att.size)}</p>}
                       </div>
                       <button
                         type="button"
@@ -1564,7 +1564,7 @@ const MessageAttachments = memo(function MessageAttachments({ attachments, messa
             </div>
             <div className="min-w-0 flex-1">
               <p className="text-xs font-medium truncate">{att.filename || 'Unnamed file'}</p>
-              <p className="text-[10px] text-gray-400">{formatFileSize(att.size)}</p>
+              {formatFileSize(att.size) && <p className="text-[10px] text-gray-400">{formatFileSize(att.size)}</p>}
             </div>
             {hasSource && <Download size={14} className="text-gray-400 flex-shrink-0" />}
           </div>
@@ -1815,7 +1815,7 @@ function getContactDisplayName(contact, platform) {
 }
 
 function formatFileSize(bytes) {
-  if (!bytes) return '0B';
+  if (!bytes) return null;
   if (bytes < 1024) return `${bytes}B`;
   if (bytes < 1048576) return `${(bytes / 1024).toFixed(1)}KB`;
   return `${(bytes / 1048576).toFixed(1)}MB`;

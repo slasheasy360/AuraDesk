@@ -20,7 +20,8 @@
       "Read(//c/Users/gondy/.claude/projects/c--Users-gondy-OneDrive-Desktop-AuraDesk/8160a943-7a60-4a1a-9451-997b622c30d0/tool-results/**)",
       "Bash(node -c src/webhooks/meta.js)",
       "Bash(node --input-type=module -e \"import ''''./src/webhooks/meta.js''''\")",
-      "Bash(python3 -c \"print\\(26214400 / 1024 / 1024, ''MB''\\)\")"
+      "Bash(python3 -c \"print\\(26214400 / 1024 / 1024, ''MB''\\)\")",
+      "Bash(xargs grep:*)"
     ]
   }
 }
