@@ -177,7 +177,6 @@ Tokens must be stored encrypted.
 ---
 
 # Deployment
-
 POC will be deployed using:
 
 Railway.app

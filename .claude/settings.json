@@ -21,7 +21,8 @@
       "Bash(node -c src/webhooks/meta.js)",
       "Bash(node --input-type=module -e \"import ''''./src/webhooks/meta.js''''\")",
       "Bash(python3 -c \"print\\(26214400 / 1024 / 1024, ''MB''\\)\")",
-      "Bash(xargs grep:*)"
+      "Bash(xargs grep:*)",
+      "Bash(find backend:*)"
     ]
   }
 }

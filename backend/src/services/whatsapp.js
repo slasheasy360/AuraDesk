@@ -195,7 +195,7 @@ export async function sendMedia(connectedAccountId, toPhoneNumber, file) {
     }
   );
 
-  return res.data;
+  return { ...res.data, mediaId };
 }
 
 /**

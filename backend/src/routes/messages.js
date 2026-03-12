@@ -348,6 +348,7 @@ router.post('/send', authenticate, upload.array('attachments', 10), async (req, 
               filename: file.originalname,
               mimeType: file.mimetype,
               size: file.size,
+              mediaId: result.mediaId || null,
               platformId: result.messages?.[0]?.id || null,
             });
           }
