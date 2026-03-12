@@ -176,14 +176,3 @@ Tokens must be stored encrypted.
 
 ---
 
-# Deployment
-
-POC will be deployed using:
-
-Railway.app
-
-Requirements:
-
-- HTTPS
-- PostgreSQL
-- Environment variables
