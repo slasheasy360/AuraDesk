@@ -54,6 +54,7 @@ export default function ConnectionsPage() {
   const [searchParams] = useSearchParams();
   const successPlatform = searchParams.get('success');
   const errorPlatform = searchParams.get('error');
+  const errorReason = searchParams.get('reason');
 
   // Per-platform loading and error states
   const [connectingPlatform, setConnectingPlatform] = useState(null);
@@ -322,7 +323,12 @@ export default function ConnectionsPage() {
         {showBanner && errorPlatform && (
           <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg mb-4 sm:mb-6 flex items-center gap-2 text-sm">
             <XCircle size={18} className="flex-shrink-0" />
-            Failed to connect <span className="capitalize font-medium">{errorPlatform}</span>. Please try again.
+            <span>
+              {errorReason
+                ? errorReason
+                : <>Failed to connect <span className="capitalize font-medium">{errorPlatform}</span>. Please try again.</>
+              }
+            </span>
           </div>
         )}
 

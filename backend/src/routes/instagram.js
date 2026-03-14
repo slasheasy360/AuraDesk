@@ -43,7 +43,8 @@ router.get('/callback', async (req, res) => {
     res.redirect(`${process.env.FRONTEND_URL || 'http://localhost:5173'}/connections?success=instagram`);
   } catch (err) {
     console.error('Instagram callback error:', err);
-    res.redirect(`${process.env.FRONTEND_URL || 'http://localhost:5173'}/connections?error=instagram`);
+    const reason = err.code === 'DUPLICATE_ACCOUNT' ? err.message : 'Connection failed. Please try again.';
+    res.redirect(`${process.env.FRONTEND_URL || 'http://localhost:5173'}/connections?error=instagram&reason=${encodeURIComponent(reason)}`);
   }
 });
 

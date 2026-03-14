@@ -121,6 +121,9 @@ router.get('/callback', async (req, res) => {
     }
   } catch (err) {
     console.error('Gmail callback error:', err);
+    if (err.code === 'DUPLICATE_ACCOUNT') {
+      return res.redirect(`${frontendUrl}/connections?error=gmail&reason=${encodeURIComponent(err.message)}`);
+    }
     redirectWithError('google_auth_failed');
   }
 });

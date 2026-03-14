@@ -7,6 +7,13 @@ import { encrypt, decrypt } from '../utils/encryption.js';
 const GRAPH_API = 'https://graph.facebook.com/v21.0';
 const DEFAULT_INSTAGRAM_REDIRECT_URI = 'https://auradesk-k5en.onrender.com/auth/instagram/callback';
 
+function maskEmail(email) {
+  const [local, domain] = email.split('@');
+  const visible = local.substring(0, 5);
+  const masked = '*'.repeat(Math.max(local.length - 5, 0));
+  return `${visible}${masked}@${domain}`;
+}
+
 function getInstagramRedirectUri() {
   return process.env.INSTAGRAM_REDIRECT_URI || DEFAULT_INSTAGRAM_REDIRECT_URI;
 }
@@ -108,24 +115,21 @@ export async function handleCallback(code, userId) {
     console.error('[Instagram OAuth] Webhook subscription failed:', subErr.response?.data || subErr.message);
   }
 
-  // Deactivate any OTHER user's active connection for the same Instagram account
-  // so webhooks route messages to the new owner
-  const previousConnections = await prisma.connectedAccount.findMany({
+  // Block if this Instagram account is already connected to another AuraDesk user
+  const existingConnection = await prisma.connectedAccount.findFirst({
     where: {
       platform: 'instagram',
       platformAccountId: igAccount.id,
       status: 'active',
       userId: { not: userId },
     },
+    include: { user: true },
   });
-  for (const prev of previousConnections) {
-    console.log('[Instagram OAuth] Deactivating previous connection', { prevAccountId: prev.id, prevUserId: prev.userId });
-    await prisma.authToken.deleteMany({ where: { connectedAccountId: prev.id } });
-    await prisma.webhookSubscription.deleteMany({ where: { connectedAccountId: prev.id } });
-    await prisma.connectedAccount.update({
-      where: { id: prev.id },
-      data: { status: 'disconnected' },
-    });
+  if (existingConnection) {
+    const maskedEmail = maskEmail(existingConnection.user.email);
+    const error = new Error(`This account is already connected with: ${maskedEmail}`);
+    error.code = 'DUPLICATE_ACCOUNT';
+    throw error;
   }
 
   // Clean up any previous disconnected sessions for this user + IG account

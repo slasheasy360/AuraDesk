@@ -7,6 +7,13 @@ import { encrypt, decrypt } from '../utils/encryption.js';
 const GRAPH_API = 'https://graph.facebook.com/v21.0';
 const DEFAULT_FACEBOOK_REDIRECT_URI = 'https://auradesk-k5en.onrender.com/auth/facebook/callback';
 
+function maskEmail(email) {
+  const [local, domain] = email.split('@');
+  const visible = local.substring(0, 5);
+  const masked = '*'.repeat(Math.max(local.length - 5, 0));
+  return `${visible}${masked}@${domain}`;
+}
+
 function getMetaAppId() {
   if (!process.env.META_APP_ID) {
     throw new Error('META_APP_ID is not configured');
@@ -183,27 +190,24 @@ export async function handleCallbackWithToken(shortLivedToken, userId) {
   // ── Step 4: Save Facebook Page connected account + token ──
   console.log('[Facebook OAuth] Step 4: Saving Facebook connected account...');
 
-  // Deactivate any OTHER user's active connection for the same Facebook Page
-  // so webhooks route messages to the new owner
-  const previousConnections = await prisma.connectedAccount.findMany({
+  // Block if this Facebook Page is already connected to another AuraDesk user
+  const existingConnection = await prisma.connectedAccount.findFirst({
     where: {
       platform: 'facebook',
       platformAccountId: page.id,
       status: 'active',
       userId: { not: userId },
     },
+    include: { user: true },
   });
-  for (const prev of previousConnections) {
-    console.log('[Facebook OAuth] Deactivating previous connection', { prevAccountId: prev.id, prevUserId: prev.userId });
-    await prisma.authToken.deleteMany({ where: { connectedAccountId: prev.id } });
-    await prisma.webhookSubscription.deleteMany({ where: { connectedAccountId: prev.id } });
-    await prisma.connectedAccount.update({
-      where: { id: prev.id },
-      data: { status: 'disconnected' },
-    });
+  if (existingConnection) {
+    const maskedEmail = maskEmail(existingConnection.user.email);
+    const error = new Error(`This account is already connected with: ${maskedEmail}`);
+    error.code = 'DUPLICATE_ACCOUNT';
+    throw error;
   }
 
-  // Also clean up any previous disconnected sessions for this user + page
+  // Clean up any previous disconnected sessions for this user + page
   await prisma.connectedAccount.deleteMany({
     where: {
       userId,

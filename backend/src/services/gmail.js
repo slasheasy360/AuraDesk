@@ -3,6 +3,13 @@ import { google } from 'googleapis';
 import prisma from '../utils/prisma.js';
 import { encrypt, decrypt } from '../utils/encryption.js';
 
+function maskEmail(email) {
+  const [local, domain] = email.split('@');
+  const visible = local.substring(0, 5);
+  const masked = '*'.repeat(Math.max(local.length - 5, 0));
+  return `${visible}${masked}@${domain}`;
+}
+
 function getOAuth2Client() {
   return new google.auth.OAuth2(
     process.env.GOOGLE_CLIENT_ID,
@@ -33,6 +40,33 @@ export async function handleCallback(code, userId) {
   // Get user profile
   const oauth2 = google.oauth2({ version: 'v2', auth: client });
   const { data: profile } = await oauth2.userinfo.get();
+
+  // Block if this Gmail address is already connected to another AuraDesk user
+  const existingConnection = await prisma.connectedAccount.findFirst({
+    where: {
+      platform: 'gmail',
+      platformAccountId: profile.email,
+      status: 'active',
+      userId: { not: userId },
+    },
+    include: { user: true },
+  });
+  if (existingConnection) {
+    const maskedEmail = maskEmail(existingConnection.user.email);
+    const error = new Error(`This account is already connected with: ${maskedEmail}`);
+    error.code = 'DUPLICATE_ACCOUNT';
+    throw error;
+  }
+
+  // Clean up any previous disconnected sessions for this user
+  await prisma.connectedAccount.deleteMany({
+    where: {
+      userId,
+      platform: 'gmail',
+      platformAccountId: profile.email,
+      status: 'disconnected',
+    },
+  });
 
   // Upsert connected account
   const connectedAccount = await prisma.connectedAccount.upsert({
