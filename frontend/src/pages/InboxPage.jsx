@@ -66,6 +66,7 @@ export default function InboxPage() {
   const [sendError, setSendError] = useState('');
   const [fileError, setFileError] = useState(null); // { message, details }
   const fileErrorTimerRef = useRef(null);
+  const sendErrorTimerRef = useRef(null);
   const [attachments, setAttachments] = useState([]);
   const [dragOver, setDragOver] = useState(false);
   const [replyingTo, setReplyingTo] = useState(null); // for email reply context
@@ -498,6 +499,8 @@ export default function InboxPage() {
       console.error('Failed to send message:', err);
       const errorMsg = err.response?.data?.error || err.message || 'Failed to send message';
       setSendError(errorMsg);
+      clearTimeout(sendErrorTimerRef.current);
+      sendErrorTimerRef.current = setTimeout(() => setSendError(''), 5000);
       setUploadProgress(null);
       // Mark optimistic message as failed instead of removing it
       setMessages((prev) =>
@@ -515,7 +518,7 @@ export default function InboxPage() {
   }, []);
 
   // Clean up file error timer on unmount
-  useEffect(() => () => clearTimeout(fileErrorTimerRef.current), []);
+  useEffect(() => () => { clearTimeout(fileErrorTimerRef.current); clearTimeout(sendErrorTimerRef.current); }, []);
 
   const handleFileSelect = useCallback(async (files) => {
     const ALLOWED_TYPES = [
@@ -1133,10 +1136,10 @@ function EmailAttachments({ attachments, messageId }) {
         {attachments.length} Attachment{attachments.length !== 1 ? 's' : ''}
       </p>
       {/* Inline image previews */}
-      {attachments.some(a => a.mimeType?.startsWith('image/') && (a.attachmentId || a.fileUrl || a.mediaId)) && (
+      {attachments.some(a => a.mimeType?.startsWith('image/') && (a.attachmentId || a.fileUrl || a.mediaId || a.localPath)) && (
         <div className="flex flex-wrap gap-2 mb-2">
           {attachments.map((att, i) => {
-            if (!att.mimeType?.startsWith('image/') || !(att.attachmentId || att.fileUrl || att.mediaId)) return null;
+            if (!att.mimeType?.startsWith('image/') || !(att.attachmentId || att.fileUrl || att.mediaId || att.localPath)) return null;
             return (
               <div key={i} className="relative bg-gray-200 animate-pulse rounded-lg min-h-[80px] min-w-[80px]">
                 <img
@@ -1492,25 +1495,27 @@ const MessageAttachments = memo(function MessageAttachments({ attachments, messa
 
         if (isImage && previewUrl) {
           return (
-            <div key={i} className="rounded-lg overflow-hidden max-w-[280px]">
+            <div key={i} className="relative rounded-lg overflow-hidden max-w-[280px] group cursor-pointer"
+              onClick={() => window.open(previewUrl, '_blank')}
+            >
               <div className="relative bg-gray-200/60 animate-pulse rounded-lg min-h-[100px]">
                 <img
                   src={previewUrl}
                   alt={att.filename || 'Image'}
-                  className="w-full max-h-[300px] object-cover rounded-lg cursor-pointer relative z-[1]"
-                  onClick={() => window.open(previewUrl, '_blank')}
+                  className="w-full max-h-[300px] object-cover rounded-lg relative z-[1]"
                   loading="lazy"
                   onLoad={(e) => { e.target.parentElement.classList.remove('animate-pulse', 'bg-gray-200/60'); e.target.parentElement.style.minHeight = ''; }}
                 />
               </div>
-              <div className="flex items-center justify-between mt-1 px-1">
-                <span className="text-[10px] text-gray-500 truncate">{att.filename}</span>
+              {/* Overlay with download button — appears on hover */}
+              <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors z-[2] rounded-lg flex items-end justify-between px-2 py-1.5">
+                <span className="text-[10px] text-white truncate opacity-0 group-hover:opacity-100 transition-opacity drop-shadow">{att.filename}</span>
                 <button
                   onClick={(e) => { e.stopPropagation(); handleDownload(att, i); }}
-                  className={`p-1 rounded hover:bg-black/10 transition ${isOutbound ? 'text-gray-600' : 'text-gray-400'}`}
+                  className="p-1.5 rounded-full bg-black/40 text-white opacity-0 group-hover:opacity-100 transition-opacity hover:bg-black/60"
                   title="Download"
                 >
-                  <Download size={12} />
+                  <Download size={14} />
                 </button>
               </div>
             </div>
@@ -1519,7 +1524,7 @@ const MessageAttachments = memo(function MessageAttachments({ attachments, messa
 
         if (isVideo && previewUrl) {
           return (
-            <div key={i} className="rounded-lg overflow-hidden max-w-[280px]">
+            <div key={i} className="relative rounded-lg overflow-hidden max-w-[280px] group">
               <video
                 src={previewUrl}
                 controls
@@ -1530,7 +1535,7 @@ const MessageAttachments = memo(function MessageAttachments({ attachments, messa
                 <span className="text-[10px] text-gray-500 truncate">{att.filename}</span>
                 <button
                   onClick={() => handleDownload(att, i)}
-                  className={`p-1 rounded hover:bg-black/10 transition ${isOutbound ? 'text-gray-600' : 'text-gray-400'}`}
+                  className="p-1 rounded hover:bg-black/10 transition text-gray-400"
                   title="Download"
                 >
                   <Download size={12} />

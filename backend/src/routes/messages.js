@@ -419,11 +419,17 @@ router.post('/send', authenticate, upload.array('attachments', 10), async (req, 
           platformMessageId = result.id;
 
           for (const file of files) {
-            attachmentMeta.push({
+            const meta = {
               filename: file.originalname,
               mimeType: file.mimetype,
               size: file.size,
-            });
+            };
+            // Persist image files for outbound preview
+            if (file.mimetype.startsWith('image/')) {
+              const destPath = path.join(OUTBOUND_DIR, path.basename(file.path));
+              try { fs.copyFileSync(file.path, destPath); meta.localPath = destPath; } catch { /* skip */ }
+            }
+            attachmentMeta.push(meta);
           }
           break;
         }
