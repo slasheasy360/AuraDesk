@@ -532,8 +532,11 @@ export default function InboxPage() {
     const MAX_FILE_SIZE = 25 * 1024 * 1024; // 25MB
     const SUPPORTED_FORMATS = 'JPG, PNG, GIF, WebP, PDF, DOC, DOCX, XLS, XLSX, TXT, CSV, MP3, OGG, WAV, MP4, WebM';
 
+    // Snapshot FileList into a real Array before any async work
+    const fileArray = Array.from(files);
+
     const newAttachments = [];
-    for (const file of Array.from(files)) {
+    for (const file of fileArray) {
       // Validate file type
       if (!ALLOWED_TYPES.includes(file.type)) {
         showFileError(
@@ -551,33 +554,43 @@ export default function InboxPage() {
         continue;
       }
 
-      let processedFile = file;
-      let preview = null;
+      try {
+        let processedFile = file;
+        let preview = null;
 
-      // ── Compress images > 500KB before attaching ──
-      if (file.type.startsWith('image/') && file.size > 512000) {
-        try {
-          processedFile = await compressImage(file, 1200, 0.8);
-        } catch { /* Use original if compression fails */ }
+        // ── Compress images > 500KB before attaching ──
+        if (file.type.startsWith('image/') && file.size > 512000) {
+          try {
+            processedFile = await compressImage(file, 1200, 0.8);
+          } catch { processedFile = file; }
+        }
+
+        if (processedFile.type.startsWith('image/')) {
+          preview = URL.createObjectURL(processedFile);
+        } else if (processedFile.type.startsWith('video/')) {
+          preview = URL.createObjectURL(processedFile);
+        }
+
+        newAttachments.push({
+          id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+          file: processedFile,
+          name: file.name,
+          size: processedFile.size,
+          type: processedFile.type,
+          preview,
+        });
+      } catch (err) {
+        console.error('Failed to process attachment:', file.name, err);
+        showFileError(
+          `Failed to process "${file.name}"`,
+          'Please try again or use a different file'
+        );
       }
-
-      if (processedFile.type.startsWith('image/')) {
-        preview = URL.createObjectURL(processedFile);
-      } else if (processedFile.type.startsWith('video/')) {
-        preview = URL.createObjectURL(processedFile);
-      }
-
-      newAttachments.push({
-        id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
-        file: processedFile,
-        name: file.name,
-        size: processedFile.size,
-        type: processedFile.type,
-        preview,
-      });
     }
-    setAttachments((prev) => [...prev, ...newAttachments]);
-  }, []);
+    if (newAttachments.length > 0) {
+      setAttachments((prev) => [...prev, ...newAttachments]);
+    }
+  }, [showFileError]);
 
   const removeAttachment = useCallback((id) => {
     setAttachments((prev) => {
@@ -855,11 +868,13 @@ export default function InboxPage() {
               ref={fileInputRef}
               type="file"
               multiple
+              accept="image/jpeg,image/png,image/gif,image/webp,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/plain,text/csv,audio/mpeg,audio/ogg,audio/wav,video/mp4,video/webm"
               className="hidden"
               onChange={(e) => {
                 if (e.target.files?.length) {
-                  handleFileSelect(e.target.files);
+                  const selectedFiles = Array.from(e.target.files);
                   e.target.value = '';
+                  handleFileSelect(selectedFiles);
                 }
               }}
             />
