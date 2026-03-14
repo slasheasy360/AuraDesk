@@ -1874,7 +1874,7 @@ function compressImage(file, maxDimension = 1200, quality = 0.8) {
   if (file.type === 'image/gif') return Promise.resolve(file);
 
   return new Promise((resolve, reject) => {
-    const img = new window.Image();
+    const img = document.createElement('img');
     const url = URL.createObjectURL(file);
     let settled = false;
 
