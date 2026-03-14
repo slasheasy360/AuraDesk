@@ -1602,6 +1602,11 @@ function renderWhatsAppMessage(msg, isOutbound) {
   const isSending = msg._optimistic || msg.status === 'sending';
   const isPlaceholder = msg.attachments?.length > 0 && msg.content && /^\[[\w\s.,_-]+\]$/.test(msg.content.trim());
   const textContent = isPlaceholder ? '' : (msg.content || '');
+  const hasAttachments = msg.attachments && Array.isArray(msg.attachments) && msg.attachments.length > 0;
+
+  // Don't render completely empty bubbles (no text, no attachments)
+  if (!textContent && !hasAttachments && !isSending) return null;
+
   return (
     <div className={`flex ${isOutbound ? 'justify-end' : 'justify-start'}`}>
       <div className={`max-w-[80%] sm:max-w-[65%] px-3 py-2 rounded-lg text-sm shadow-sm relative ${
@@ -1626,6 +1631,8 @@ function renderInstagramMessage(msg, isOutbound) {
   const isSending = msg._optimistic || msg.status === 'sending';
   const isPlaceholder = msg.attachments?.length > 0 && msg.content && /^\[[\w\s.,_-]+\]$/.test(msg.content.trim());
   const textContent = isPlaceholder ? '' : (msg.content || '');
+  const hasAttachments = msg.attachments && Array.isArray(msg.attachments) && msg.attachments.length > 0;
+  if (!textContent && !hasAttachments && !isSending) return null;
   return (
     <div className={`flex ${isOutbound ? 'justify-end' : 'justify-start'}`}>
       <div className={`max-w-[80%] sm:max-w-[65%] px-4 py-2.5 text-sm ${
@@ -1647,6 +1654,8 @@ function renderFacebookMessage(msg, isOutbound) {
   const isSending = msg._optimistic || msg.status === 'sending';
   const isPlaceholder = msg.attachments?.length > 0 && msg.content && /^\[[\w\s.,_-]+\]$/.test(msg.content.trim());
   const textContent = isPlaceholder ? '' : (msg.content || '');
+  const hasAttachments = msg.attachments && Array.isArray(msg.attachments) && msg.attachments.length > 0;
+  if (!textContent && !hasAttachments && !isSending) return null;
   return (
     <div className={`flex ${isOutbound ? 'justify-end' : 'justify-start'}`}>
       <div className={`max-w-[80%] sm:max-w-[65%] px-4 py-2.5 rounded-3xl text-sm ${
@@ -1666,6 +1675,8 @@ function renderDefaultMessage(msg, isOutbound) {
   const isSending = msg._optimistic || msg.status === 'sending';
   const isPlaceholder = msg.attachments?.length > 0 && msg.content && /^\[[\w\s.,_-]+\]$/.test(msg.content.trim());
   const textContent = isPlaceholder ? '' : (msg.content || '');
+  const hasAttachments = msg.attachments && Array.isArray(msg.attachments) && msg.attachments.length > 0;
+  if (!textContent && !hasAttachments && !isSending) return null;
   return (
     <div className={`flex ${isOutbound ? 'justify-end' : 'justify-start'}`}>
       <div className={`max-w-[80%] sm:max-w-[65%] px-4 py-2.5 rounded-2xl text-sm ${

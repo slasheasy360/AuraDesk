@@ -573,6 +573,13 @@ async function processWhatsAppWebhook(payload, io) {
       const account = waAccount.connectedAccount;
 
       for (const msg of value.messages) {
+        // Skip non-content message types that would create empty bubbles
+        const supportedTypes = ['text', 'image', 'video', 'audio', 'document', 'sticker'];
+        if (!supportedTypes.includes(msg.type)) {
+          console.log('[WhatsApp Webhook] Skipping unsupported message type:', msg.type, 'id:', msg.id);
+          continue;
+        }
+
         // Skip messages with a timestamp older than the account connection time
         const waMsgTimestamp = msg.timestamp ? new Date(Number(msg.timestamp) * 1000) : null;
         if (waMsgTimestamp && waMsgTimestamp < new Date(account.createdAt)) {
@@ -589,6 +596,31 @@ async function processWhatsAppWebhook(payload, io) {
         });
         if (existingMsg) {
           console.log('[WhatsApp Webhook] Duplicate message skipped:', msg.id);
+          continue;
+        }
+
+        // Extract WhatsApp media attachment metadata
+        const waAttachments = [];
+        const mediaTypes = ['image', 'video', 'audio', 'document', 'sticker'];
+        if (mediaTypes.includes(msg.type) && msg[msg.type]) {
+          const media = msg[msg.type];
+          waAttachments.push({
+            filename: media.filename || `${msg.type}_${Date.now()}`,
+            mimeType: media.mime_type || 'application/octet-stream',
+            size: media.file_size || 0,
+            mediaId: media.id,
+            type: msg.type,
+          });
+        }
+
+        // Determine message content
+        const textBody = msg.text?.body || '';
+        const caption = msg[msg.type]?.caption || '';
+        const content = textBody || caption || (waAttachments.length > 0 ? `[${msg.type}]` : '');
+
+        // Skip messages that have no content and no attachments (would create empty bubbles)
+        if (!content && waAttachments.length === 0) {
+          console.log('[WhatsApp Webhook] Skipping empty message (no content, no attachments):', msg.id, 'type:', msg.type);
           continue;
         }
 
@@ -633,28 +665,14 @@ async function processWhatsAppWebhook(payload, io) {
           },
         });
 
-        // Extract WhatsApp media attachment metadata
-        const waAttachments = [];
-        const mediaTypes = ['image', 'video', 'audio', 'document', 'sticker'];
-        if (mediaTypes.includes(msg.type) && msg[msg.type]) {
-          const media = msg[msg.type];
-          waAttachments.push({
-            filename: media.filename || `${msg.type}_${Date.now()}`,
-            mimeType: media.mime_type || 'application/octet-stream',
-            size: media.file_size || 0,
-            mediaId: media.id,
-            type: msg.type,
-          });
-        }
-
         const message = await prisma.message.create({
           data: {
             conversationId: conversation.id,
             platformMessageId: msg.id,
             direction: 'inbound',
             sender: contactName,
-            content: msg.text?.body || msg[msg.type]?.caption || (waAttachments.length > 0 ? `[${msg.type || 'Media'}]` : ''),
-            contentType: ['text', 'image', 'audio', 'video', 'file', 'sticker'].includes(msg.type) ? msg.type : 'file',
+            content,
+            contentType: mediaTypes.includes(msg.type) ? msg.type : 'text',
             attachments: waAttachments.length > 0 ? waAttachments : undefined,
             status: 'delivered',
             rawPayload: msg,
