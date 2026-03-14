@@ -5,8 +5,8 @@ import api from '../services/api.js';
 import { getSocket } from '../services/socket.js';
 import {
   Send, Search, MessageSquare, Mail, ArrowLeft, Paperclip,
-  Smile, X, FileText, Image, Reply, ChevronDown,
-  ChevronUp, Download, UploadCloud, Play, Music, File, AlertCircle, RefreshCw,
+  Smile, X, FileText, Image as ImageIcon, Reply, ChevronDown,
+  ChevronUp, Download, UploadCloud, Play, Music, File as FileIcon, AlertCircle, RefreshCw,
 } from 'lucide-react';
 import PlatformBadge, { PlatformIcon } from '../components/PlatformBadge.jsx';
 
@@ -1166,7 +1166,7 @@ function EmailAttachments({ attachments, messageId }) {
               : 'bg-gray-100'
             }`}>
               {att.mimeType?.startsWith('image/') ? (
-                <Image size={16} className="text-blue-500" />
+                <ImageIcon size={16} className="text-blue-500" />
               ) : att.mimeType?.includes('pdf') ? (
                 <FileText size={16} className="text-red-500" />
               ) : att.mimeType?.startsWith('audio/') ? (
@@ -1572,10 +1572,10 @@ const MessageAttachments = memo(function MessageAttachments({ attachments, messa
               : 'bg-gray-200 text-gray-500'
             }`}>
               {mime.includes('pdf') ? <FileText size={20} /> :
-               isImage ? <Image size={20} /> :
+               isImage ? <ImageIcon size={20} /> :
                isVideo ? <Play size={20} /> :
                isAudio ? <Music size={20} /> :
-               <File size={20} />}
+               <FileIcon size={20} />}
             </div>
             <div className="min-w-0 flex-1">
               <p className="text-xs font-medium truncate">{att.filename || 'Unnamed file'}</p>
