@@ -24,6 +24,9 @@ router.post('/connect', authenticate, async (req, res) => {
     res.json({ account });
   } catch (err) {
     console.error('WhatsApp connect error:', err);
+    if (err.code === 'DUPLICATE_PHONE') {
+      return res.status(409).json({ error: err.message });
+    }
     res.status(500).json({ error: err.message });
   }
 });
@@ -137,6 +140,9 @@ router.post('/exchange', authenticate, async (req, res) => {
     res.json({ success: true, account, waba_id: wabaId, phone_number_id: phoneNumberId });
   } catch (err) {
     console.error('WhatsApp exchange error:', err.response?.data || err.message);
+    if (err.code === 'DUPLICATE_PHONE') {
+      return res.status(409).json({ error: err.message });
+    }
     const detail = err.response?.data?.error?.message || err.message;
     res.status(500).json({ error: `Failed to connect WhatsApp: ${detail}` });
   }
@@ -241,6 +247,9 @@ router.post('/connect-with-token', authenticate, async (req, res) => {
     res.json({ account });
   } catch (err) {
     console.error('WhatsApp connect-with-token error:', err.response?.data || err.message);
+    if (err.code === 'DUPLICATE_PHONE') {
+      return res.status(409).json({ error: err.message });
+    }
     const detail = err.response?.data?.error?.message || err.message;
     res.status(500).json({ error: `Failed to connect WhatsApp: ${detail}` });
   }
@@ -273,6 +282,9 @@ router.post('/connect-env', authenticate, async (req, res) => {
     res.json({ account });
   } catch (err) {
     console.error('WhatsApp connect-env error:', err.response?.data || err.message);
+    if (err.code === 'DUPLICATE_PHONE') {
+      return res.status(409).json({ error: err.message });
+    }
     const detail = err.response?.data?.error?.message || err.message;
     res.status(500).json({ error: `Failed to connect WhatsApp: ${detail}` });
   }

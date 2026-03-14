@@ -69,6 +69,14 @@ export default function ConnectionsPage() {
     }
   }, [successPlatform, errorPlatform]);
 
+  // Auto-dismiss per-platform error after 5s
+  useEffect(() => {
+    if (platformError) {
+      const timer = setTimeout(() => setPlatformError(null), 5000);
+      return () => clearTimeout(timer);
+    }
+  }, [platformError]);
+
   useEffect(() => {
     fetchAccounts();
   }, []);

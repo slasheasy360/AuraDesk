@@ -39,6 +39,11 @@ router.delete('/:id', authenticate, async (req, res) => {
       return res.status(404).json({ error: 'Account not found' });
     }
 
+    // Remove WhatsApp-specific records and auth token so the phone number is freed for reconnection
+    await prisma.authToken.deleteMany({ where: { connectedAccountId: account.id } });
+    await prisma.whatsappAccount.deleteMany({ where: { connectedAccountId: account.id } });
+    await prisma.webhookSubscription.deleteMany({ where: { connectedAccountId: account.id } });
+
     await prisma.connectedAccount.update({
       where: { id: account.id },
       data: { status: 'disconnected' },

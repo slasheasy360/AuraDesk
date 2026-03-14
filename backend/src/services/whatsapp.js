@@ -6,6 +6,13 @@ import { encrypt, decrypt } from '../utils/encryption.js';
 
 const GRAPH_API = 'https://graph.facebook.com/v21.0';
 
+function maskEmail(email) {
+  const [local, domain] = email.split('@');
+  const visible = local.substring(0, 5);
+  const masked = '*'.repeat(Math.max(local.length - 5, 0));
+  return `${visible}${masked}@${domain}`;
+}
+
 export async function handleEmbeddedSignup(userId, wabaId, phoneNumberId, userAccessToken, tokenType = 'user') {
   // Get phone number details
   let phoneNumber = phoneNumberId;
@@ -24,6 +31,43 @@ export async function handleEmbeddedSignup(userId, wabaId, phoneNumberId, userAc
   } catch (err) {
     console.warn('[WhatsApp] Could not fetch phone details (non-fatal):', err.response?.data?.error?.message || err.message);
   }
+
+  // Check if this phone number is already connected to another account
+  const existingWhatsapp = await prisma.whatsappAccount.findFirst({
+    where: {
+      OR: [
+        { phoneNumberId },
+        ...(phoneNumber !== phoneNumberId ? [{ phoneNumber }] : []),
+      ],
+      connectedAccount: {
+        status: 'active',
+        userId: { not: userId },
+      },
+    },
+    include: {
+      connectedAccount: {
+        include: { user: true },
+      },
+    },
+  });
+
+  if (existingWhatsapp) {
+    const ownerEmail = existingWhatsapp.connectedAccount.user.email;
+    const maskedEmail = maskEmail(ownerEmail);
+    const error = new Error(`This phone number is already connected with another account: ${maskedEmail}`);
+    error.code = 'DUPLICATE_PHONE';
+    throw error;
+  }
+
+  // Clean up any previous disconnected sessions for this user + WABA
+  await prisma.connectedAccount.deleteMany({
+    where: {
+      userId,
+      platform: 'whatsapp',
+      platformAccountId: wabaId,
+      status: 'disconnected',
+    },
+  });
 
   // Subscribe webhook to WABA for this tenant (non-fatal — can be configured manually in Meta dashboard)
   try {
