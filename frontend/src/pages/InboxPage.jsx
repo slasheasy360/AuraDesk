@@ -1472,7 +1472,7 @@ const MessageAttachments = memo(function MessageAttachments({ attachments, messa
         const isImage = mime.startsWith('image/');
         const isVideo = mime.startsWith('video/');
         const isAudio = mime.startsWith('audio/');
-        const hasSource = att.mediaId || att.fileUrl || att.attachmentId;
+        const hasSource = att.mediaId || att.fileUrl || att.attachmentId || att.localPath;
         const previewUrl = hasSource ? getPreviewUrl(i) : null;
 
         if (isImage && previewUrl) {
@@ -1855,10 +1855,27 @@ function isSameDay(dateStr1, dateStr2) {
 // ═══════════════════════════════════════════════════════════════════
 
 function compressImage(file, maxDimension = 1200, quality = 0.8) {
+  // Skip compression for GIFs (canvas strips animation) and unsupported types
+  if (file.type === 'image/gif') return Promise.resolve(file);
+
   return new Promise((resolve, reject) => {
     const img = new window.Image();
     const url = URL.createObjectURL(file);
+    let settled = false;
+
+    // Timeout fallback — resolve with the original file if loading takes too long
+    const timeout = setTimeout(() => {
+      if (!settled) {
+        settled = true;
+        URL.revokeObjectURL(url);
+        resolve(file);
+      }
+    }, 10000);
+
     img.onload = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
       URL.revokeObjectURL(url);
       let { width, height } = img;
       if (width > maxDimension || height > maxDimension) {
@@ -1871,17 +1888,25 @@ function compressImage(file, maxDimension = 1200, quality = 0.8) {
       canvas.height = height;
       const ctx = canvas.getContext('2d');
       ctx.drawImage(img, 0, 0, width, height);
+      // Use image/jpeg for output to ensure broad browser support; fall back to original on failure
+      const outputType = file.type === 'image/png' ? 'image/png' : 'image/jpeg';
       canvas.toBlob(
         (blob) => {
-          if (!blob) return reject(new Error('Compression failed'));
-          const compressed = new File([blob], file.name, { type: file.type, lastModified: Date.now() });
+          if (!blob) return resolve(file);
+          const compressed = new File([blob], file.name, { type: outputType, lastModified: Date.now() });
           resolve(compressed);
         },
-        file.type,
+        outputType,
         quality
       );
     };
-    img.onerror = reject;
+    img.onerror = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      URL.revokeObjectURL(url);
+      resolve(file);
+    };
     img.src = url;
   });
 }

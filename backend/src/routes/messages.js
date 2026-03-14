@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import fs from 'fs';
+import path from 'path';
 import { authenticate } from '../middleware/auth.js';
 import { upload } from '../middleware/upload.js';
 import prisma from '../utils/prisma.js';
@@ -10,6 +11,10 @@ import * as gmailService from '../services/gmail.js';
 import { syncGmailMessagesController, gmailDiagnosticController } from '../controllers/gmail.controller.js';
 import { syncInstagramMessages } from '../services/instagram.sync.js';
 import axios from 'axios';
+
+// Ensure persistent outbound attachments directory exists
+const OUTBOUND_DIR = path.join(process.cwd(), 'uploads', 'outbound');
+fs.mkdirSync(OUTBOUND_DIR, { recursive: true });
 
 const router = Router();
 
@@ -175,6 +180,14 @@ router.get('/:messageId/attachments/:index/download', authenticate, async (req, 
       res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(att.filename || 'download')}"`);
       res.setHeader('Content-Length', buffer.length);
       res.send(buffer);
+    } else if (att.localPath && fs.existsSync(att.localPath)) {
+      const safePath = path.resolve(att.localPath);
+      if (!safePath.startsWith(path.resolve(OUTBOUND_DIR))) {
+        return res.status(403).json({ error: 'Access denied' });
+      }
+      res.setHeader('Content-Type', att.mimeType || 'application/octet-stream');
+      res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(att.filename || 'download')}"`);
+      fs.createReadStream(safePath).pipe(res);
     } else {
       return res.status(400).json({ error: 'Attachment cannot be downloaded — no media reference found' });
     }
@@ -239,6 +252,15 @@ router.get('/:messageId/attachments/:index/preview', authenticate, async (req, r
       res.setHeader('Content-Disposition', 'inline');
       res.setHeader('Content-Length', buffer.length);
       res.send(buffer);
+    } else if (att.localPath && fs.existsSync(att.localPath)) {
+      // Outbound attachments stored locally (e.g. FB/IG sent images)
+      const safePath = path.resolve(att.localPath);
+      if (!safePath.startsWith(path.resolve(OUTBOUND_DIR))) {
+        return res.status(403).json({ error: 'Access denied' });
+      }
+      res.setHeader('Content-Type', att.mimeType || 'application/octet-stream');
+      res.setHeader('Content-Disposition', 'inline');
+      fs.createReadStream(safePath).pipe(res);
     } else {
       return res.status(404).json({ error: 'No preview available' });
     }
@@ -295,12 +317,18 @@ router.post('/send', authenticate, upload.array('attachments', 10), async (req, 
               conversation.platformConversationId,
               file
             );
-            attachmentMeta.push({
+            const meta = {
               filename: file.originalname,
               mimeType: file.mimetype,
               size: file.size,
               platformId: result.message_id || null,
-            });
+            };
+            // Persist image files for outbound preview
+            if (file.mimetype.startsWith('image/')) {
+              const destPath = path.join(OUTBOUND_DIR, path.basename(file.path));
+              try { fs.copyFileSync(file.path, destPath); meta.localPath = destPath; } catch { /* skip */ }
+            }
+            attachmentMeta.push(meta);
           }
           break;
         }
@@ -320,12 +348,18 @@ router.post('/send', authenticate, upload.array('attachments', 10), async (req, 
               igRecipientId,
               file
             );
-            attachmentMeta.push({
+            const meta = {
               filename: file.originalname,
               mimeType: file.mimetype,
               size: file.size,
               platformId: result.message_id || null,
-            });
+            };
+            // Persist image files for outbound preview
+            if (file.mimetype.startsWith('image/')) {
+              const destPath = path.join(OUTBOUND_DIR, path.basename(file.path));
+              try { fs.copyFileSync(file.path, destPath); meta.localPath = destPath; } catch { /* skip */ }
+            }
+            attachmentMeta.push(meta);
           }
           break;
         }
