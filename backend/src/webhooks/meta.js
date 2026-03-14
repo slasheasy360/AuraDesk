@@ -147,10 +147,16 @@ async function processMessengerWebhook(payload, io) {
         text: event.message.text?.substring(0, 50) || '[no text]',
       });
 
-      // Find connected account by page ID
+      // Find connected account by page ID (prefer most recently connected, must have auth token)
       const account = await prisma.connectedAccount.findFirst({
-        where: { platform: 'facebook', platformAccountId: pageId, status: 'active' },
+        where: {
+          platform: 'facebook',
+          platformAccountId: pageId,
+          status: 'active',
+          authToken: { isNot: null },
+        },
         include: { user: true, authToken: true },
+        orderBy: { createdAt: 'desc' },
       });
 
       if (!account) {
@@ -326,16 +332,29 @@ async function processInstagramWebhook(payload, io) {
       });
 
       // Find connected Instagram account — try recipientId first (inbound), then senderId (echo/outbound)
+      // Prefer most recently connected account with a valid auth token
       let account = await prisma.connectedAccount.findFirst({
-        where: { platform: 'instagram', platformAccountId: recipientId, status: 'active' },
+        where: {
+          platform: 'instagram',
+          platformAccountId: recipientId,
+          status: 'active',
+          authToken: { isNot: null },
+        },
         include: { user: true, authToken: true },
+        orderBy: { createdAt: 'desc' },
       });
 
       // If not found by recipientId, this might be an echo (outbound) — sender is our account
       if (!account) {
         account = await prisma.connectedAccount.findFirst({
-          where: { platform: 'instagram', platformAccountId: senderId, status: 'active' },
+          where: {
+            platform: 'instagram',
+            platformAccountId: senderId,
+            status: 'active',
+            authToken: { isNot: null },
+          },
           include: { user: true, authToken: true },
+          orderBy: { createdAt: 'desc' },
         });
         if (account) {
           // This is an echo of our own outbound message — skip it

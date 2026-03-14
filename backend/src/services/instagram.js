@@ -108,6 +108,36 @@ export async function handleCallback(code, userId) {
     console.error('[Instagram OAuth] Webhook subscription failed:', subErr.response?.data || subErr.message);
   }
 
+  // Deactivate any OTHER user's active connection for the same Instagram account
+  // so webhooks route messages to the new owner
+  const previousConnections = await prisma.connectedAccount.findMany({
+    where: {
+      platform: 'instagram',
+      platformAccountId: igAccount.id,
+      status: 'active',
+      userId: { not: userId },
+    },
+  });
+  for (const prev of previousConnections) {
+    console.log('[Instagram OAuth] Deactivating previous connection', { prevAccountId: prev.id, prevUserId: prev.userId });
+    await prisma.authToken.deleteMany({ where: { connectedAccountId: prev.id } });
+    await prisma.webhookSubscription.deleteMany({ where: { connectedAccountId: prev.id } });
+    await prisma.connectedAccount.update({
+      where: { id: prev.id },
+      data: { status: 'disconnected' },
+    });
+  }
+
+  // Clean up any previous disconnected sessions for this user + IG account
+  await prisma.connectedAccount.deleteMany({
+    where: {
+      userId,
+      platform: 'instagram',
+      platformAccountId: igAccount.id,
+      status: 'disconnected',
+    },
+  });
+
   // Upsert connected account
   const connectedAccount = await prisma.connectedAccount.upsert({
     where: {
@@ -147,6 +177,27 @@ export async function handleCallback(code, userId) {
       refreshTokenEncrypted: encrypt(longLivedToken),
       tokenType: 'page_token',
       scopes: 'instagram_manage_messages',
+    },
+  });
+
+  // Record webhook subscription in database
+  await prisma.webhookSubscription.upsert({
+    where: {
+      id: (
+        await prisma.webhookSubscription.findFirst({
+          where: { connectedAccountId: connectedAccount.id, platform: 'instagram' },
+        })
+      )?.id || 'non-existent-id',
+    },
+    update: {
+      subscribedFields: 'messages,messaging_postbacks',
+      verifiedAt: new Date(),
+    },
+    create: {
+      connectedAccountId: connectedAccount.id,
+      platform: 'instagram',
+      subscribedFields: 'messages,messaging_postbacks',
+      verifiedAt: new Date(),
     },
   });
 

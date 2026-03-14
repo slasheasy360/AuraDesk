@@ -182,6 +182,37 @@ export async function handleCallbackWithToken(shortLivedToken, userId) {
 
   // ── Step 4: Save Facebook Page connected account + token ──
   console.log('[Facebook OAuth] Step 4: Saving Facebook connected account...');
+
+  // Deactivate any OTHER user's active connection for the same Facebook Page
+  // so webhooks route messages to the new owner
+  const previousConnections = await prisma.connectedAccount.findMany({
+    where: {
+      platform: 'facebook',
+      platformAccountId: page.id,
+      status: 'active',
+      userId: { not: userId },
+    },
+  });
+  for (const prev of previousConnections) {
+    console.log('[Facebook OAuth] Deactivating previous connection', { prevAccountId: prev.id, prevUserId: prev.userId });
+    await prisma.authToken.deleteMany({ where: { connectedAccountId: prev.id } });
+    await prisma.webhookSubscription.deleteMany({ where: { connectedAccountId: prev.id } });
+    await prisma.connectedAccount.update({
+      where: { id: prev.id },
+      data: { status: 'disconnected' },
+    });
+  }
+
+  // Also clean up any previous disconnected sessions for this user + page
+  await prisma.connectedAccount.deleteMany({
+    where: {
+      userId,
+      platform: 'facebook',
+      platformAccountId: page.id,
+      status: 'disconnected',
+    },
+  });
+
   const fbAccount = await prisma.connectedAccount.upsert({
     where: {
       userId_platform_platformAccountId: {
