@@ -118,7 +118,8 @@ async function syncConversation(account, igConv, igUserId, pageToken, userId) {
     },
   });
 
-  // Upsert conversation (use the IG conversation ID as platform conversation ID)
+  // Upsert conversation without updating lastMessageAt yet — we only
+  // bump it when genuinely new messages are found (after message loop).
   const conversation = await prisma.conversation.upsert({
     where: {
       connectedAccountId_platformConversationId: {
@@ -126,14 +127,12 @@ async function syncConversation(account, igConv, igUserId, pageToken, userId) {
         platformConversationId: igConv.id,
       },
     },
-    update: {
-      lastMessageAt: new Date(igConv.updated_time || Date.now()),
-    },
+    update: {},
     create: {
       connectedAccountId: account.id,
       platformConversationId: igConv.id,
       contactId: contact.id,
-      lastMessageAt: new Date(igConv.updated_time || Date.now()),
+      lastMessageAt: new Date(),
       unreadCount: 0,
     },
   });
@@ -206,14 +205,17 @@ async function syncConversation(account, igConv, igUserId, pageToken, userId) {
     newMessages.push(message);
   }
 
-  // Update unread count for new inbound messages
-  const newInbound = newMessages.filter((m) => m.direction === 'inbound');
-  if (newInbound.length > 0) {
+  // When new messages are found, bump lastMessageAt to current server time
+  // so the conversation rises to the top of the inbox, and update unread count.
+  if (newMessages.length > 0) {
+    const newInbound = newMessages.filter((m) => m.direction === 'inbound');
+    const updateData = { lastMessageAt: new Date() };
+    if (newInbound.length > 0) {
+      updateData.unreadCount = { increment: newInbound.length };
+    }
     await prisma.conversation.update({
       where: { id: conversation.id },
-      data: {
-        unreadCount: { increment: newInbound.length },
-      },
+      data: updateData,
     });
   }
 

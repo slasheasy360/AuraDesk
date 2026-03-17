@@ -222,6 +222,8 @@ export async function syncGmailMessages(userId) {
       },
     });
 
+    // Upsert conversation without updating lastMessageAt yet — we only
+    // bump it when a genuinely new message is found (below).
     const conversation = await prisma.conversation.upsert({
       where: {
         connectedAccountId_platformConversationId: {
@@ -229,14 +231,12 @@ export async function syncGmailMessages(userId) {
           platformConversationId: item.threadId,
         },
       },
-      update: {
-        lastMessageAt: item.timestamp,
-      },
+      update: {},
       create: {
         connectedAccountId: account.id,
         platformConversationId: item.threadId,
         contactId: contact.id,
-        lastMessageAt: item.timestamp,
+        lastMessageAt: new Date(),
         unreadCount: 0,
       },
     });
@@ -278,12 +278,16 @@ export async function syncGmailMessages(userId) {
       },
     });
 
+    // New message found — bump lastMessageAt to current server time so the
+    // conversation rises to the top of the inbox, and increment unread count.
+    const updateData = { lastMessageAt: new Date() };
     if (!item.isOutbound && item.labelIds.includes('UNREAD')) {
-      await prisma.conversation.update({
-        where: { id: conversation.id },
-        data: { unreadCount: { increment: 1 } },
-      });
+      updateData.unreadCount = { increment: 1 };
     }
+    await prisma.conversation.update({
+      where: { id: conversation.id },
+      data: updateData,
+    });
 
     synced.push({ ...message, _isNew: true });
   }

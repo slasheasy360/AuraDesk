@@ -107,8 +107,11 @@ async function saveGmailMessage(msg, account, accountEmail, io) {
     },
   });
 
-  // Upsert conversation
+  // Use the original email timestamp for message.sentAt (chronological order
+  // within conversation), but current server time for lastMessageAt so the
+  // conversation rises to the top of the inbox when a new email arrives.
   const timestamp = normalizeTimestamp(msg.internalDate);
+  const now = new Date();
   const conversation = await prisma.conversation.upsert({
     where: {
       connectedAccountId_platformConversationId: {
@@ -118,13 +121,13 @@ async function saveGmailMessage(msg, account, accountEmail, io) {
     },
     update: {
       contactId: contact.id,
-      lastMessageAt: timestamp,
+      lastMessageAt: now,
     },
     create: {
       connectedAccountId: account.id,
       platformConversationId: threadId,
       contactId: contact.id,
-      lastMessageAt: timestamp,
+      lastMessageAt: now,
       unreadCount: 0,
     },
   });
@@ -181,7 +184,7 @@ async function saveGmailMessage(msg, account, accountEmail, io) {
 
   io.to(`user:${account.userId}`).emit('conversation_update', {
     conversationId: conversation.id,
-    lastMessageAt: timestamp,
+    lastMessageAt: now,
     unreadCount: currentUnreadCount,
   });
 
