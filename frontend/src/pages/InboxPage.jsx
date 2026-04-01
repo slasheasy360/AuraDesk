@@ -97,7 +97,9 @@ export default function InboxPage() {
     let cancelled = false;
 
     const initializeInbox = async () => {
-      // 1. Fetch conversations from DB (retry up to 3 times for Render cold starts)
+      // 1. Fetch conversations from DB — this is the ONLY blocking call.
+      //    Gmail messages are synced in real-time via Pub/Sub push notifications,
+      //    so the DB already has everything. No need to call gmail/sync here.
       for (let attempt = 0; attempt < 3; attempt++) {
         try {
           const res = await api.get('/api/conversations');
@@ -109,25 +111,28 @@ export default function InboxPage() {
         } catch (err) {
           console.error(`fetchConversations attempt ${attempt + 1} failed:`, err.message);
           if (attempt < 2) await new Promise((r) => setTimeout(r, 3000 * (attempt + 1)));
-          else if (!cancelled) setLoadingConversations(false); // give up, show whatever we have
+          else if (!cancelled) setLoadingConversations(false);
         }
       }
 
-      // 2. Sync Gmail & Instagram (always refresh conversations after sync)
-      try {
-        await api.get('/api/messages/gmail/sync');
-      } catch { /* silent */ }
-      try {
-        await api.get('/api/messages/instagram/sync');
-      } catch { /* silent */ }
-
-      // 3. Always refresh conversations after sync (messages may have been created)
-      if (!cancelled) {
-        try {
-          const res = await api.get('/api/conversations');
-          setConversations(res.data.conversations);
-        } catch { /* silent — already loaded from step 1 */ }
-      }
+      // 2. Background catchup sync — fire-and-forget, don't block the inbox.
+      //    Gmail Pub/Sub handles real-time; this only catches anything missed
+      //    while the server was down. Instagram lacks push so still needs sync.
+      //    Both run in parallel, refresh conversations only if new messages found.
+      Promise.allSettled([
+        api.get('/api/messages/gmail/sync').catch(() => ({ data: {} })),
+        api.get('/api/messages/instagram/sync').catch(() => ({ data: {} })),
+      ]).then((results) => {
+        if (cancelled) return;
+        const hasNew = results.some(
+          (r) => r.status === 'fulfilled' && (r.value?.data?.newMessages || 0) > 0
+        );
+        if (hasNew) {
+          api.get('/api/conversations')
+            .then((res) => { if (!cancelled) setConversations(res.data.conversations); })
+            .catch(() => {});
+        }
+      });
     };
 
     initializeInbox();
