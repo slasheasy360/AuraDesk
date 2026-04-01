@@ -138,11 +138,16 @@ async function processMessengerWebhook(payload, io) {
       }
 
       const senderId = event.sender.id;
-      if (senderId === pageId) continue; // Skip echo (messages sent by the page)
+      const recipientId = event.recipient.id;
+      const isEcho = event.message.is_echo || senderId === pageId;
+
+      // For echo (outbound) messages, the contact is the recipient; for inbound, it's the sender
+      const contactPsid = isEcho ? recipientId : senderId;
 
       console.log('[Messenger Webhook] Processing message', {
         pageId,
         senderId,
+        isEcho,
         messageId: event.message.mid,
         text: event.message.text?.substring(0, 50) || '[no text]',
       });
@@ -164,13 +169,13 @@ async function processMessengerWebhook(payload, io) {
         continue;
       }
 
-      // Fetch real user profile from Graph API
-      let contactName = `FB User ${senderId.slice(-4)}`;
+      // Fetch real user profile from Graph API (for the contact, not the page)
+      let contactName = `FB User ${contactPsid.slice(-4)}`;
       let avatarUrl = null;
       if (account.authToken) {
         try {
           const pageToken = decrypt(account.authToken.accessTokenEncrypted);
-          const profileRes = await axios.get(`${GRAPH_API}/${senderId}`, {
+          const profileRes = await axios.get(`${GRAPH_API}/${contactPsid}`, {
             params: { fields: 'first_name,last_name,profile_pic', access_token: pageToken },
           });
           const profile = profileRes.data;
@@ -183,20 +188,20 @@ async function processMessengerWebhook(payload, io) {
         }
       }
 
-      // Upsert contact with real name
+      // Upsert contact with real name (always keyed by the external user's PSID)
       const contact = await prisma.contact.upsert({
         where: {
           userId_platform_platformUserId: {
             userId: account.userId,
             platform: 'facebook',
-            platformUserId: senderId,
+            platformUserId: contactPsid,
           },
         },
         update: { name: contactName, avatarUrl },
         create: {
           userId: account.userId,
           platform: 'facebook',
-          platformUserId: senderId,
+          platformUserId: contactPsid,
           name: contactName,
           avatarUrl,
         },
@@ -248,12 +253,12 @@ async function processMessengerWebhook(payload, io) {
         continue;
       }
 
-      // Upsert conversation WITHOUT incrementing unread (increment after message is confirmed new)
+      // Upsert conversation — always keyed by the external contact's PSID
       const conversation = await prisma.conversation.upsert({
         where: {
           connectedAccountId_platformConversationId: {
             connectedAccountId: account.id,
-            platformConversationId: senderId,
+            platformConversationId: contactPsid,
           },
         },
         update: {
@@ -261,37 +266,42 @@ async function processMessengerWebhook(payload, io) {
         },
         create: {
           connectedAccountId: account.id,
-          platformConversationId: senderId,
+          platformConversationId: contactPsid,
           contactId: contact.id,
           lastMessageAt: new Date(),
           unreadCount: 0,
         },
       });
 
-      // Create message with attachments
+      // Create message with correct direction
       const message = await prisma.message.create({
         data: {
           conversationId: conversation.id,
           platformMessageId: event.message.mid,
-          direction: 'inbound',
-          sender: contact.name,
+          direction: isEcho ? 'outbound' : 'inbound',
+          sender: isEcho ? (account.displayName || 'You') : contact.name,
           content: event.message.text || (incomingAttachments.length > 0 ? `[${incomingAttachments[0].type || 'Media'}]` : ''),
           contentType,
           attachments: incomingAttachments.length > 0 ? incomingAttachments : undefined,
-          status: 'delivered',
+          status: isEcho ? 'sent' : 'delivered',
           rawPayload: event,
         },
       });
 
-      // Increment unread count AFTER message is confirmed new
-      const updatedConversation = await prisma.conversation.update({
-        where: { id: conversation.id },
-        data: { unreadCount: { increment: 1 } },
-      });
+      // Increment unread count only for inbound messages
+      let currentUnreadCount = conversation.unreadCount || 0;
+      if (!isEcho) {
+        const updatedConversation = await prisma.conversation.update({
+          where: { id: conversation.id },
+          data: { unreadCount: { increment: 1 } },
+        });
+        currentUnreadCount = updatedConversation.unreadCount;
+      }
 
       console.log('[Messenger Webhook] ✓ Message saved', {
         messageId: message.id,
         conversationId: conversation.id,
+        direction: isEcho ? 'outbound' : 'inbound',
         userId: account.userId,
       });
 
@@ -305,7 +315,7 @@ async function processMessengerWebhook(payload, io) {
       io.to(`user:${account.userId}`).emit('conversation_update', {
         conversationId: conversation.id,
         lastMessageAt: new Date(),
-        unreadCount: updatedConversation.unreadCount,
+        unreadCount: currentUnreadCount,
       });
     }
   }
@@ -324,15 +334,10 @@ async function processInstagramWebhook(payload, io) {
       const senderId = event.sender.id;
       const recipientId = event.recipient.id;
 
-      console.log('[Instagram Webhook] Processing message', {
-        senderId,
-        recipientId,
-        messageId: event.message.mid,
-        text: event.message.text?.substring(0, 50) || '[no text]',
-      });
+      // Determine if this is an echo (outbound message sent from the platform)
+      let isEcho = Boolean(event.message.is_echo);
 
       // Find connected Instagram account — try recipientId first (inbound), then senderId (echo/outbound)
-      // Prefer most recently connected account with a valid auth token
       let account = await prisma.connectedAccount.findFirst({
         where: {
           platform: 'instagram',
@@ -357,22 +362,32 @@ async function processInstagramWebhook(payload, io) {
           orderBy: { createdAt: 'desc' },
         });
         if (account) {
-          // This is an echo of our own outbound message — skip it
-          console.log('[Instagram Webhook] Skipping echo/outbound message from our account');
+          isEcho = true; // Sender matches our account — this is outbound
+        } else {
+          console.warn('[Instagram Webhook] No connected account for recipientId:', recipientId, 'or senderId:', senderId);
           continue;
         }
-        console.warn('[Instagram Webhook] No connected account for recipientId:', recipientId, 'or senderId:', senderId);
-        continue;
       }
 
-      // Fetch real Instagram username via Graph API
-      let contactName = `IG User ${senderId.slice(-4)}`;
+      // For echo (outbound), the contact is the recipient; for inbound, it's the sender
+      const contactIgId = isEcho ? recipientId : senderId;
+
+      console.log('[Instagram Webhook] Processing message', {
+        senderId,
+        recipientId,
+        isEcho,
+        messageId: event.message.mid,
+        text: event.message.text?.substring(0, 50) || '[no text]',
+      });
+
+      // Fetch real Instagram username via Graph API (for the contact, not our account)
+      let contactName = `IG User ${contactIgId.slice(-4)}`;
       let igUsername = null;
       let avatarUrl = null;
       if (account.authToken) {
         try {
           const pageToken = decrypt(account.authToken.accessTokenEncrypted);
-          const profileRes = await axios.get(`${GRAPH_API}/${senderId}`, {
+          const profileRes = await axios.get(`${GRAPH_API}/${contactIgId}`, {
             params: { fields: 'name,username,profile_pic', access_token: pageToken },
           });
           const profile = profileRes.data;
@@ -384,20 +399,20 @@ async function processInstagramWebhook(payload, io) {
         }
       }
 
-      // Upsert contact with real username
+      // Upsert contact — always keyed by the external user's IG ID
       const contact = await prisma.contact.upsert({
         where: {
           userId_platform_platformUserId: {
             userId: account.userId,
             platform: 'instagram',
-            platformUserId: senderId,
+            platformUserId: contactIgId,
           },
         },
         update: { name: contactName, username: igUsername, avatarUrl },
         create: {
           userId: account.userId,
           platform: 'instagram',
-          platformUserId: senderId,
+          platformUserId: contactIgId,
           name: contactName,
           username: igUsername,
           avatarUrl,
@@ -450,12 +465,12 @@ async function processInstagramWebhook(payload, io) {
         continue;
       }
 
-      // Upsert conversation WITHOUT incrementing unread (increment after message is confirmed new)
+      // Upsert conversation — always keyed by the external contact's IG ID
       const conversation = await prisma.conversation.upsert({
         where: {
           connectedAccountId_platformConversationId: {
             connectedAccountId: account.id,
-            platformConversationId: senderId,
+            platformConversationId: contactIgId,
           },
         },
         update: {
@@ -463,37 +478,42 @@ async function processInstagramWebhook(payload, io) {
         },
         create: {
           connectedAccountId: account.id,
-          platformConversationId: senderId,
+          platformConversationId: contactIgId,
           contactId: contact.id,
           lastMessageAt: new Date(),
           unreadCount: 0,
         },
       });
 
-      // Create message with attachments
+      // Create message with correct direction
       const message = await prisma.message.create({
         data: {
           conversationId: conversation.id,
           platformMessageId: event.message.mid,
-          direction: 'inbound',
-          sender: contact.name,
+          direction: isEcho ? 'outbound' : 'inbound',
+          sender: isEcho ? (account.displayName || 'You') : contact.name,
           content: event.message.text || (igAttachments.length > 0 ? `[${igAttachments[0].type || 'Media'}]` : ''),
           contentType: igContentType,
           attachments: igAttachments.length > 0 ? igAttachments : undefined,
-          status: 'delivered',
+          status: isEcho ? 'sent' : 'delivered',
           rawPayload: event,
         },
       });
 
-      // Increment unread count AFTER message is confirmed new
-      const updatedConversation = await prisma.conversation.update({
-        where: { id: conversation.id },
-        data: { unreadCount: { increment: 1 } },
-      });
+      // Increment unread count only for inbound messages
+      let igUnreadCount = conversation.unreadCount || 0;
+      if (!isEcho) {
+        const updatedConversation = await prisma.conversation.update({
+          where: { id: conversation.id },
+          data: { unreadCount: { increment: 1 } },
+        });
+        igUnreadCount = updatedConversation.unreadCount;
+      }
 
       console.log('[Instagram Webhook] ✓ Message saved', {
         messageId: message.id,
         conversationId: conversation.id,
+        direction: isEcho ? 'outbound' : 'inbound',
       });
 
       io.to(`user:${account.userId}`).emit('new_message', {
@@ -505,7 +525,7 @@ async function processInstagramWebhook(payload, io) {
       io.to(`user:${account.userId}`).emit('conversation_update', {
         conversationId: conversation.id,
         lastMessageAt: new Date(),
-        unreadCount: updatedConversation.unreadCount,
+        unreadCount: igUnreadCount,
       });
     }
   }

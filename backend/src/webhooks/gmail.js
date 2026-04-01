@@ -4,20 +4,24 @@ import { processGmailHistory } from '../services/gmail.pubsub.js';
 
 const router = Router();
 
+// ── Pub/Sub message deduplication ──────────────────────────────────────────
+// Google Pub/Sub may deliver the same notification more than once.
+// Track recently seen Pub/Sub messageIds in memory to skip duplicates.
+const recentPubsubIds = new Map(); // messageId → timestamp
+const DEDUP_TTL_MS = 10 * 60 * 1000; // 10 minutes
+
+// Periodically prune expired entries (every 5 minutes)
+setInterval(() => {
+  const now = Date.now();
+  for (const [id, ts] of recentPubsubIds) {
+    if (now - ts > DEDUP_TTL_MS) recentPubsubIds.delete(id);
+  }
+}, 5 * 60 * 1000);
+
 /**
  * POST /webhooks/gmail
  *
  * Receives Google Pub/Sub push notifications when new Gmail messages arrive.
- * Pub/Sub sends a JSON body with:
- * {
- *   "message": {
- *     "data": "<base64-encoded JSON: { emailAddress, historyId }>",
- *     "messageId": "...",
- *     "publishTime": "..."
- *   },
- *   "subscription": "..."
- * }
- *
  * MUST respond 200 quickly to avoid Pub/Sub retries.
  */
 router.post('/', async (req, res) => {
@@ -28,14 +32,25 @@ router.post('/', async (req, res) => {
     const rawBody = req.body;
     const payload = JSON.parse(rawBody.toString());
 
+    // ── Deduplicate Pub/Sub deliveries ──
+    const pubsubMessageId = payload.message?.messageId;
+    if (pubsubMessageId) {
+      if (recentPubsubIds.has(pubsubMessageId)) {
+        console.log(`[Gmail Webhook] Duplicate Pub/Sub messageId=${pubsubMessageId}, skipping`);
+        return;
+      }
+      recentPubsubIds.set(pubsubMessageId, Date.now());
+    }
+
     // Log the webhook event
-    await prisma.webhookEventLog.create({
+    const logEntry = await prisma.webhookEventLog.create({
       data: {
         platform: 'gmail',
         payload,
         processed: false,
       },
     });
+    console.log(`[Gmail Webhook] Event logged id=${logEntry.id}, pubsubMsgId=${pubsubMessageId || 'none'}`);
 
     // Extract Pub/Sub message data
     const pubsubMessage = payload.message;
@@ -74,9 +89,36 @@ router.post('/', async (req, res) => {
       return;
     }
 
-    // Process new messages via History API
+    // Process new messages via History API with retry for transient failures
     const io = req.app.get('io');
-    await processGmailHistory(account, io);
+    let lastErr;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        await processGmailHistory(account, io);
+        // Mark webhook event as processed
+        await prisma.webhookEventLog.update({
+          where: { id: logEntry.id },
+          data: { processed: true },
+        });
+        console.log(`[Gmail Webhook] Successfully processed for ${emailAddress} (attempt ${attempt})`);
+        return;
+      } catch (err) {
+        lastErr = err;
+        // Don't retry on 404 (expired historyId) — processGmailHistory handles that internally
+        if (err?.response?.status === 404 || err?.code === 404) break;
+        if (attempt < 3) {
+          console.warn(`[Gmail Webhook] Attempt ${attempt} failed for ${emailAddress}, retrying in ${attempt}s:`, err.message);
+          await new Promise((r) => setTimeout(r, attempt * 1000));
+        }
+      }
+    }
+
+    // All retries failed — log the error
+    console.error(`[Gmail Webhook] Processing failed for ${emailAddress} after retries:`, lastErr);
+    await prisma.webhookEventLog.update({
+      where: { id: logEntry.id },
+      data: { processed: false, error: lastErr?.message || 'Unknown error' },
+    });
   } catch (err) {
     console.error('[Gmail Webhook] Processing error:', err);
   }

@@ -295,7 +295,7 @@ export async function startWatch(connectedAccountId) {
     userId: 'me',
     requestBody: {
       topicName,
-      labelIds: ['INBOX'],
+      labelIds: ['INBOX', 'SENT'],
     },
   });
 
@@ -347,7 +347,6 @@ export async function fetchHistoryMessages(connectedAccountId, startHistoryId) {
     userId: 'me',
     startHistoryId,
     historyTypes: ['messageAdded'],
-    labelId: 'INBOX',
   });
 
   const histories = historyRes.data.history || [];

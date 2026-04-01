@@ -15,6 +15,9 @@ export async function processGmailHistory(account, io) {
     return;
   }
 
+  const t0 = Date.now();
+  console.log(`[Gmail PubSub] Fetching history for ${account.platformAccountId} since historyId=${startHistoryId}`);
+
   try {
     const { messages, newHistoryId } = await gmailApi.fetchHistoryMessages(
       account.id,
@@ -27,30 +30,38 @@ export async function processGmailHistory(account, io) {
         where: { id: account.id },
         data: { gmailHistoryId: String(newHistoryId) },
       });
+      console.log(`[Gmail PubSub] historyId advanced ${startHistoryId} → ${newHistoryId} for ${account.platformAccountId}`);
     }
 
     if (messages.length === 0) {
-      console.log(`[Gmail PubSub] No new messages for ${account.platformAccountId}`);
+      console.log(`[Gmail PubSub] No new messages for ${account.platformAccountId} (${Date.now() - t0}ms)`);
       return;
     }
 
     console.log(`[Gmail PubSub] Processing ${messages.length} new message(s) for ${account.platformAccountId}`);
 
     const accountEmail = (account.platformAccountId || '').toLowerCase();
+    let saved = 0;
+    let skipped = 0;
 
     for (const msg of messages) {
       try {
-        await saveGmailMessage(msg, account, accountEmail, io);
+        const result = await saveGmailMessage(msg, account, accountEmail, io);
+        if (result === 'duplicate' || result === 'skipped') skipped++;
+        else saved++;
       } catch (err) {
         console.error(`[Gmail PubSub] Failed to save message ${msg.id}:`, err.message);
       }
     }
+
+    console.log(`[Gmail PubSub] Done for ${account.platformAccountId}: ${saved} saved, ${skipped} skipped (${Date.now() - t0}ms)`);
   } catch (err) {
     // If historyId is too old, Gmail returns 404. Re-seed with a full sync.
     if (err?.response?.status === 404 || err?.code === 404) {
       console.warn(`[Gmail PubSub] HistoryId ${startHistoryId} expired for ${account.id}. Re-seeding watch.`);
       try {
         await gmailApi.startWatch(account.id);
+        console.log(`[Gmail PubSub] Watch re-seeded for ${account.id}`);
       } catch (watchErr) {
         console.error(`[Gmail PubSub] Re-seed watch failed:`, watchErr.message);
       }
@@ -68,7 +79,7 @@ async function saveGmailMessage(msg, account, accountEmail, io) {
   const msgTimestamp = Number(msg.internalDate);
   const connectedAt = new Date(account.createdAt).getTime();
   if (Number.isFinite(msgTimestamp) && msgTimestamp < connectedAt) {
-    return;
+    return 'skipped';
   }
 
   const headers = msg.payload?.headers || [];
@@ -140,7 +151,10 @@ async function saveGmailMessage(msg, account, accountEmail, io) {
     },
   });
 
-  if (existing) return; // Already processed
+  if (existing) {
+    console.log(`[Gmail PubSub] Duplicate message ${msg.id} already in DB, skipping`);
+    return 'duplicate';
+  }
 
   // Extract and clean body
   const rawBody = gmailApi.getEmailBody(msg.payload || {});

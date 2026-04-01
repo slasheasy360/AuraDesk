@@ -83,7 +83,6 @@ export default function InboxPage() {
 
   const messagesEndRef = useRef(null);
   const replyBoxRef = useRef(null);
-  const pollingRef = useRef(null);
   const igPollingRef = useRef(null);
   const conversationIdRef = useRef(conversationId);
   const fileInputRef = useRef(null);
@@ -133,18 +132,8 @@ export default function InboxPage() {
 
     initializeInbox();
 
-    // Set up polling intervals (sync + refresh conversations)
-    pollingRef.current = setInterval(async () => {
-      try {
-        const res = await api.get('/api/messages/gmail/sync');
-        if ((res.data?.newMessages || 0) > 0) {
-          fetchConversations();
-          const activeId = conversationIdRef.current;
-          if (activeId) fetchMessages(activeId);
-        }
-      } catch { /* silent */ }
-    }, 60000);
-
+    // Gmail uses Pub/Sub push notifications (no polling needed).
+    // Instagram still uses polling since it lacks push support.
     igPollingRef.current = setInterval(async () => {
       try {
         const res = await api.get('/api/messages/instagram/sync');
@@ -158,7 +147,6 @@ export default function InboxPage() {
 
     return () => {
       cancelled = true;
-      if (pollingRef.current) clearInterval(pollingRef.current);
       if (igPollingRef.current) clearInterval(igPollingRef.current);
     };
   }, []);
