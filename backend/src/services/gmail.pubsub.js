@@ -56,12 +56,17 @@ export async function processGmailHistory(account, io) {
 
     console.log(`[Gmail PubSub] Done for ${account.platformAccountId}: ${saved} saved, ${skipped} skipped (${Date.now() - t0}ms)`);
   } catch (err) {
-    // If historyId is too old, Gmail returns 404. Re-seed with a full sync.
+    // If historyId is too old, Gmail returns 404. Clear the expired historyId
+    // and re-register the watch so startWatch assigns a fresh one.
     if (err?.response?.status === 404 || err?.code === 404) {
-      console.warn(`[Gmail PubSub] HistoryId ${startHistoryId} expired for ${account.id}. Re-seeding watch.`);
+      console.warn(`[Gmail PubSub] HistoryId ${startHistoryId} expired for ${account.id}. Clearing and re-seeding watch.`);
       try {
+        await prisma.connectedAccount.update({
+          where: { id: account.id },
+          data: { gmailHistoryId: null },
+        });
         await gmailApi.startWatch(account.id);
-        console.log(`[Gmail PubSub] Watch re-seeded for ${account.id}`);
+        console.log(`[Gmail PubSub] Watch re-seeded with fresh historyId for ${account.id}`);
       } catch (watchErr) {
         console.error(`[Gmail PubSub] Re-seed watch failed:`, watchErr.message);
       }
