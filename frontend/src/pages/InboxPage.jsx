@@ -170,8 +170,19 @@ export default function InboxPage() {
       // Clean up previous listeners if any
       if (cleanupFn) cleanupFn();
 
+      // Track whether this is a REconnect (not initial connect).
+      // The initial connect doesn't need a full refetch — initializeInbox handles that.
+      let hasConnectedOnce = socket.connected; // true if already connected when we set up listeners
+
       const handleReconnect = () => {
-        // After reconnection, fetch any messages missed while offline
+        if (!hasConnectedOnce) {
+          // First connect — skip refetch, initializeInbox already handles it
+          hasConnectedOnce = true;
+          console.log('[Socket] Initial connect — listeners active');
+          return;
+        }
+        // Genuine reconnect — fetch anything missed while offline
+        console.log('[Socket] Reconnected — fetching missed messages');
         fetchConversations();
         const activeId = conversationIdRef.current;
         if (activeId) fetchMessages(activeId, true);
@@ -182,9 +193,11 @@ export default function InboxPage() {
     const handleNewMessage = (data) => {
       const msgId = data.message?.id;
       const convId = data.conversationId;
+      console.log(`[Socket] new_message received: msgId=${msgId}, convId=${convId}, activeConv=${conversationIdRef.current}`);
 
       // ── DEDUP: skip if we already have this message ──
       if (msgId && knownMessageIds.current.has(msgId)) {
+        console.log(`[Socket] Dedup: skipping known msgId=${msgId}`);
         return;
       }
       if (msgId) knownMessageIds.current.add(msgId);

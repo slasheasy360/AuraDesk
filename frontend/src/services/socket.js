@@ -30,13 +30,17 @@ export function connectSocket(userId) {
   });
 
   socket.on('connect', () => {
-    console.log('Socket connected:', socket.id);
+    console.log(`[Socket] Connected: id=${socket.id}, transport=${socket.io.engine.transport.name}, url=${SOCKET_URL}`);
     // Re-register on every connect (including reconnects)
     socket.emit('register', currentUserId);
   });
 
+  socket.on('connect_error', (err) => {
+    console.error(`[Socket] Connection error: ${err.message}`, err.description || '');
+  });
+
   socket.on('disconnect', (reason) => {
-    console.log('Socket disconnected:', reason);
+    console.log(`[Socket] Disconnected: reason=${reason}`);
   });
 
   return socket;

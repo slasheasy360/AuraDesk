@@ -28,30 +28,42 @@ import { renewExpiringWatches, reRegisterAllWatches } from './services/gmail.js'
 const app = express();
 const server = http.createServer(app);
 
+// ── CORS origin list ────────────────────────────────────────────────────────
+// Build an array of allowed origins from FRONTEND_URL (comma-separated) so
+// both local dev and production frontends can connect to Socket.io and the API.
+// Example: FRONTEND_URL=http://localhost:5173,https://auradesk.vercel.app
+const allowedOrigins = (process.env.FRONTEND_URL || 'http://localhost:5173')
+  .split(',')
+  .map((o) => o.trim())
+  .filter(Boolean);
+
+console.log(`[Startup] Allowed CORS origins: ${allowedOrigins.join(', ')}`);
+
 // Socket.io setup
 const io = new Server(server, {
   cors: {
-    origin: process.env.FRONTEND_URL || 'http://localhost:5173',
+    origin: allowedOrigins,
     methods: ['GET', 'POST'],
+    credentials: true,
   },
+  // Prefer WebSocket, fall back to polling only if needed
+  transports: ['websocket', 'polling'],
 });
 
 // Store io on app for access in routes
 app.set('io', io);
 
-// User socket tracking
-const userSockets = new Map();
-
 io.on('connection', (socket) => {
-  console.log(`Socket connected: ${socket.id}`);
+  console.log(`[Socket.io] Connected: ${socket.id}, transport=${socket.conn.transport.name}`);
 
   socket.on('register', (userId) => {
+    if (!userId) return;
     socket.join(`user:${userId}`);
-    console.log(`User ${userId} registered on socket ${socket.id}`);
+    console.log(`[Socket.io] User ${userId} joined room on socket ${socket.id}`);
   });
 
-  socket.on('disconnect', () => {
-    console.log(`Socket disconnected: ${socket.id}`);
+  socket.on('disconnect', (reason) => {
+    console.log(`[Socket.io] Disconnected: ${socket.id}, reason=${reason}`);
   });
 });
 
@@ -59,7 +71,7 @@ io.on('connection', (socket) => {
 app.use('/webhooks', express.raw({ type: 'application/json' }));
 
 // Standard middleware
-app.use(cors({ origin: process.env.FRONTEND_URL || 'http://localhost:5173', credentials: true }));
+app.use(cors({ origin: allowedOrigins, credentials: true }));
 app.use(express.json());
 
 // Auth routes (no /api prefix — OAuth redirects)
