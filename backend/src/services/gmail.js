@@ -159,7 +159,6 @@ export async function fetchMessages(connectedAccountId, maxResults = 20) {
   const res = await gmail.users.messages.list({
     userId: 'me',
     maxResults,
-    labelIds: ['INBOX'],
   });
 
   if (!res.data.messages) return [];
@@ -296,27 +295,35 @@ export async function startWatch(connectedAccountId) {
     requestBody: {
       topicName,
       labelIds: ['INBOX', 'SENT'],
+      labelFilterBehavior: 'include',
     },
   });
 
   const { historyId, expiration } = res.data;
+  const expirationDate = new Date(Number(expiration));
 
-  // Persist to DB
+  // Persist to DB — only set gmailHistoryId if it's null (first registration).
+  // On re-registration, preserve the existing historyId to avoid skipping
+  // messages that arrived between the old and new historyId.
   const account = await prisma.connectedAccount.findUnique({
     where: { id: connectedAccountId },
   });
   if (account) {
+    const updateData = { gmailWatchExpiration: expirationDate };
+    if (!account.gmailHistoryId) {
+      updateData.gmailHistoryId = String(historyId);
+      console.log(`[Gmail Watch] Initial historyId set to ${historyId} for account ${connectedAccountId}`);
+    } else {
+      console.log(`[Gmail Watch] Preserved existing historyId=${account.gmailHistoryId} (watch returned ${historyId}) for account ${connectedAccountId}`);
+    }
     await prisma.connectedAccount.update({
       where: { id: connectedAccountId },
-      data: {
-        gmailHistoryId: String(historyId),
-        gmailWatchExpiration: new Date(Number(expiration)),
-      },
+      data: updateData,
     });
   }
 
-  console.log(`[Gmail Watch] Started for account ${connectedAccountId}, historyId=${historyId}, expires=${new Date(Number(expiration)).toISOString()}`);
-  return { historyId: String(historyId), expiration: new Date(Number(expiration)) };
+  console.log(`[Gmail Watch] Started for account ${connectedAccountId}, expires=${expirationDate.toISOString()}, labelFilter=include [INBOX,SENT]`);
+  return { historyId: String(historyId), expiration: expirationDate };
 }
 
 /**
@@ -339,30 +346,50 @@ export async function stopWatch(connectedAccountId) {
 /**
  * Fetch new messages since a given historyId using the History API.
  * Returns an array of full message objects.
+ * Handles pagination to ensure no messages are missed.
  */
 export async function fetchHistoryMessages(connectedAccountId, startHistoryId) {
   const gmail = await getGmailClient(connectedAccountId);
 
-  const historyRes = await gmail.users.history.list({
-    userId: 'me',
-    startHistoryId,
-    historyTypes: ['messageAdded'],
-  });
-
-  const histories = historyRes.data.history || [];
-  const newHistoryId = historyRes.data.historyId;
-
-  // Collect unique message IDs from messagesAdded events
+  // Paginate through all history records since startHistoryId
   const messageIds = new Set();
-  for (const record of histories) {
-    for (const added of record.messagesAdded || []) {
-      messageIds.add(added.message.id);
+  let pageToken = undefined;
+  let newHistoryId = null;
+  let pageCount = 0;
+
+  do {
+    const historyRes = await gmail.users.history.list({
+      userId: 'me',
+      startHistoryId,
+      historyTypes: ['messageAdded'],
+      maxResults: 100,
+      ...(pageToken ? { pageToken } : {}),
+    });
+
+    const histories = historyRes.data.history || [];
+    newHistoryId = historyRes.data.historyId;
+    pageToken = historyRes.data.nextPageToken;
+    pageCount++;
+
+    for (const record of histories) {
+      for (const added of record.messagesAdded || []) {
+        const msgId = added.message.id;
+        const labels = added.message.labelIds || [];
+        messageIds.add(msgId);
+        console.log(`[Gmail History] Found message ${msgId}, labels=[${labels.join(',')}]`);
+      }
     }
+  } while (pageToken);
+
+  if (pageCount > 1) {
+    console.log(`[Gmail History] Paginated through ${pageCount} pages of history`);
   }
 
   if (messageIds.size === 0) {
     return { messages: [], newHistoryId };
   }
+
+  console.log(`[Gmail History] Fetching full details for ${messageIds.size} message(s)`);
 
   // Fetch full message details
   const messages = await Promise.all(
@@ -373,8 +400,12 @@ export async function fetchHistoryMessages(connectedAccountId, startHistoryId) {
           id,
           format: 'full',
         });
+        const labels = msgRes.data.labelIds || [];
+        const from = (msgRes.data.payload?.headers || []).find(h => h.name === 'From')?.value || 'unknown';
+        console.log(`[Gmail History] Message ${id}: labels=[${labels.join(',')}], from=${from}`);
         return msgRes.data;
-      } catch {
+      } catch (err) {
+        console.warn(`[Gmail History] Could not fetch message ${id}: ${err.message}`);
         return null; // Message may have been deleted
       }
     })

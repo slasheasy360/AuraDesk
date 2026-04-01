@@ -87,9 +87,12 @@ async function saveGmailMessage(msg, account, accountEmail, io) {
   const toHeader = extractHeader(headers, 'To');
   const subject = extractHeader(headers, 'Subject') || '(No Subject)';
   const threadId = msg.threadId || msg.id;
+  const labelIds = msg.labelIds || [];
 
   const { name: senderName, email: senderEmail } = parseEmailAddress(fromHeader);
   const isOutbound = senderEmail === accountEmail;
+
+  console.log(`[Gmail PubSub] Message ${msg.id}: from="${fromHeader}", to="${toHeader}", labels=[${labelIds.join(',')}], senderEmail="${senderEmail}", accountEmail="${accountEmail}", isOutbound=${isOutbound}, threadId=${threadId}`);
 
   // Determine the "other party"
   let contactName = senderName;

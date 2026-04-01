@@ -89,6 +89,8 @@ router.post('/', async (req, res) => {
       return;
     }
 
+    console.log(`[Gmail Webhook] Processing: account=${account.id}, storedHistoryId=${account.gmailHistoryId}, notificationHistoryId=${historyId}`);
+
     // Process new messages via History API with retry for transient failures
     const io = req.app.get('io');
     let lastErr;
