@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(node --check src/services/gmail.pubsub.js)",
+      "Bash(node --check src/services/gmail.js)",
+      "Bash(node --check src/webhooks/gmail.js)"
+    ]
+  }
+}

@@ -1,17 +1,57 @@
 import prisma from '../utils/prisma.js';
 import * as gmailApi from './gmail.js';
 
+// ── Per-account mutex ────────────────────────────────────────────────────────
+// Prevents concurrent history processing for the same account, which would
+// cause both calls to read the same startHistoryId and produce duplicates
+// or advance the cursor incorrectly.
+const accountLocks = new Map(); // accountId → Promise
+
+function withAccountLock(accountId, fn) {
+  const prev = accountLocks.get(accountId) || Promise.resolve();
+  const next = prev.then(fn, fn); // run fn after previous completes (even on error)
+  accountLocks.set(accountId, next);
+  // Clean up reference when the chain settles
+  next.finally(() => {
+    if (accountLocks.get(accountId) === next) accountLocks.delete(accountId);
+  });
+  return next;
+}
+
 /**
  * Process a Gmail Pub/Sub notification by fetching new messages via the History API
  * and saving them to the database + emitting socket events.
  *
- * @param {object} account - ConnectedAccount with user relation populated
+ * Uses a per-account mutex to serialize concurrent Pub/Sub deliveries.
+ * Re-reads the account from DB each time to get the freshest historyId.
+ *
+ * @param {object} account - ConnectedAccount (used for id and platformAccountId)
  * @param {object} io - Socket.io server instance
  */
 export async function processGmailHistory(account, io) {
+  return withAccountLock(account.id, () => _processGmailHistoryInner(account.id, io));
+}
+
+// Maximum number of times to re-check history when Pub/Sub fires before
+// the History API reflects the change (common Gmail race condition).
+const EMPTY_HISTORY_RETRIES = 2;
+const EMPTY_HISTORY_DELAY_MS = 1500; // 1.5 seconds between retries
+
+async function _processGmailHistoryInner(accountId, io) {
+  // Always read fresh account state from DB to get latest historyId
+  const account = await prisma.connectedAccount.findUnique({
+    where: { id: accountId },
+    include: { user: true },
+  });
+
+  if (!account) {
+    console.warn(`[Gmail PubSub] Account ${accountId} not found`);
+    return;
+  }
+
   const startHistoryId = account.gmailHistoryId;
   if (!startHistoryId) {
-    console.warn(`[Gmail PubSub] No historyId for account ${account.id}`);
+    console.warn(`[Gmail PubSub] No historyId for account ${accountId}`);
     return;
   }
 
@@ -19,22 +59,36 @@ export async function processGmailHistory(account, io) {
   console.log(`[Gmail PubSub] Fetching history for ${account.platformAccountId} since historyId=${startHistoryId}`);
 
   try {
-    const { messages, newHistoryId } = await gmailApi.fetchHistoryMessages(
-      account.id,
-      startHistoryId
-    );
+    let messages;
+    let newHistoryId;
+    let attempt = 0;
 
-    // Update historyId to the latest
+    // Retry loop: Pub/Sub notifications can arrive before the History API
+    // reflects the change. If we get 0 messages, wait briefly and retry.
+    do {
+      if (attempt > 0) {
+        console.log(`[Gmail PubSub] Empty history retry ${attempt}/${EMPTY_HISTORY_RETRIES} for ${account.platformAccountId} (waiting ${EMPTY_HISTORY_DELAY_MS}ms)`);
+        await new Promise((r) => setTimeout(r, EMPTY_HISTORY_DELAY_MS));
+      }
+
+      const result = await gmailApi.fetchHistoryMessages(accountId, startHistoryId);
+      messages = result.messages;
+      newHistoryId = result.newHistoryId;
+      attempt++;
+    } while (messages.length === 0 && attempt <= EMPTY_HISTORY_RETRIES);
+
+    // Update historyId to the latest — always advance even if no messages,
+    // so we don't re-scan the same range on the next notification.
     if (newHistoryId) {
       await prisma.connectedAccount.update({
-        where: { id: account.id },
+        where: { id: accountId },
         data: { gmailHistoryId: String(newHistoryId) },
       });
       console.log(`[Gmail PubSub] historyId advanced ${startHistoryId} → ${newHistoryId} for ${account.platformAccountId}`);
     }
 
     if (messages.length === 0) {
-      console.log(`[Gmail PubSub] No new messages for ${account.platformAccountId} (${Date.now() - t0}ms)`);
+      console.log(`[Gmail PubSub] No new messages for ${account.platformAccountId} after ${attempt} attempt(s) (${Date.now() - t0}ms)`);
       return;
     }
 
@@ -54,19 +108,20 @@ export async function processGmailHistory(account, io) {
       }
     }
 
-    console.log(`[Gmail PubSub] Done for ${account.platformAccountId}: ${saved} saved, ${skipped} skipped (${Date.now() - t0}ms)`);
+    const latency = Date.now() - t0;
+    console.log(`[Gmail PubSub] Done for ${account.platformAccountId}: ${saved} saved, ${skipped} skipped (${latency}ms, ${attempt} attempt(s))`);
   } catch (err) {
     // If historyId is too old, Gmail returns 404. Clear the expired historyId
     // and re-register the watch so startWatch assigns a fresh one.
     if (err?.response?.status === 404 || err?.code === 404) {
-      console.warn(`[Gmail PubSub] HistoryId ${startHistoryId} expired for ${account.id}. Clearing and re-seeding watch.`);
+      console.warn(`[Gmail PubSub] HistoryId ${startHistoryId} expired for ${accountId}. Clearing and re-seeding watch.`);
       try {
         await prisma.connectedAccount.update({
-          where: { id: account.id },
+          where: { id: accountId },
           data: { gmailHistoryId: null },
         });
-        await gmailApi.startWatch(account.id);
-        console.log(`[Gmail PubSub] Watch re-seeded with fresh historyId for ${account.id}`);
+        await gmailApi.startWatch(accountId);
+        console.log(`[Gmail PubSub] Watch re-seeded with fresh historyId for ${accountId}`);
       } catch (watchErr) {
         console.error(`[Gmail PubSub] Re-seed watch failed:`, watchErr.message);
       }

@@ -351,7 +351,10 @@ export async function stopWatch(connectedAccountId) {
 export async function fetchHistoryMessages(connectedAccountId, startHistoryId) {
   const gmail = await getGmailClient(connectedAccountId);
 
-  // Paginate through all history records since startHistoryId
+  // Paginate through all history records since startHistoryId.
+  // Use BOTH messageAdded and labelAdded to catch:
+  //   - New inbound emails (messageAdded)
+  //   - Emails sent from phone/Gmail web (may appear as labelAdded with SENT label)
   const messageIds = new Set();
   let pageToken = undefined;
   let newHistoryId = null;
@@ -361,7 +364,7 @@ export async function fetchHistoryMessages(connectedAccountId, startHistoryId) {
     const historyRes = await gmail.users.history.list({
       userId: 'me',
       startHistoryId,
-      historyTypes: ['messageAdded'],
+      historyTypes: ['messageAdded', 'labelAdded'],
       maxResults: 100,
       ...(pageToken ? { pageToken } : {}),
     });
@@ -372,11 +375,24 @@ export async function fetchHistoryMessages(connectedAccountId, startHistoryId) {
     pageCount++;
 
     for (const record of histories) {
+      // Capture newly added messages (inbound + some outbound)
       for (const added of record.messagesAdded || []) {
         const msgId = added.message.id;
         const labels = added.message.labelIds || [];
         messageIds.add(msgId);
-        console.log(`[Gmail History] Found message ${msgId}, labels=[${labels.join(',')}]`);
+        console.log(`[Gmail History] messageAdded: ${msgId}, labels=[${labels.join(',')}]`);
+      }
+
+      // Capture label changes — emails sent from phone often show up as
+      // labelAdded (SENT/INBOX) rather than messageAdded
+      for (const labeled of record.labelsAdded || []) {
+        const addedLabels = labeled.labelIds || [];
+        const isRelevant = addedLabels.some((l) => ['SENT', 'INBOX'].includes(l));
+        if (isRelevant) {
+          const msgId = labeled.message.id;
+          messageIds.add(msgId);
+          console.log(`[Gmail History] labelAdded: ${msgId}, addedLabels=[${addedLabels.join(',')}]`);
+        }
       }
     }
   } while (pageToken);
@@ -391,7 +407,7 @@ export async function fetchHistoryMessages(connectedAccountId, startHistoryId) {
 
   console.log(`[Gmail History] Fetching full details for ${messageIds.size} message(s)`);
 
-  // Fetch full message details
+  // Fetch full message details in parallel
   const messages = await Promise.all(
     [...messageIds].map(async (id) => {
       try {

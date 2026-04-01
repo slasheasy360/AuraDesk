@@ -28,6 +28,7 @@ router.post('/', async (req, res) => {
   // Acknowledge immediately — Pub/Sub requires a fast 200
   res.sendStatus(200);
 
+  const t0 = Date.now();
   try {
     const rawBody = req.body;
     const payload = JSON.parse(rawBody.toString());
@@ -89,38 +90,26 @@ router.post('/', async (req, res) => {
       return;
     }
 
-    console.log(`[Gmail Webhook] Processing: account=${account.id}, storedHistoryId=${account.gmailHistoryId}, notificationHistoryId=${historyId}`);
+    console.log(`[Gmail Webhook] Processing: account=${account.id}, storedHistoryId=${account.gmailHistoryId}, notificationHistoryId=${historyId}, latencySinceReceived=${Date.now() - t0}ms`);
 
-    // Process new messages via History API with retry for transient failures
+    // Process new messages via History API.
+    // processGmailHistory handles: per-account mutex, fresh DB reads,
+    // empty-history retries, and 404 (expired historyId) recovery internally.
     const io = req.app.get('io');
-    let lastErr;
-    for (let attempt = 1; attempt <= 3; attempt++) {
-      try {
-        await processGmailHistory(account, io);
-        // Mark webhook event as processed
-        await prisma.webhookEventLog.update({
-          where: { id: logEntry.id },
-          data: { processed: true },
-        });
-        console.log(`[Gmail Webhook] Successfully processed for ${emailAddress} (attempt ${attempt})`);
-        return;
-      } catch (err) {
-        lastErr = err;
-        // Don't retry on 404 (expired historyId) — processGmailHistory handles that internally
-        if (err?.response?.status === 404 || err?.code === 404) break;
-        if (attempt < 3) {
-          console.warn(`[Gmail Webhook] Attempt ${attempt} failed for ${emailAddress}, retrying in ${attempt}s:`, err.message);
-          await new Promise((r) => setTimeout(r, attempt * 1000));
-        }
-      }
+    try {
+      await processGmailHistory(account, io);
+      await prisma.webhookEventLog.update({
+        where: { id: logEntry.id },
+        data: { processed: true },
+      });
+      console.log(`[Gmail Webhook] Successfully processed for ${emailAddress} (${Date.now() - t0}ms total)`);
+    } catch (err) {
+      console.error(`[Gmail Webhook] Processing failed for ${emailAddress} (${Date.now() - t0}ms):`, err.message);
+      await prisma.webhookEventLog.update({
+        where: { id: logEntry.id },
+        data: { processed: false, error: err?.message || 'Unknown error' },
+      });
     }
-
-    // All retries failed — log the error
-    console.error(`[Gmail Webhook] Processing failed for ${emailAddress} after retries:`, lastErr);
-    await prisma.webhookEventLog.update({
-      where: { id: logEntry.id },
-      data: { processed: false, error: lastErr?.message || 'Unknown error' },
-    });
   } catch (err) {
     console.error('[Gmail Webhook] Processing error:', err);
   }
