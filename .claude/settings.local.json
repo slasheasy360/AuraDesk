@@ -5,7 +5,8 @@
       "Bash(node --check src/services/gmail.js)",
       "Bash(node --check src/webhooks/gmail.js)",
       "Bash(npx prisma:*)",
-      "Bash(npx vite:*)"
+      "Bash(npx vite:*)",
+      "Bash(node --check src/index.js)"
     ]
   }
 }
