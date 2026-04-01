@@ -81,6 +81,13 @@ export default function InboxPage() {
   const showConversationSkeleton = useDeferredLoading(loadingConversations, 150);
   const showMessageSkeleton = useDeferredLoading(loadingMessages, 200);
 
+  // ── Time-ago ticker: force re-render every 60s so relative timestamps update ──
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const timer = setInterval(() => setTick((t) => t + 1), 60000);
+    return () => clearInterval(timer);
+  }, []);
+
   const messagesEndRef = useRef(null);
   const replyBoxRef = useRef(null);
   const igPollingRef = useRef(null);
@@ -207,7 +214,21 @@ export default function InboxPage() {
       // The conversation_update event will deliver the correct count from the DB.
       setConversations((prev) => {
         const exists = prev.some((c) => c.id === convId);
-        if (!exists) { fetchConversations(); return prev; }
+        if (!exists) {
+          // New conversation — create a placeholder so it appears instantly in the sidebar.
+          // fetchConversations() will replace it with full data from the DB.
+          console.log(`[Socket] New conversation ${convId} — adding placeholder`);
+          fetchConversations();
+          const placeholder = {
+            id: convId,
+            lastMessageAt: new Date().toISOString(),
+            unreadCount: data.message?.direction === 'inbound' ? 1 : 0,
+            messages: [{ content: data.message.content, direction: data.message.direction, sentAt: data.message.sentAt }],
+            contact: { name: data.message?.sender || 'New Contact' },
+            connectedAccount: { platform: data.platform || 'gmail' },
+          };
+          return [placeholder, ...prev];
+        }
         const updated = prev.map((c) =>
           c.id === convId
             ? {
@@ -631,6 +652,31 @@ export default function InboxPage() {
     setAttachments([]);
   };
 
+  // ── Socket connection status — tracks live/disconnected for UI indicator ──
+  const [socketConnected, setSocketConnected] = useState(() => {
+    const s = getSocket();
+    return s?.connected || false;
+  });
+  useEffect(() => {
+    const checkSocket = () => {
+      const s = getSocket();
+      if (!s) return;
+      setSocketConnected(s.connected);
+      const onConnect = () => setSocketConnected(true);
+      const onDisconnect = () => setSocketConnected(false);
+      s.on('connect', onConnect);
+      s.on('disconnect', onDisconnect);
+      return () => { s.off('connect', onConnect); s.off('disconnect', onDisconnect); };
+    };
+    const cleanup = checkSocket();
+    // If socket isn't ready yet, recheck in 1s
+    if (!cleanup) {
+      const timer = setTimeout(() => { checkSocket(); }, 1000);
+      return () => clearTimeout(timer);
+    }
+    return cleanup;
+  }, []);
+
   const platform = activeConversation?.connectedAccount?.platform;
   const isEmailPlatform = platform === 'gmail';
   const emailSubject = useMemo(
@@ -660,7 +706,13 @@ export default function InboxPage() {
       >
         <div className="px-4 py-4 border-b border-gray-200">
           <div className="flex items-center justify-between mb-3">
-            <h1 className="text-lg sm:text-xl font-bold text-gray-900">Smart Inbox</h1>
+            <div className="flex items-center gap-2">
+              <h1 className="text-lg sm:text-xl font-bold text-gray-900">Smart Inbox</h1>
+              <span
+                className={`w-2 h-2 rounded-full flex-shrink-0 ${socketConnected ? 'bg-green-500' : 'bg-red-400'}`}
+                title={socketConnected ? 'Live — real-time updates active' : 'Disconnected — updates may be delayed'}
+              />
+            </div>
           </div>
           <div className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
