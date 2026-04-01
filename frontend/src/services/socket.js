@@ -22,11 +22,17 @@ export function connectSocket(userId) {
   currentUserId = userId;
 
   socket = io(SOCKET_URL, {
-    transports: ['websocket', 'polling'],
+    // Start with polling (works through all proxies), then upgrade to websocket.
+    // This is more reliable on Render than starting with websocket directly,
+    // because the initial handshake via polling always succeeds.
+    transports: ['polling', 'websocket'],
+    upgrade: true,
     reconnection: true,
     reconnectionAttempts: Infinity,
     reconnectionDelay: 1000,
-    reconnectionDelayMax: 10000,
+    reconnectionDelayMax: 5000,
+    // Keep connection alive — Render kills idle connections after ~60-120s
+    withCredentials: true,
   });
 
   socket.on('connect', () => {

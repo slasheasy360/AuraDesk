@@ -40,14 +40,18 @@ const allowedOrigins = (process.env.FRONTEND_URL || 'http://localhost:5173')
 console.log(`[Startup] Allowed CORS origins: ${allowedOrigins.join(', ')}`);
 
 // Socket.io setup
+// Render's proxy kills idle connections after ~2 minutes.
+// Aggressive ping interval (25s) keeps the WebSocket alive.
 const io = new Server(server, {
   cors: {
     origin: allowedOrigins,
     methods: ['GET', 'POST'],
     credentials: true,
   },
-  // Prefer WebSocket, fall back to polling only if needed
   transports: ['websocket', 'polling'],
+  pingInterval: 25000,   // send ping every 25s (Render timeout is ~60-120s)
+  pingTimeout: 20000,    // wait 20s for pong before considering disconnected
+  connectTimeout: 10000, // 10s to establish connection
 });
 
 // Store io on app for access in routes
