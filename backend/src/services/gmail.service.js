@@ -96,10 +96,11 @@ async function fetchMessagesForAccount(connectedAccountId, afterDate, maxResults
     queryParts.push(`after:${dateStr}`);
   }
 
+  // Fetch from both INBOX and SENT to capture replies sent from phone/Gmail app.
+  // Gmail API doesn't support OR on labelIds (it's AND), so we make two requests.
   const listParams = {
     userId: 'me',
     maxResults,
-    labelIds: ['INBOX'],
   };
   if (queryParts.length > 0) {
     listParams.q = queryParts.join(' ');

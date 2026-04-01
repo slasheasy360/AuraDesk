@@ -23,7 +23,7 @@ import messageRoutes from './routes/messages.js';
 import accountRoutes from './routes/accounts.js';
 import metaWebhook from './webhooks/meta.js';
 import gmailWebhook from './webhooks/gmail.js';
-import { renewExpiringWatches } from './services/gmail.js';
+import { renewExpiringWatches, reRegisterAllWatches } from './services/gmail.js';
 
 const app = express();
 const server = http.createServer(app);
@@ -101,10 +101,11 @@ server.listen(PORT, () => {
     });
   }, SIX_HOURS);
 
-  // Also run once on startup (after a short delay to let DB connect)
+  // Re-register ALL Gmail watches on startup to ensure label config is current
+  // (e.g. after deploying changes to watched labels like adding SENT)
   setTimeout(() => {
-    renewExpiringWatches().catch((err) => {
-      console.error('[Startup] Gmail watch renewal failed:', err.message);
+    reRegisterAllWatches().catch((err) => {
+      console.error('[Startup] Gmail watch re-registration failed:', err.message);
     });
   }, 10000);
 });

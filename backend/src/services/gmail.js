@@ -410,6 +410,29 @@ export async function renewExpiringWatches() {
   }
 }
 
+/**
+ * Re-register watches for ALL active Gmail accounts.
+ * Call once on startup to ensure watch config (label filters) is up to date.
+ */
+export async function reRegisterAllWatches() {
+  const accounts = await prisma.connectedAccount.findMany({
+    where: {
+      platform: 'gmail',
+      status: 'active',
+      gmailHistoryId: { not: null },
+    },
+  });
+
+  console.log(`[Gmail Watch] Re-registering watches for ${accounts.length} active account(s)`);
+  for (const account of accounts) {
+    try {
+      await startWatch(account.id);
+    } catch (err) {
+      console.error(`[Gmail Watch] Re-register failed for ${account.id}:`, err.message);
+    }
+  }
+}
+
 export function parseEmailHeaders(headers) {
   const result = {};
   for (const header of headers) {
