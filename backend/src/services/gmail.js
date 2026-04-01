@@ -124,7 +124,22 @@ function getAuthedClient(accessToken, refreshToken) {
   return client;
 }
 
+// ── Gmail client cache ──────────────────────────────────────────────────────
+// Avoids re-reading AuthToken from DB, decrypting, and constructing a new
+// OAuth2 client on every single API call. The cached client auto-refreshes
+// tokens via the 'tokens' event listener, so it stays valid across the
+// access token's lifetime (~1 hour). Cache entries expire after 50 minutes
+// to guarantee a fresh client before Google's token expiry.
+const gmailClientCache = new Map(); // connectedAccountId → { gmail, expiresAt }
+const CLIENT_CACHE_TTL_MS = 50 * 60 * 1000; // 50 minutes
+
 export async function getGmailClient(connectedAccountId) {
+  const now = Date.now();
+  const cached = gmailClientCache.get(connectedAccountId);
+  if (cached && cached.expiresAt > now) {
+    return cached.gmail;
+  }
+
   const authToken = await prisma.authToken.findUnique({
     where: { connectedAccountId },
   });
@@ -134,7 +149,7 @@ export async function getGmailClient(connectedAccountId) {
   const refreshToken = authToken.refreshTokenEncrypted ? decrypt(authToken.refreshTokenEncrypted) : null;
   const client = getAuthedClient(accessToken, refreshToken);
 
-  // Listen for token refresh
+  // Listen for token refresh — persist new tokens to DB
   client.on('tokens', async (newTokens) => {
     const updateData = {
       accessTokenEncrypted: encrypt(newTokens.access_token),
@@ -149,9 +164,19 @@ export async function getGmailClient(connectedAccountId) {
       where: { connectedAccountId },
       data: updateData,
     });
+    // Extend cache TTL after a successful token refresh
+    const entry = gmailClientCache.get(connectedAccountId);
+    if (entry) entry.expiresAt = Date.now() + CLIENT_CACHE_TTL_MS;
   });
 
-  return google.gmail({ version: 'v1', auth: client });
+  const gmail = google.gmail({ version: 'v1', auth: client });
+  gmailClientCache.set(connectedAccountId, { gmail, expiresAt: now + CLIENT_CACHE_TTL_MS });
+  return gmail;
+}
+
+/** Evict a cached client (call on disconnect or token revocation). */
+export function evictGmailClient(connectedAccountId) {
+  gmailClientCache.delete(connectedAccountId);
 }
 
 export async function fetchMessages(connectedAccountId, maxResults = 20) {
@@ -337,6 +362,7 @@ export async function stopWatch(connectedAccountId) {
       where: { id: connectedAccountId },
       data: { gmailHistoryId: null, gmailWatchExpiration: null },
     });
+    evictGmailClient(connectedAccountId);
     console.log(`[Gmail Watch] Stopped for account ${connectedAccountId}`);
   } catch (err) {
     console.error(`[Gmail Watch] Stop failed for ${connectedAccountId}:`, err.message);

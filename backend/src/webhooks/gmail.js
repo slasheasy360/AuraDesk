@@ -43,17 +43,7 @@ router.post('/', async (req, res) => {
       recentPubsubIds.set(pubsubMessageId, Date.now());
     }
 
-    // Log the webhook event
-    const logEntry = await prisma.webhookEventLog.create({
-      data: {
-        platform: 'gmail',
-        payload,
-        processed: false,
-      },
-    });
-    console.log(`[Gmail Webhook] Event logged id=${logEntry.id}, pubsubMsgId=${pubsubMessageId || 'none'}`);
-
-    // Extract Pub/Sub message data
+    // Extract Pub/Sub message data FIRST — before any DB writes
     const pubsubMessage = payload.message;
     if (!pubsubMessage?.data) {
       console.warn('[Gmail Webhook] No message.data in payload');
@@ -68,7 +58,12 @@ router.post('/', async (req, res) => {
       return;
     }
 
-    console.log(`[Gmail Webhook] Notification for ${emailAddress}, historyId=${historyId}`);
+    console.log(`[Gmail Webhook] Notification for ${emailAddress}, historyId=${historyId} (${Date.now() - t0}ms since received)`);
+
+    // Log the webhook event in the background — don't block the critical path
+    const logPromise = prisma.webhookEventLog.create({
+      data: { platform: 'gmail', payload, processed: false },
+    }).catch((err) => console.error('[Gmail Webhook] Failed to log event:', err.message));
 
     // Find the connected Gmail account by email
     const account = await prisma.connectedAccount.findFirst({
@@ -77,7 +72,6 @@ router.post('/', async (req, res) => {
         platformAccountId: emailAddress,
         status: 'active',
       },
-      include: { user: true },
     });
 
     if (!account) {
@@ -98,16 +92,25 @@ router.post('/', async (req, res) => {
     const io = req.app.get('io');
     try {
       await processGmailHistory(account, io);
-      await prisma.webhookEventLog.update({
-        where: { id: logEntry.id },
-        data: { processed: true },
+      // Mark webhook event as processed (best-effort, don't block)
+      logPromise.then((logEntry) => {
+        if (logEntry) {
+          prisma.webhookEventLog.update({
+            where: { id: logEntry.id },
+            data: { processed: true },
+          }).catch(() => {});
+        }
       });
       console.log(`[Gmail Webhook] Successfully processed for ${emailAddress} (${Date.now() - t0}ms total)`);
     } catch (err) {
       console.error(`[Gmail Webhook] Processing failed for ${emailAddress} (${Date.now() - t0}ms):`, err.message);
-      await prisma.webhookEventLog.update({
-        where: { id: logEntry.id },
-        data: { processed: false, error: err?.message || 'Unknown error' },
+      logPromise.then((logEntry) => {
+        if (logEntry) {
+          prisma.webhookEventLog.update({
+            where: { id: logEntry.id },
+            data: { processed: false, error: err?.message || 'Unknown error' },
+          }).catch(() => {});
+        }
       });
     }
   } catch (err) {

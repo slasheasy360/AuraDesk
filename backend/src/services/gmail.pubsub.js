@@ -35,7 +35,7 @@ export async function processGmailHistory(account, io) {
 // Maximum number of times to re-check history when Pub/Sub fires before
 // the History API reflects the change (common Gmail race condition).
 const EMPTY_HISTORY_RETRIES = 2;
-const EMPTY_HISTORY_DELAY_MS = 1500; // 1.5 seconds between retries
+const EMPTY_HISTORY_DELAY_MS = 800; // 800ms — fast enough to stay under 2s total, long enough for Gmail to catch up
 
 async function _processGmailHistoryInner(accountId, io) {
   // Always read fresh account state from DB to get latest historyId
@@ -98,13 +98,19 @@ async function _processGmailHistoryInner(accountId, io) {
     let saved = 0;
     let skipped = 0;
 
-    for (const msg of messages) {
-      try {
-        const result = await saveGmailMessage(msg, account, accountEmail, io);
-        if (result === 'duplicate' || result === 'skipped') skipped++;
+    // Process messages in parallel — each saveGmailMessage is independent
+    // (unique index handles dedup if two messages share a conversation)
+    const results = await Promise.allSettled(
+      messages.map((msg) => saveGmailMessage(msg, account, accountEmail, io))
+    );
+
+    for (let i = 0; i < results.length; i++) {
+      const r = results[i];
+      if (r.status === 'fulfilled') {
+        if (r.value === 'duplicate' || r.value === 'skipped') skipped++;
         else saved++;
-      } catch (err) {
-        console.error(`[Gmail PubSub] Failed to save message ${msg.id}:`, err.message);
+      } else {
+        console.error(`[Gmail PubSub] Failed to save message ${messages[i].id}:`, r.reason?.message);
       }
     }
 
@@ -206,41 +212,40 @@ async function saveGmailMessage(msg, account, accountEmail, io) {
     },
   });
 
-  // Check for duplicate
-  const existing = await prisma.message.findFirst({
-    where: {
-      conversationId: conversation.id,
-      platformMessageId: msg.id,
-    },
-  });
-
-  if (existing) {
-    console.log(`[Gmail PubSub] Duplicate message ${msg.id} already in DB, skipping`);
-    return 'duplicate';
-  }
-
   // Extract and clean body
   const rawBody = gmailApi.getEmailBody(msg.payload || {});
   const body = cleanBody(rawBody);
   const htmlBody = gmailApi.getEmailHtmlBody(msg.payload || {}) || null;
   const emailAttachments = gmailApi.getEmailAttachments(msg.payload || {});
 
-  const message = await prisma.message.create({
-    data: {
-      conversationId: conversation.id,
-      platformMessageId: msg.id,
-      direction: isOutbound ? 'outbound' : 'inbound',
-      sender: senderName,
-      subject,
-      content: body || subject,
-      htmlContent: htmlBody,
-      contentType: 'email',
-      attachments: emailAttachments.length > 0 ? emailAttachments : undefined,
-      status: isOutbound ? 'sent' : 'delivered',
-      sentAt: timestamp,
-      rawPayload: msg,
-    },
-  });
+  // Insert message — rely on the unique index (conversationId, platformMessageId)
+  // to catch duplicates in one round-trip instead of a separate findFirst query.
+  let message;
+  try {
+    message = await prisma.message.create({
+      data: {
+        conversationId: conversation.id,
+        platformMessageId: msg.id,
+        direction: isOutbound ? 'outbound' : 'inbound',
+        sender: senderName,
+        subject,
+        content: body || subject,
+        htmlContent: htmlBody,
+        contentType: 'email',
+        attachments: emailAttachments.length > 0 ? emailAttachments : undefined,
+        status: isOutbound ? 'sent' : 'delivered',
+        sentAt: timestamp,
+        rawPayload: msg,
+      },
+    });
+  } catch (err) {
+    // P2002 = Prisma unique constraint violation → duplicate message
+    if (err.code === 'P2002') {
+      console.log(`[Gmail PubSub] Duplicate message ${msg.id} already in DB, skipping`);
+      return 'duplicate';
+    }
+    throw err;
+  }
 
   // Update unread count for inbound messages and get accurate count
   let currentUnreadCount = conversation.unreadCount || 0;
