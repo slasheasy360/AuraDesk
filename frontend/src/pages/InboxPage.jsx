@@ -144,8 +144,7 @@ export default function InboxPage() {
 
     initializeInbox();
 
-    // Gmail uses Pub/Sub push notifications (no polling needed).
-    // Instagram still uses polling since it lacks push support.
+    // Instagram polling (no push notifications available)
     igPollingRef.current = setInterval(async () => {
       try {
         const res = await api.get('/api/messages/instagram/sync');
@@ -157,9 +156,22 @@ export default function InboxPage() {
       } catch { /* silent */ }
     }, 60000);
 
+    // ── Safety net: lightweight conversation refresh every 30s ──
+    // Render free tier kills socket connections frequently, so socket events
+    // can be lost. This ensures new emails appear within 30s worst case.
+    // Only fetches the conversation list (tiny payload), not full messages.
+    const safetyRefresh = setInterval(() => {
+      if (!cancelled) {
+        api.get('/api/conversations')
+          .then((res) => { if (!cancelled) setConversations(res.data.conversations); })
+          .catch(() => {});
+      }
+    }, 30000);
+
     return () => {
       cancelled = true;
       if (igPollingRef.current) clearInterval(igPollingRef.current);
+      clearInterval(safetyRefresh);
     };
   }, []);
 

@@ -4,6 +4,7 @@ const SOCKET_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
 
 let socket = null;
 let currentUserId = null;
+let keepAliveTimer = null;
 
 export function connectSocket(userId) {
   // If already connected for the same user, don't recreate
@@ -22,23 +23,28 @@ export function connectSocket(userId) {
   currentUserId = userId;
 
   socket = io(SOCKET_URL, {
-    // Start with polling (works through all proxies), then upgrade to websocket.
-    // This is more reliable on Render than starting with websocket directly,
-    // because the initial handshake via polling always succeeds.
     transports: ['polling', 'websocket'],
     upgrade: true,
     reconnection: true,
     reconnectionAttempts: Infinity,
-    reconnectionDelay: 1000,
-    reconnectionDelayMax: 5000,
-    // Keep connection alive — Render kills idle connections after ~60-120s
+    reconnectionDelay: 500,        // reconnect fast after disconnect
+    reconnectionDelayMax: 3000,
     withCredentials: true,
   });
 
   socket.on('connect', () => {
-    console.log(`[Socket] Connected: id=${socket.id}, transport=${socket.io.engine.transport.name}, url=${SOCKET_URL}`);
-    // Re-register on every connect (including reconnects)
+    console.log(`[Socket] Connected: id=${socket.id}, transport=${socket.io.engine.transport.name}`);
     socket.emit('register', currentUserId);
+
+    // ── Keep-alive: send a tiny message every 30s to prevent Render from
+    // killing the connection due to inactivity. This is separate from
+    // Socket.io's ping/pong (which Render's proxy may not recognize).
+    clearInterval(keepAliveTimer);
+    keepAliveTimer = setInterval(() => {
+      if (socket?.connected) {
+        socket.emit('ping_keep_alive');
+      }
+    }, 30000);
   });
 
   socket.on('connect_error', (err) => {
@@ -47,6 +53,7 @@ export function connectSocket(userId) {
 
   socket.on('disconnect', (reason) => {
     console.log(`[Socket] Disconnected: reason=${reason}`);
+    clearInterval(keepAliveTimer);
   });
 
   return socket;

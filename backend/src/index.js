@@ -67,7 +67,13 @@ io.on('connection', (socket) => {
   socket.on('register', (userId) => {
     if (!userId) return;
     socket.join(`user:${userId}`);
-    console.log(`[Socket.io] User ${userId} joined room on socket ${socket.id}`);
+    const roomSize = io.sockets.adapter.rooms.get(`user:${userId}`)?.size || 0;
+    console.log(`[Socket.io] User ${userId} joined room on socket ${socket.id} (${roomSize} socket(s) in room)`);
+  });
+
+  // Client sends this every 30s to keep Render's proxy from killing the connection
+  socket.on('ping_keep_alive', () => {
+    // No-op — the act of receiving any message resets Render's idle timer
   });
 
   socket.on('disconnect', (reason) => {
