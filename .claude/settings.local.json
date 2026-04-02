@@ -10,7 +10,8 @@
       "Bash(node --check src/services/gmail.service.js)",
       "Bash(node --check src/routes/auth.js)",
       "Bash(node --check src/routes/subscription.js)",
-      "Bash(node --check src/routes/onboarding.js)"
+      "Bash(node --check src/routes/onboarding.js)",
+      "Bash(npm install:*)"
     ]
   }
 }
