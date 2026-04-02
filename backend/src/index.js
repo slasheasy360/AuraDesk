@@ -21,6 +21,8 @@ import whatsappRoutes from './routes/whatsapp.js';
 import conversationRoutes from './routes/conversations.js';
 import messageRoutes from './routes/messages.js';
 import accountRoutes from './routes/accounts.js';
+import subscriptionRoutes from './routes/subscription.js';
+import onboardingRoutes from './routes/onboarding.js';
 import metaWebhook from './webhooks/meta.js';
 import gmailWebhook from './webhooks/gmail.js';
 import { renewExpiringWatches, reRegisterAllWatches } from './services/gmail.js';
@@ -99,6 +101,8 @@ app.use('/auth/whatsapp', whatsappRoutes);
 app.use('/api/conversations', conversationRoutes);
 app.use('/api/messages', messageRoutes);
 app.use('/api/accounts', accountRoutes);
+app.use('/api/subscription', subscriptionRoutes);
+app.use('/api/onboarding', onboardingRoutes);
 
 // Webhook routes
 app.use('/webhooks/meta', metaWebhook);

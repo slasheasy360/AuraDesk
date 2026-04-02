@@ -20,14 +20,31 @@ router.post('/register', async (req, res) => {
     }
 
     const passwordHash = await bcrypt.hash(password, 12);
+
+    // Auto-assign 14-day free trial on registration
+    const trialEndsAt = new Date();
+    trialEndsAt.setDate(trialEndsAt.getDate() + 14);
+
     const user = await prisma.user.create({
-      data: { email, name, passwordHash },
+      data: {
+        email,
+        name,
+        passwordHash,
+        plan: 'trial',
+        subscriptionStatus: 'trialing',
+        trialEndsAt,
+        onboardingStep: 0,
+      },
     });
 
     const token = jwt.sign({ userId: user.id }, process.env.JWT_SECRET, { expiresIn: '7d' });
 
     res.status(201).json({
-      user: { id: user.id, email: user.email, name: user.name },
+      user: {
+        id: user.id, email: user.email, name: user.name,
+        plan: user.plan, subscriptionStatus: user.subscriptionStatus,
+        trialEndsAt: user.trialEndsAt, onboardingStep: user.onboardingStep,
+      },
       token,
     });
   } catch (err) {
@@ -54,10 +71,25 @@ router.post('/login', async (req, res) => {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
 
+    // Check if trial expired — auto-update status
+    if (user.plan === 'trial' && user.trialEndsAt && new Date() > new Date(user.trialEndsAt)) {
+      await prisma.user.update({
+        where: { id: user.id },
+        data: { plan: 'expired', subscriptionStatus: 'expired' },
+      });
+      user.plan = 'expired';
+      user.subscriptionStatus = 'expired';
+    }
+
     const token = jwt.sign({ userId: user.id }, process.env.JWT_SECRET, { expiresIn: '7d' });
 
     res.json({
-      user: { id: user.id, email: user.email, name: user.name },
+      user: {
+        id: user.id, email: user.email, name: user.name,
+        plan: user.plan, subscriptionStatus: user.subscriptionStatus,
+        trialEndsAt: user.trialEndsAt, onboardingStep: user.onboardingStep,
+        companyName: user.companyName, firstName: user.firstName, lastName: user.lastName,
+      },
       token,
     });
   } catch (err) {
@@ -66,9 +98,32 @@ router.post('/login', async (req, res) => {
   }
 });
 
-// Get current user
-router.get('/me', authenticate, (req, res) => {
-  res.json({ user: { id: req.user.id, email: req.user.email, name: req.user.name } });
+// Get current user — includes full subscription + onboarding state
+router.get('/me', authenticate, async (req, res) => {
+  const user = await prisma.user.findUnique({ where: { id: req.user.id } });
+  if (!user) return res.status(404).json({ error: 'User not found' });
+
+  // Auto-expire trial
+  if (user.plan === 'trial' && user.trialEndsAt && new Date() > new Date(user.trialEndsAt)) {
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { plan: 'expired', subscriptionStatus: 'expired' },
+    });
+    user.plan = 'expired';
+    user.subscriptionStatus = 'expired';
+  }
+
+  res.json({
+    user: {
+      id: user.id, email: user.email, name: user.name,
+      plan: user.plan, subscriptionStatus: user.subscriptionStatus,
+      trialEndsAt: user.trialEndsAt, onboardingStep: user.onboardingStep,
+      companyName: user.companyName, companyLogo: user.companyLogo,
+      brandColor: user.brandColor, firstName: user.firstName,
+      lastName: user.lastName, cannedResponse: user.cannedResponse,
+      currentPeriodEnd: user.currentPeriodEnd, billingCycle: user.billingCycle,
+    },
+  });
 });
 
 export default router;

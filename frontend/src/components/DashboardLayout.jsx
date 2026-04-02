@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { Outlet, NavLink, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext.jsx';
 import { connectSocket, disconnectSocket } from '../services/socket.js';
-import { Inbox, Link2, LogOut, Menu, X } from 'lucide-react';
+import { LayoutDashboard, Inbox, Link2, LogOut, Menu, X } from 'lucide-react';
 
 export default function DashboardLayout() {
   const { user, logout } = useAuth();
@@ -28,6 +28,7 @@ export default function DashboardLayout() {
   };
 
   const navItems = [
+    { to: '/', icon: LayoutDashboard, label: 'Dashboard' },
     { to: '/inbox', icon: Inbox, label: 'Smart Inbox' },
     { to: '/connections', icon: Link2, label: 'Connections' },
   ];

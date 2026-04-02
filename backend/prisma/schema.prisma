@@ -14,10 +14,49 @@ model User {
   passwordHash  String   @map("password_hash")
   createdAt     DateTime @default(now()) @map("created_at")
 
+  // ── Trial & Subscription ──
+  plan              PlanType    @default(trial)
+  trialEndsAt       DateTime?   @map("trial_ends_at")
+  subscriptionStatus SubStatus  @default(trialing) @map("subscription_status")
+  stripeCustomerId  String?     @unique @map("stripe_customer_id")
+  stripeSubscriptionId String?  @unique @map("stripe_subscription_id")
+  currentPeriodEnd  DateTime?   @map("current_period_end")
+  billingCycle      BillingCycle? @map("billing_cycle")
+
+  // ── Onboarding ──
+  onboardingStep    Int         @default(0) @map("onboarding_step")  // 0=not started, 1=branding, 2=platforms, 3=first-message, 4=complete
+  companyName       String?     @map("company_name")
+  companyLogo       String?     @map("company_logo")
+  brandColor        String?     @map("brand_color")
+  firstName         String?     @map("first_name")
+  lastName          String?     @map("last_name")
+  cannedResponse    String?     @map("canned_response")
+
   connectedAccounts ConnectedAccount[]
   contacts          Contact[]
 
   @@map("users")
+}
+
+enum PlanType {
+  trial
+  starter
+  pro
+  elite
+  expired
+}
+
+enum SubStatus {
+  trialing
+  active
+  past_due
+  canceled
+  expired
+}
+
+enum BillingCycle {
+  monthly
+  yearly
 }
 
 model ConnectedAccount {

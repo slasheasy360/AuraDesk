@@ -3,14 +3,16 @@ import { useAuth } from './context/AuthContext.jsx';
 import LoginPage from './pages/LoginPage.jsx';
 import RegisterPage from './pages/RegisterPage.jsx';
 import OAuthCallbackPage from './pages/OAuthCallbackPage.jsx';
+import PricingPage from './pages/PricingPage.jsx';
+import OnboardingPage from './pages/OnboardingPage.jsx';
 import DashboardLayout from './components/DashboardLayout.jsx';
+import DashboardHome from './pages/DashboardHome.jsx';
 import InboxPage from './pages/InboxPage.jsx';
 import ConnectionsPage from './pages/ConnectionsPage.jsx';
 
 function FullPageSkeleton() {
   return (
     <div className="flex h-screen bg-gray-100">
-      {/* Sidebar skeleton */}
       <div className="hidden lg:flex w-64 bg-gray-800 flex-col">
         <div className="px-5 py-5 border-b border-white/10 flex items-center gap-3">
           <div className="w-9 h-9 rounded-lg bg-gray-600 animate-pulse" />
@@ -21,9 +23,7 @@ function FullPageSkeleton() {
           <div className="h-10 bg-gray-700/50 rounded-lg animate-pulse" />
         </div>
       </div>
-      {/* Main content skeleton */}
       <div className="flex-1 flex">
-        {/* Conversation list */}
         <div className="w-80 lg:w-96 bg-white border-r border-gray-200 flex-col hidden md:flex">
           <div className="px-4 py-4 border-b border-gray-200">
             <div className="h-6 w-32 bg-gray-200 rounded animate-pulse mb-3" />
@@ -41,7 +41,6 @@ function FullPageSkeleton() {
             ))}
           </div>
         </div>
-        {/* Chat placeholder */}
         <div className="flex-1 bg-gray-50 flex items-center justify-center">
           <div className="w-12 h-12 rounded-full bg-gray-200 animate-pulse" />
         </div>
@@ -50,7 +49,33 @@ function FullPageSkeleton() {
   );
 }
 
+/**
+ * Access control logic:
+ * 1. Not logged in → /login
+ * 2. Trial expired & no paid plan → /pricing
+ * 3. Paid/trial active but onboarding incomplete → /onboarding
+ * 4. Fully setup → allow dashboard
+ */
 function ProtectedRoute({ children }) {
+  const { user, loading } = useAuth();
+  if (loading) return <FullPageSkeleton />;
+  if (!user) return <Navigate to="/login" />;
+
+  const hasActivePlan =
+    (user.plan === 'trial' && user.trialEndsAt && new Date(user.trialEndsAt) > new Date()) ||
+    ['starter', 'pro', 'elite'].includes(user.plan);
+
+  // Trial expired or no plan → pricing
+  if (!hasActivePlan) return <Navigate to="/pricing" />;
+
+  // Onboarding incomplete → onboarding
+  if (user.onboardingStep < 4) return <Navigate to="/onboarding" />;
+
+  return children;
+}
+
+/** Only redirect to pricing if user has no active plan (expired trial, no subscription) */
+function RequireAuth({ children }) {
   const { user, loading } = useAuth();
   if (loading) return <FullPageSkeleton />;
   if (!user) return <Navigate to="/login" />;
@@ -63,6 +88,14 @@ export default function App() {
       <Route path="/login" element={<LoginPage />} />
       <Route path="/register" element={<RegisterPage />} />
       <Route path="/dashboard" element={<OAuthCallbackPage />} />
+
+      {/* Pricing — accessible when logged in (trial expired or choosing plan) */}
+      <Route path="/pricing" element={<RequireAuth><PricingPage /></RequireAuth>} />
+
+      {/* Onboarding — accessible when logged in with active plan */}
+      <Route path="/onboarding" element={<RequireAuth><OnboardingPage /></RequireAuth>} />
+
+      {/* Main app — requires auth + active plan + completed onboarding */}
       <Route
         path="/"
         element={
@@ -71,11 +104,14 @@ export default function App() {
           </ProtectedRoute>
         }
       >
-        <Route index element={<Navigate to="/inbox" />} />
+        <Route index element={<DashboardHome />} />
         <Route path="inbox" element={<InboxPage />} />
         <Route path="inbox/:conversationId" element={<InboxPage />} />
         <Route path="connections" element={<ConnectionsPage />} />
       </Route>
+
+      {/* Catch-all */}
+      <Route path="*" element={<Navigate to="/" />} />
     </Routes>
   );
 }
