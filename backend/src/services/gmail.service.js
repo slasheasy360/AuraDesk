@@ -223,61 +223,82 @@ export async function syncGmailMessages(userId) {
       },
     });
 
-    // Upsert conversation without updating lastMessageAt yet — we only
-    // bump it when a genuinely new message is found (below).
-    const conversation = await prisma.conversation.upsert({
-      where: {
-        connectedAccountId_platformConversationId: {
+    // Upsert conversation — handle P2002 race condition with Pub/Sub handler
+    // which may be creating the same conversation simultaneously.
+    let conversation;
+    try {
+      conversation = await prisma.conversation.upsert({
+        where: {
+          connectedAccountId_platformConversationId: {
+            connectedAccountId: account.id,
+            platformConversationId: item.threadId,
+          },
+        },
+        update: {},
+        create: {
           connectedAccountId: account.id,
           platformConversationId: item.threadId,
+          contactId: contact.id,
+          lastMessageAt: new Date(),
+          unreadCount: 0,
         },
-      },
-      update: {},
-      create: {
-        connectedAccountId: account.id,
-        platformConversationId: item.threadId,
-        contactId: contact.id,
-        lastMessageAt: new Date(),
-        unreadCount: 0,
-      },
-    });
+      });
+    } catch (err) {
+      if (err.code === 'P2002') {
+        // Race: Pub/Sub handler created it first — just fetch it
+        conversation = await prisma.conversation.findUnique({
+          where: {
+            connectedAccountId_platformConversationId: {
+              connectedAccountId: account.id,
+              platformConversationId: item.threadId,
+            },
+          },
+        });
+        if (!conversation) continue; // shouldn't happen, but be safe
+      } else {
+        throw err;
+      }
+    }
 
-    // Update contact only if conversation was just created (don't overwrite with wrong contact from later messages)
+    // Update contact if needed
     if (!conversation.contactId || conversation.contactId !== contact.id) {
       await prisma.conversation.update({
         where: { id: conversation.id },
         data: { contactId: contact.id },
+      }).catch(() => {}); // ignore race on contact update
+    }
+
+    // Insert message — rely on unique index (conversationId, platformMessageId)
+    // to catch duplicates in one round-trip.
+    let message;
+    try {
+      message = await prisma.message.create({
+        data: {
+          conversationId: conversation.id,
+          platformMessageId: item.gmailMessageId,
+          direction: item.isOutbound ? 'outbound' : 'inbound',
+          sender: item.sender,
+          subject: item.subject,
+          content: item.body || item.snippet || item.subject,
+          htmlContent: item.htmlBody || null,
+          contentType: 'email',
+          attachments: item.attachments || undefined,
+          status: item.isOutbound ? 'sent' : 'delivered',
+          sentAt: item.timestamp,
+          rawPayload: item.rawPayload,
+        },
       });
+    } catch (err) {
+      if (err.code === 'P2002') {
+        // Duplicate message — already saved by Pub/Sub handler
+        const existing = await prisma.message.findFirst({
+          where: { conversationId: conversation.id, platformMessageId: item.gmailMessageId },
+        });
+        if (existing) synced.push({ ...existing, _isNew: false });
+        continue;
+      }
+      throw err;
     }
-
-    const existing = await prisma.message.findFirst({
-      where: {
-        conversationId: conversation.id,
-        platformMessageId: item.gmailMessageId,
-      },
-    });
-
-    if (existing) {
-      synced.push({ ...existing, _isNew: false });
-      continue;
-    }
-
-    const message = await prisma.message.create({
-      data: {
-        conversationId: conversation.id,
-        platformMessageId: item.gmailMessageId,
-        direction: item.isOutbound ? 'outbound' : 'inbound',
-        sender: item.sender,
-        subject: item.subject,
-        content: item.body || item.snippet || item.subject,
-        htmlContent: item.htmlBody || null,
-        contentType: 'email',
-        attachments: item.attachments || undefined,
-        status: item.isOutbound ? 'sent' : 'delivered',
-        sentAt: item.timestamp,
-        rawPayload: item.rawPayload,
-      },
-    });
 
     // New message found — bump lastMessageAt to current server time so the
     // conversation rises to the top of the inbox, and increment unread count.
