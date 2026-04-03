@@ -479,6 +479,53 @@ export default function InboxPage() {
   }, [conversations, conversationId, activeConversation]);
 
   // ═══════════════════════════════════════════════════════════════════
+  // DRAFT AUTO-SAVE
+  // ═══════════════════════════════════════════════════════════════════
+
+  const saveDraft = useCallback((convId, content) => {
+    if (draftTimerRef.current) clearTimeout(draftTimerRef.current);
+    draftTimerRef.current = setTimeout(async () => {
+      if (content === lastSavedDraftRef.current) return;
+      try {
+        await api.put(`/api/conversations/${convId}/draft`, { content });
+        lastSavedDraftRef.current = content;
+        setConversations((prev) =>
+          prev.map((c) =>
+            c.id === convId
+              ? { ...c, hasDraft: !!content.trim(), draftPreview: content.trim().slice(0, 80) || null }
+              : c
+          )
+        );
+      } catch (err) {
+        console.error('Failed to save draft:', err);
+      }
+    }, 1500);
+  }, []);
+
+  const clearDraft = useCallback(async (convId) => {
+    if (draftTimerRef.current) clearTimeout(draftTimerRef.current);
+    lastSavedDraftRef.current = '';
+    try {
+      await api.delete(`/api/conversations/${convId}/draft`);
+      setConversations((prev) =>
+        prev.map((c) =>
+          c.id === convId ? { ...c, hasDraft: false, draftPreview: null, drafts: [] } : c
+        )
+      );
+    } catch { /* silent */ }
+  }, []);
+
+  const handleNewMessageChange = useCallback((value) => {
+    setNewMessage(value);
+    const activeId = conversationIdRef.current;
+    if (activeId) {
+      saveDraft(activeId, value);
+    }
+  }, [saveDraft]);
+
+  useEffect(() => () => { if (draftTimerRef.current) clearTimeout(draftTimerRef.current); }, []);
+
+  // ═══════════════════════════════════════════════════════════════════
   // SEND MESSAGE
   // ═══════════════════════════════════════════════════════════════════
 
@@ -703,18 +750,6 @@ export default function InboxPage() {
     return cleanup;
   }, []);
 
-  // Wrap setNewMessage to auto-save drafts
-  const handleNewMessageChange = useCallback((value) => {
-    setNewMessage(value);
-    const activeId = conversationIdRef.current;
-    if (activeId) {
-      saveDraft(activeId, value);
-    }
-  }, [saveDraft]);
-
-  // Cleanup draft timer on unmount
-  useEffect(() => () => { if (draftTimerRef.current) clearTimeout(draftTimerRef.current); }, []);
-
   const platform = activeConversation?.connectedAccount?.platform;
   const isEmailPlatform = platform === 'gmail';
   const emailSubject = useMemo(
@@ -804,41 +839,6 @@ export default function InboxPage() {
       console.error('Failed to permanently delete:', err);
     }
   }, [navigate]);
-
-  // ── Draft auto-save ──
-  const saveDraft = useCallback((convId, content) => {
-    if (draftTimerRef.current) clearTimeout(draftTimerRef.current);
-    draftTimerRef.current = setTimeout(async () => {
-      if (content === lastSavedDraftRef.current) return;
-      try {
-        await api.put(`/api/conversations/${convId}/draft`, { content });
-        lastSavedDraftRef.current = content;
-        setConversations((prev) =>
-          prev.map((c) =>
-            c.id === convId
-              ? { ...c, hasDraft: !!content.trim(), draftPreview: content.trim().slice(0, 80) || null }
-              : c
-          )
-        );
-      } catch (err) {
-        console.error('Failed to save draft:', err);
-      }
-    }, 1500);
-  }, []);
-
-  // Clear draft on send
-  const clearDraft = useCallback(async (convId) => {
-    if (draftTimerRef.current) clearTimeout(draftTimerRef.current);
-    lastSavedDraftRef.current = '';
-    try {
-      await api.delete(`/api/conversations/${convId}/draft`);
-      setConversations((prev) =>
-        prev.map((c) =>
-          c.id === convId ? { ...c, hasDraft: false, draftPreview: null, drafts: [] } : c
-        )
-      );
-    } catch { /* silent */ }
-  }, []);
 
   const toggleSourceFilter = useCallback((source) => {
     setSourceFilters((prev) => {
