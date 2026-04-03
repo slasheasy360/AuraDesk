@@ -7,6 +7,8 @@ import {
   Send, Search, MessageSquare, Mail, ArrowLeft, Paperclip,
   Smile, X, FileText, Image as ImageIcon, Reply, ChevronDown,
   ChevronUp, Download, UploadCloud, Play, Music, File as FileIcon, AlertCircle, RefreshCw,
+  Star, Inbox, Clock, Sparkles, FileEdit, Trash2, ChevronLeft, ChevronRight,
+  RotateCw, Archive, MoreHorizontal, Bot, Link2,
 } from 'lucide-react';
 import PlatformBadge, { PlatformIcon } from '../components/PlatformBadge.jsx';
 
@@ -54,6 +56,28 @@ function sessionSet(key, value) {
   } catch { /* storage full — ignore */ }
 }
 
+// ═══════════════════════════════════════════════════════════════════
+// FILTER CATEGORIES
+// ═══════════════════════════════════════════════════════════════════
+
+const FILTER_CATEGORIES = [
+  { key: 'all', label: 'All', icon: Inbox },
+  { key: 'unread', label: 'Unread', icon: Clock },
+  { key: 'starred', label: 'Starred', icon: Star },
+  { key: 'ai_responded', label: 'AI Responded', icon: Sparkles },
+  { key: 'draft', label: 'Draft', icon: FileEdit },
+  { key: 'bin', label: 'Bin', icon: Trash2 },
+];
+
+const SOURCE_FILTERS = [
+  { key: 'instagram', label: 'Instagram' },
+  { key: 'facebook', label: 'Facebook' },
+  { key: 'linkedin', label: 'LinkedIn' },
+  { key: 'gmail', label: 'Gmail' },
+];
+
+const ITEMS_PER_PAGE = 10;
+
 export default function InboxPage() {
   const { conversationId } = useParams();
   const navigate = useNavigate();
@@ -64,12 +88,12 @@ export default function InboxPage() {
   const [sending, setSending] = useState(false);
   const [search, setSearch] = useState('');
   const [sendError, setSendError] = useState('');
-  const [fileError, setFileError] = useState(null); // { message, details }
+  const [fileError, setFileError] = useState(null);
   const fileErrorTimerRef = useRef(null);
   const sendErrorTimerRef = useRef(null);
   const [attachments, setAttachments] = useState([]);
   const [dragOver, setDragOver] = useState(false);
-  const [replyingTo, setReplyingTo] = useState(null); // for email reply context
+  const [replyingTo, setReplyingTo] = useState(null);
   const [showReplyBox, setShowReplyBox] = useState(false);
   const [collapsedMessages, setCollapsedMessages] = useState(new Set());
   const [uploadProgress, setUploadProgress] = useState(null);
@@ -77,11 +101,23 @@ export default function InboxPage() {
   const [loadingMessages, setLoadingMessages] = useState(false);
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
 
-  // Deferred skeletons — only show after 200ms to avoid flash on fast loads
+  // ── New filter & pagination state ──
+  const [activeFilter, setActiveFilter] = useState('all');
+  const [sourceFilters, setSourceFilters] = useState(new Set());
+  const [starredConversations, setStarredConversations] = useState(() => {
+    try {
+      const saved = localStorage.getItem('auradesk:starred');
+      return saved ? new Set(JSON.parse(saved)) : new Set();
+    } catch { return new Set(); }
+  });
+  const [selectedMessages, setSelectedMessages] = useState(new Set());
+  const [currentPage, setCurrentPage] = useState(1);
+
+  // Deferred skeletons
   const showConversationSkeleton = useDeferredLoading(loadingConversations, 150);
   const showMessageSkeleton = useDeferredLoading(loadingMessages, 200);
 
-  // ── Time-ago ticker: force re-render every 60s so relative timestamps update ──
+  // ── Time-ago ticker ──
   const [, setTick] = useState(0);
   useEffect(() => {
     const timer = setInterval(() => setTick((t) => t + 1), 60000);
@@ -93,20 +129,22 @@ export default function InboxPage() {
   const igPollingRef = useRef(null);
   const conversationIdRef = useRef(conversationId);
   const fileInputRef = useRef(null);
-
-  // ── Deduplication: track known message IDs to prevent duplicates ──
   const knownMessageIds = useRef(new Set());
-  // ── Message cache: store messages per conversation to avoid refetch ──
   const messageCache = useRef(new Map());
 
-  // Fetch conversations + start polling
+  // Persist starred conversations
+  useEffect(() => {
+    localStorage.setItem('auradesk:starred', JSON.stringify([...starredConversations]));
+  }, [starredConversations]);
+
+  // ═══════════════════════════════════════════════════════════════════
+  // DATA FETCHING & REAL-TIME
+  // ═══════════════════════════════════════════════════════════════════
+
   useEffect(() => {
     let cancelled = false;
 
     const initializeInbox = async () => {
-      // 1. Fetch conversations from DB — this is the ONLY blocking call.
-      //    Gmail messages are synced in real-time via Pub/Sub push notifications,
-      //    so the DB already has everything. No need to call gmail/sync here.
       for (let attempt = 0; attempt < 3; attempt++) {
         try {
           const res = await api.get('/api/conversations');
@@ -114,7 +152,7 @@ export default function InboxPage() {
             setConversations(res.data.conversations);
             setLoadingConversations(false);
           }
-          break; // success
+          break;
         } catch (err) {
           console.error(`fetchConversations attempt ${attempt + 1} failed:`, err.message);
           if (attempt < 2) await new Promise((r) => setTimeout(r, 3000 * (attempt + 1)));
@@ -122,10 +160,6 @@ export default function InboxPage() {
         }
       }
 
-      // 2. Background catchup sync — fire-and-forget, don't block the inbox.
-      //    Gmail Pub/Sub handles real-time; this only catches anything missed
-      //    while the server was down. Instagram lacks push so still needs sync.
-      //    Both run in parallel, refresh conversations only if new messages found.
       Promise.allSettled([
         api.get('/api/messages/gmail/sync').catch(() => ({ data: {} })),
         api.get('/api/messages/instagram/sync').catch(() => ({ data: {} })),
@@ -144,7 +178,6 @@ export default function InboxPage() {
 
     initializeInbox();
 
-    // Instagram polling (no push notifications available)
     igPollingRef.current = setInterval(async () => {
       try {
         const res = await api.get('/api/messages/instagram/sync');
@@ -156,10 +189,6 @@ export default function InboxPage() {
       } catch { /* silent */ }
     }, 60000);
 
-    // ── Safety net: lightweight conversation refresh every 30s ──
-    // Render free tier kills socket connections frequently, so socket events
-    // can be lost. This ensures new emails appear within 30s worst case.
-    // Only fetches the conversation list (tiny payload), not full messages.
     const safetyRefresh = setInterval(() => {
       if (!cancelled) {
         api.get('/api/conversations')
@@ -175,9 +204,7 @@ export default function InboxPage() {
     };
   }, []);
 
-  // Listen for real-time events — use refs to avoid stale closures
-  // IMPORTANT: Polls for socket availability (handles race with DashboardLayout connectSocket)
-  // and re-registers listeners on reconnection to catch missed messages.
+  // Socket listeners
   useEffect(() => {
     let cleanupFn = null;
     let pollTimer = null;
@@ -186,22 +213,15 @@ export default function InboxPage() {
       const socket = getSocket();
       if (!socket) return false;
 
-      // Clean up previous listeners if any
       if (cleanupFn) cleanupFn();
 
-      // Track whether this is a REconnect (not initial connect).
-      // The initial connect doesn't need a full refetch — initializeInbox handles that.
-      let hasConnectedOnce = socket.connected; // true if already connected when we set up listeners
+      let hasConnectedOnce = socket.connected;
 
       const handleReconnect = () => {
         if (!hasConnectedOnce) {
-          // First connect — skip refetch, initializeInbox already handles it
           hasConnectedOnce = true;
-          console.log('[Socket] Initial connect — listeners active');
           return;
         }
-        // Genuine reconnect — fetch anything missed while offline
-        console.log('[Socket] Reconnected — fetching missed messages');
         fetchConversations();
         const activeId = conversationIdRef.current;
         if (activeId) fetchMessages(activeId, true);
@@ -209,95 +229,75 @@ export default function InboxPage() {
 
       socket.on('connect', handleReconnect);
 
-    const handleNewMessage = (data) => {
-      const msgId = data.message?.id;
-      const convId = data.conversationId;
-      console.log(`[Socket] new_message received: msgId=${msgId}, convId=${convId}, activeConv=${conversationIdRef.current}`);
+      const handleNewMessage = (data) => {
+        const msgId = data.message?.id;
+        const convId = data.conversationId;
 
-      // ── DEDUP: skip if we already have this message ──
-      if (msgId && knownMessageIds.current.has(msgId)) {
-        console.log(`[Socket] Dedup: skipping known msgId=${msgId}`);
-        return;
-      }
-      if (msgId) knownMessageIds.current.add(msgId);
+        if (msgId && knownMessageIds.current.has(msgId)) return;
+        if (msgId) knownMessageIds.current.add(msgId);
 
-      // Update conversation sidebar (always, regardless of active conversation)
-      // NOTE: Do NOT increment unreadCount here — the backend is the single source of truth.
-      // The conversation_update event will deliver the correct count from the DB.
-      setConversations((prev) => {
-        const exists = prev.some((c) => c.id === convId);
-        if (!exists) {
-          // New conversation — create a placeholder so it appears instantly in the sidebar.
-          // fetchConversations() will replace it with full data from the DB.
-          console.log(`[Socket] New conversation ${convId} — adding placeholder`);
-          fetchConversations();
-          const placeholder = {
-            id: convId,
-            lastMessageAt: new Date().toISOString(),
-            unreadCount: data.message?.direction === 'inbound' ? 1 : 0,
-            messages: [{ content: data.message.content, direction: data.message.direction, sentAt: data.message.sentAt }],
-            contact: { name: data.message?.sender || 'New Contact' },
-            connectedAccount: { platform: data.platform || 'gmail' },
-          };
-          return [placeholder, ...prev];
-        }
-        const updated = prev.map((c) =>
-          c.id === convId
-            ? {
-                ...c,
-                lastMessageAt: new Date().toISOString(),
-                messages: [{ content: data.message.content, direction: data.message.direction, sentAt: data.message.sentAt }],
-              }
-            : c
-        );
-        return updated.sort((a, b) => new Date(b.lastMessageAt) - new Date(a.lastMessageAt));
-      });
-
-      // ── CHANNEL ISOLATION: only add to messages if this IS the active conversation ──
-      if (convId === conversationIdRef.current) {
-        setMessages((prev) => {
-          // Double-check dedup against current state (handles race with optimistic add)
-          if (msgId && prev.some((m) => m.id === msgId)) return prev;
-          // Replace optimistic placeholder if it exists (match by content + direction)
-          const optimisticIdx = prev.findIndex(
-            (m) => m._optimistic && m.content === data.message.content && m.direction === data.message.direction
-          );
-          if (optimisticIdx !== -1) {
-            const next = [...prev];
-            next[optimisticIdx] = data.message;
-            return next;
+        setConversations((prev) => {
+          const exists = prev.some((c) => c.id === convId);
+          if (!exists) {
+            fetchConversations();
+            const placeholder = {
+              id: convId,
+              lastMessageAt: new Date().toISOString(),
+              unreadCount: data.message?.direction === 'inbound' ? 1 : 0,
+              messages: [{ content: data.message.content, direction: data.message.direction, sentAt: data.message.sentAt }],
+              contact: { name: data.message?.sender || 'New Contact' },
+              connectedAccount: { platform: data.platform || 'gmail' },
+            };
+            return [placeholder, ...prev];
           }
-          return [...prev, data.message];
-        });
-
-        // Update message cache for this conversation
-        messageCache.current.set(convId, null); // invalidate so next switch refetches
-
-        // Message arrived while user is viewing this conversation — mark as read in DB
-        // so unreadCount doesn't accumulate for "seen" messages
-        if (data.message?.direction === 'inbound') {
-          api.get(`/api/conversations/${convId}`).catch(() => {});
-        }
-      }
-    };
-
-    const handleConversationUpdate = (data) => {
-      const activeId = conversationIdRef.current;
-      setConversations((prev) =>
-        prev
-          .map((c) =>
-            c.id === data.conversationId
+          const updated = prev.map((c) =>
+            c.id === convId
               ? {
                   ...c,
-                  lastMessageAt: data.lastMessageAt,
-                  // If this conversation is currently active/open, force unread to 0
-                  unreadCount: data.conversationId === activeId ? 0 : (data.unreadCount ?? c.unreadCount),
+                  lastMessageAt: new Date().toISOString(),
+                  messages: [{ content: data.message.content, direction: data.message.direction, sentAt: data.message.sentAt }],
                 }
               : c
-          )
-          .sort((a, b) => new Date(b.lastMessageAt) - new Date(a.lastMessageAt))
-      );
-    };
+          );
+          return updated.sort((a, b) => new Date(b.lastMessageAt) - new Date(a.lastMessageAt));
+        });
+
+        if (convId === conversationIdRef.current) {
+          setMessages((prev) => {
+            if (msgId && prev.some((m) => m.id === msgId)) return prev;
+            const optimisticIdx = prev.findIndex(
+              (m) => m._optimistic && m.content === data.message.content && m.direction === data.message.direction
+            );
+            if (optimisticIdx !== -1) {
+              const next = [...prev];
+              next[optimisticIdx] = data.message;
+              return next;
+            }
+            return [...prev, data.message];
+          });
+          messageCache.current.set(convId, null);
+          if (data.message?.direction === 'inbound') {
+            api.get(`/api/conversations/${convId}`).catch(() => {});
+          }
+        }
+      };
+
+      const handleConversationUpdate = (data) => {
+        const activeId = conversationIdRef.current;
+        setConversations((prev) =>
+          prev
+            .map((c) =>
+              c.id === data.conversationId
+                ? {
+                    ...c,
+                    lastMessageAt: data.lastMessageAt,
+                    unreadCount: data.conversationId === activeId ? 0 : (data.unreadCount ?? c.unreadCount),
+                  }
+                : c
+            )
+            .sort((a, b) => new Date(b.lastMessageAt) - new Date(a.lastMessageAt))
+        );
+      };
 
       socket.on('new_message', handleNewMessage);
       socket.on('conversation_update', handleConversationUpdate);
@@ -307,10 +307,9 @@ export default function InboxPage() {
         socket.off('new_message', handleNewMessage);
         socket.off('conversation_update', handleConversationUpdate);
       };
-      return true; // successfully set up
+      return true;
     };
 
-    // Try immediately, then poll every 500ms until socket is available
     if (!setupSocketListeners()) {
       pollTimer = setInterval(() => {
         if (setupSocketListeners()) clearInterval(pollTimer);
@@ -321,13 +320,13 @@ export default function InboxPage() {
       if (pollTimer) clearInterval(pollTimer);
       if (cleanupFn) cleanupFn();
     };
-  }, []); // ← empty deps: handler uses refs, not closure state
+  }, []);
 
   useEffect(() => {
     const handleInboxRefresh = () => {
       fetchConversations();
       const activeId = conversationIdRef.current;
-      if (activeId) fetchMessages(activeId, true); // force refresh
+      if (activeId) fetchMessages(activeId, true);
     };
     window.addEventListener('auradesk:refresh-inbox', handleInboxRefresh);
     return () => window.removeEventListener('auradesk:refresh-inbox', handleInboxRefresh);
@@ -336,14 +335,12 @@ export default function InboxPage() {
   useEffect(() => {
     conversationIdRef.current = conversationId;
     if (conversationId) {
-      // Restore from cache instantly, then fall back to sessionStorage, then fetch from API
       const cached = messageCache.current.get(conversationId);
       if (cached) {
         setMessages(cached.messages);
         setActiveConversation(cached.activeConversation);
         cached.messages.forEach((m) => m.id && knownMessageIds.current.add(m.id));
       } else {
-        // On page refresh, messageCache is empty — restore from sessionStorage for instant display
         const sessionMsgs = sessionGet(SESSION_KEYS.MESSAGES + conversationId);
         if (sessionMsgs && sessionMsgs.length > 0) {
           setMessages(sessionMsgs);
@@ -371,7 +368,6 @@ export default function InboxPage() {
 
   const prevMsgCountRef = useRef(0);
   useEffect(() => {
-    // Only auto-scroll when messages actually change count (new message added)
     if (messages.length !== prevMsgCountRef.current || showReplyBox) {
       prevMsgCountRef.current = messages.length;
       if (showReplyBox && replyBoxRef.current) {
@@ -382,7 +378,6 @@ export default function InboxPage() {
     }
   }, [messages, showReplyBox]);
 
-  // ── Persist conversations to sessionStorage on change ──
   useEffect(() => {
     if (conversations.length > 0) {
       sessionSet(SESSION_KEYS.CONVERSATIONS, conversations);
@@ -400,36 +395,28 @@ export default function InboxPage() {
 
   const fetchMessages = useCallback(async (convId, forceRefresh = false) => {
     try {
-      // Skip if we already have fresh cached data (unless forced)
-      if (!forceRefresh && messageCache.current.get(convId)?.fresh) {
-        return;
-      }
+      if (!forceRefresh && messageCache.current.get(convId)?.fresh) return;
       setLoadingMessages(true);
       const [msgRes, convRes] = await Promise.all([
         api.get(`/api/messages/${convId}`),
         api.get(`/api/conversations/${convId}`),
       ]);
       const msgs = msgRes.data.messages;
-      // Rebuild known IDs for this conversation
       msgs.forEach((m) => m.id && knownMessageIds.current.add(m.id));
-      // Only update if this is still the active conversation (prevents stale writes)
       if (conversationIdRef.current === convId) {
         setMessages(msgs);
         setActiveConversation(convRes.data.conversation);
       }
-      // Cache for quick restore on re-visit
       messageCache.current.set(convId, {
         messages: msgs,
         activeConversation: convRes.data.conversation,
         fresh: true,
       });
-      // Mark cache as stale after 30s
       setTimeout(() => {
         const entry = messageCache.current.get(convId);
         if (entry) entry.fresh = false;
       }, 30000);
-      // Persist to sessionStorage for page refresh recovery
-      sessionSet(SESSION_KEYS.MESSAGES + convId, msgs.slice(-50)); // last 50 msgs
+      sessionSet(SESSION_KEYS.MESSAGES + convId, msgs.slice(-50));
       sessionSet(SESSION_KEYS.ACTIVE_CONVERSATION, convRes.data.conversation);
     } catch (err) {
       console.error('Failed to fetch messages:', err);
@@ -438,11 +425,14 @@ export default function InboxPage() {
     }
   }, []);
 
-  // ── Ref for activeConversation to avoid stale closures in handleSend ──
   const activeConversationRef = useRef(activeConversation);
   useEffect(() => { activeConversationRef.current = activeConversation; }, [activeConversation]);
 
-  const handleSend = useCallback(async (e, retryCount = 0) => {
+  // ═══════════════════════════════════════════════════════════════════
+  // SEND MESSAGE
+  // ═══════════════════════════════════════════════════════════════════
+
+  const handleSend = useCallback(async (e) => {
     if (e?.preventDefault) e.preventDefault();
     const activeId = conversationIdRef.current;
     if ((!newMessage.trim() && attachments.length === 0) || !activeId || sending) return;
@@ -451,7 +441,6 @@ export default function InboxPage() {
     const currentAttachments = [...attachments];
     const isEmail = activeConversationRef.current?.connectedAccount?.platform === 'gmail';
 
-    // ── OPTIMISTIC UI: show message instantly with "sending" status ──
     const optimisticId = `optimistic-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     const optimisticMessage = {
       id: optimisticId,
@@ -468,7 +457,6 @@ export default function InboxPage() {
       })),
     };
 
-    // Add optimistic message immediately
     setMessages((prev) => [...prev, optimisticMessage]);
     setNewMessage('');
     setAttachments([]);
@@ -494,7 +482,7 @@ export default function InboxPage() {
           }
           res = await api.post('/api/messages/send', formData, {
             headers: { 'Content-Type': 'multipart/form-data' },
-            timeout: 120000, // 2 minutes for large uploads
+            timeout: 120000,
             onUploadProgress: (progressEvent) => {
               const pct = Math.round((progressEvent.loaded * 100) / progressEvent.total);
               setUploadProgress(pct);
@@ -520,10 +508,8 @@ export default function InboxPage() {
           setReplyingTo(null);
         }
       } catch (err) {
-        // Retry on network/timeout errors (not on 4xx client errors)
         const isRetryable = !err.response || err.response.status >= 500 || err.code === 'ECONNABORTED';
         if (isRetryable && attempt < MAX_RETRIES) {
-          console.warn(`Send failed (attempt ${attempt + 1}), retrying...`, err.message);
           setUploadProgress(0);
           await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)));
           return doSend(attempt + 1);
@@ -541,7 +527,6 @@ export default function InboxPage() {
       clearTimeout(sendErrorTimerRef.current);
       sendErrorTimerRef.current = setTimeout(() => setSendError(''), 5000);
       setUploadProgress(null);
-      // Mark optimistic message as failed instead of removing it
       setMessages((prev) =>
         prev.map((m) => m.id === optimisticId ? { ...m, status: 'failed', _sendError: errorMsg } : m)
       );
@@ -556,7 +541,6 @@ export default function InboxPage() {
     fileErrorTimerRef.current = setTimeout(() => setFileError(null), 5000);
   }, []);
 
-  // Clean up file error timer on unmount
   useEffect(() => () => { clearTimeout(fileErrorTimerRef.current); clearTimeout(sendErrorTimerRef.current); }, []);
 
   const handleFileSelect = useCallback(async (files) => {
@@ -571,48 +555,31 @@ export default function InboxPage() {
       'audio/mpeg', 'audio/ogg', 'audio/wav',
       'video/mp4', 'video/webm',
     ];
-    const MAX_FILE_SIZE = 25 * 1024 * 1024; // 25MB
+    const MAX_FILE_SIZE = 25 * 1024 * 1024;
     const SUPPORTED_FORMATS = 'JPG, PNG, GIF, WebP, PDF, DOC, DOCX, XLS, XLSX, TXT, CSV, MP3, OGG, WAV, MP4, WebM';
 
-    // Snapshot FileList into a real Array before any async work
     const fileArray = Array.from(files);
-
     const newAttachments = [];
     for (const file of fileArray) {
-      // Validate file type
       if (!ALLOWED_TYPES.includes(file.type)) {
-        showFileError(
-          `"${file.name}" is not a supported file type`,
-          `Supported formats: ${SUPPORTED_FORMATS}`
-        );
+        showFileError(`"${file.name}" is not a supported file type`, `Supported formats: ${SUPPORTED_FORMATS}`);
         continue;
       }
-      // Validate file size
       if (file.size > MAX_FILE_SIZE) {
-        showFileError(
-          `"${file.name}" exceeds the 25 MB size limit (${formatFileSize(file.size)})`,
-          `Maximum file size: 25 MB. Supported formats: ${SUPPORTED_FORMATS}`
-        );
+        showFileError(`"${file.name}" exceeds the 25 MB size limit (${formatFileSize(file.size)})`, `Maximum file size: 25 MB. Supported formats: ${SUPPORTED_FORMATS}`);
         continue;
       }
-
       try {
         let processedFile = file;
         let preview = null;
-
-        // ── Compress images > 500KB before attaching ──
         if (file.type.startsWith('image/') && file.size > 512000) {
-          try {
-            processedFile = await compressImage(file, 1200, 0.8);
-          } catch { processedFile = file; }
+          try { processedFile = await compressImage(file, 1200, 0.8); } catch { processedFile = file; }
         }
-
         if (processedFile.type.startsWith('image/')) {
           preview = URL.createObjectURL(processedFile);
         } else if (processedFile.type.startsWith('video/')) {
           preview = URL.createObjectURL(processedFile);
         }
-
         newAttachments.push({
           id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
           file: processedFile,
@@ -623,10 +590,7 @@ export default function InboxPage() {
         });
       } catch (err) {
         console.error('Failed to process attachment:', file.name, err);
-        showFileError(
-          `Failed to process "${file.name}"`,
-          'Please try again or use a different file'
-        );
+        showFileError(`Failed to process "${file.name}"`, 'Please try again or use a different file');
       }
     }
     if (newAttachments.length > 0) {
@@ -664,7 +628,7 @@ export default function InboxPage() {
     setAttachments([]);
   };
 
-  // ── Socket connection status — tracks live/disconnected for UI indicator ──
+  // ── Socket connection status ──
   const [socketConnected, setSocketConnected] = useState(() => {
     const s = getSocket();
     return s?.connected || false;
@@ -681,7 +645,6 @@ export default function InboxPage() {
       return () => { s.off('connect', onConnect); s.off('disconnect', onDisconnect); };
     };
     const cleanup = checkSocket();
-    // If socket isn't ready yet, recheck in 1s
     if (!cleanup) {
       const timer = setTimeout(() => { checkSocket(); }, 1000);
       return () => clearTimeout(timer);
@@ -696,308 +659,491 @@ export default function InboxPage() {
     [isEmailPlatform, messages]
   );
 
-  // ── Memoize filtered conversations to avoid recomputing on every render ──
-  const filteredConversations = useMemo(() => {
-    if (!search) return conversations;
-    const term = search.toLowerCase();
-    return conversations.filter((c) => {
-      const contactName = c.contact?.name || c.contact?.username || '';
-      return contactName.toLowerCase().includes(term);
+  // ═══════════════════════════════════════════════════════════════════
+  // FILTER & PAGINATION LOGIC
+  // ═══════════════════════════════════════════════════════════════════
+
+  const toggleStar = useCallback((convId, e) => {
+    e.stopPropagation();
+    setStarredConversations((prev) => {
+      const next = new Set(prev);
+      if (next.has(convId)) next.delete(convId);
+      else next.add(convId);
+      return next;
     });
-  }, [conversations, search]);
+  }, []);
+
+  const toggleSourceFilter = useCallback((source) => {
+    setSourceFilters((prev) => {
+      const next = new Set(prev);
+      if (next.has(source)) next.delete(source);
+      else next.add(source);
+      return next;
+    });
+    setCurrentPage(1);
+  }, []);
+
+  const toggleSelectMessage = useCallback((convId, e) => {
+    e.stopPropagation();
+    setSelectedMessages((prev) => {
+      const next = new Set(prev);
+      if (next.has(convId)) next.delete(convId);
+      else next.add(convId);
+      return next;
+    });
+  }, []);
+
+  const toggleSelectAll = useCallback(() => {
+    setSelectedMessages((prev) => {
+      if (prev.size > 0) return new Set();
+      return new Set(conversations.map((c) => c.id));
+    });
+  }, [conversations]);
+
+  const filteredConversations = useMemo(() => {
+    let result = conversations;
+
+    // Apply search filter
+    if (search) {
+      const term = search.toLowerCase();
+      result = result.filter((c) => {
+        const contactName = c.contact?.name || c.contact?.username || '';
+        const lastMsg = c.messages?.[0]?.content || '';
+        return contactName.toLowerCase().includes(term) || lastMsg.toLowerCase().includes(term);
+      });
+    }
+
+    // Apply source filter
+    if (sourceFilters.size > 0) {
+      result = result.filter((c) => sourceFilters.has(c.connectedAccount?.platform));
+    }
+
+    // Apply category filter
+    switch (activeFilter) {
+      case 'unread':
+        result = result.filter((c) => c.unreadCount > 0);
+        break;
+      case 'starred':
+        result = result.filter((c) => starredConversations.has(c.id));
+        break;
+      case 'ai_responded':
+        result = result.filter((c) => c._aiResponded);
+        break;
+      case 'draft':
+        result = result.filter((c) => c._draft);
+        break;
+      case 'bin':
+        result = result.filter((c) => c._deleted);
+        break;
+      default:
+        break;
+    }
+
+    return result;
+  }, [conversations, search, sourceFilters, activeFilter, starredConversations]);
+
+  // Filter counts
+  const filterCounts = useMemo(() => {
+    const total = conversations.length;
+    const unread = conversations.filter((c) => c.unreadCount > 0).length;
+    const starred = conversations.filter((c) => starredConversations.has(c.id)).length;
+    return {
+      all: total,
+      unread: unread,
+      starred: starred,
+      ai_responded: 0,
+      draft: 0,
+      bin: 0,
+    };
+  }, [conversations, starredConversations]);
+
+  // Source counts
+  const sourceCounts = useMemo(() => {
+    const counts = {};
+    conversations.forEach((c) => {
+      const p = c.connectedAccount?.platform;
+      if (p) counts[p] = (counts[p] || 0) + 1;
+    });
+    return counts;
+  }, [conversations]);
+
+  // Pagination
+  const totalPages = Math.max(1, Math.ceil(filteredConversations.length / ITEMS_PER_PAGE));
+  const paginatedConversations = useMemo(() => {
+    const start = (currentPage - 1) * ITEMS_PER_PAGE;
+    return filteredConversations.slice(start, start + ITEMS_PER_PAGE);
+  }, [filteredConversations, currentPage]);
+
+  // Reset page when filter changes
+  useEffect(() => { setCurrentPage(1); }, [activeFilter, search]);
 
   const handleSelectConversation = useCallback((convId) => navigate(`/inbox/${convId}`), [navigate]);
   const handleBackToList = useCallback(() => navigate('/inbox'), [navigate]);
   const platformTheme = useMemo(() => getPlatformTheme(platform), [platform]);
 
+  // ═══════════════════════════════════════════════════════════════════
+  // RENDER: CONVERSATION VIEW (when a conversation is selected)
+  // ═══════════════════════════════════════════════════════════════════
+
+  if (conversationId) {
+    return (
+      <div className="flex h-full bg-[#0c1a2e]">
+        {/* Filter panel — hidden on mobile when viewing conversation */}
+        <div className="hidden lg:flex w-64 flex-shrink-0 flex-col bg-[#0f1d33] border-r border-white/5">
+          <FilterPanel
+            activeFilter={activeFilter}
+            setActiveFilter={setActiveFilter}
+            filterCounts={filterCounts}
+            sourceFilters={sourceFilters}
+            toggleSourceFilter={toggleSourceFilter}
+            sourceCounts={sourceCounts}
+          />
+        </div>
+
+        {/* Conversation area */}
+        <div
+          className="flex-1 flex flex-col bg-[#0f1d33] rounded-tl-2xl"
+          onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+          onDragLeave={() => setDragOver(false)}
+          onDrop={handleDrop}
+        >
+          {/* Drop overlay */}
+          {dragOver && (
+            <div className="absolute inset-0 bg-primary-500/10 border-2 border-dashed border-primary-400 z-10 flex items-center justify-center rounded-lg pointer-events-none">
+              <div className="bg-white px-6 py-4 rounded-xl shadow-lg text-center">
+                <UploadCloud size={32} className="text-primary-500 mx-auto mb-2" />
+                <p className="text-sm font-medium text-gray-700">Drop files here to attach</p>
+              </div>
+            </div>
+          )}
+
+          {conversationId && !activeConversation ? (
+            <>
+              <div className="border-b border-white/10 px-4 sm:px-6 py-3 flex items-center gap-3 bg-[#0f1d33]">
+                <button onClick={handleBackToList} className="text-gray-400 hover:text-white transition flex-shrink-0">
+                  <ArrowLeft size={20} />
+                </button>
+                <div className="w-10 h-10 rounded-full bg-white/10 animate-pulse flex-shrink-0" />
+                <div className="flex-1 min-w-0 space-y-2">
+                  <div className="h-4 w-32 bg-white/10 rounded animate-pulse" />
+                  <div className="h-3 w-20 bg-white/5 rounded animate-pulse" />
+                </div>
+              </div>
+              <MessagesSkeleton dark />
+            </>
+          ) : conversationId && activeConversation ? (
+            <>
+              {/* Chat header */}
+              <div className="border-b border-white/10 px-4 sm:px-6 py-3 flex items-center justify-between bg-[#0f1d33]">
+                <div className="flex items-center gap-3">
+                  <button onClick={handleBackToList} className="text-gray-400 hover:text-white transition flex-shrink-0">
+                    <ArrowLeft size={20} />
+                  </button>
+                  <h2 className="font-semibold text-white truncate text-sm sm:text-base">
+                    {getContactDisplayName(activeConversation.contact, platform)}
+                  </h2>
+                  <PlatformBadge platform={platform} size="xs" />
+                </div>
+                <div className="flex items-center gap-2">
+                  <button className="p-2 text-gray-400 hover:text-white hover:bg-white/10 rounded-lg transition">
+                    <Star size={18} />
+                  </button>
+                  <button className="p-2 text-gray-400 hover:text-white hover:bg-white/10 rounded-lg transition">
+                    <Archive size={18} />
+                  </button>
+                  <button className="p-2 text-gray-400 hover:text-white hover:bg-white/10 rounded-lg transition">
+                    <Trash2 size={18} />
+                  </button>
+                  <button className="p-2 text-gray-400 hover:text-white hover:bg-white/10 rounded-lg transition">
+                    <MoreHorizontal size={18} />
+                  </button>
+                </div>
+              </div>
+
+              {/* Messages area */}
+              {showMessageSkeleton && messages.length === 0 ? (
+                <MessagesSkeleton dark />
+              ) : isEmailPlatform ? (
+                <EmailThreadView
+                  messages={messages}
+                  emailSubject={emailSubject}
+                  collapsedMessages={collapsedMessages}
+                  toggleCollapsed={toggleCollapsed}
+                  onReply={openReplyBox}
+                  messagesEndRef={messagesEndRef}
+                />
+              ) : (
+                <div className="flex-1 overflow-y-auto px-3 sm:px-6 py-4 space-y-3 animate-fade-in bg-[#0c1a2e]">
+                  {messages.map((msg, idx) => {
+                    const isOutbound = msg.direction === 'outbound';
+                    const prevMsg = idx > 0 ? messages[idx - 1] : null;
+                    const showDate = !prevMsg || !isSameDay(prevMsg.sentAt, msg.sentAt);
+                    return (
+                      <div key={msg.id || `msg-${idx}`}>
+                        {showDate && (
+                          <div className="flex items-center justify-center my-4">
+                            <span className="text-xs px-3 py-1 rounded-full bg-white/10 text-gray-400">
+                              {formatDate(msg.sentAt)}
+                            </span>
+                          </div>
+                        )}
+                        {renderChatBubble(msg, isOutbound)}
+                        {msg.status === 'failed' && (
+                          <div className="flex justify-end items-center gap-2 mt-1 px-2">
+                            <AlertCircle size={12} className="text-red-500" />
+                            <span className="text-[10px] text-red-500">Failed to send</span>
+                            <button
+                              onClick={() => {
+                                setMessages((prev) => prev.filter((m) => m.id !== msg.id));
+                                setNewMessage(msg.content || '');
+                                setSendError('');
+                              }}
+                              className="text-[10px] text-blue-400 hover:text-blue-300 flex items-center gap-0.5"
+                            >
+                              <RefreshCw size={10} />
+                              Retry
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                  <div ref={messagesEndRef} />
+                </div>
+              )}
+
+              {/* Send error */}
+              {sendError && (
+                <div className="px-4 sm:px-6 py-2 bg-red-500/10 border-t border-red-500/20">
+                  <p className="text-xs text-red-400">{sendError}</p>
+                </div>
+              )}
+
+              {/* File validation toast */}
+              {fileError && (
+                <div className="absolute bottom-24 left-1/2 -translate-x-1/2 z-50 w-[90%] max-w-md animate-fade-in">
+                  <div className="bg-red-600 text-white rounded-xl shadow-lg px-4 py-3 flex items-start gap-3">
+                    <AlertCircle size={18} className="flex-shrink-0 mt-0.5" />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium leading-snug">{fileError.message}</p>
+                      {fileError.details && <p className="text-xs text-red-200 mt-1 leading-snug">{fileError.details}</p>}
+                    </div>
+                    <button onClick={() => { clearTimeout(fileErrorTimerRef.current); setFileError(null); }} className="flex-shrink-0 text-red-200 hover:text-white transition"><X size={16} /></button>
+                  </div>
+                </div>
+              )}
+
+              {/* Hidden file input */}
+              <input
+                ref={fileInputRef}
+                type="file"
+                multiple
+                accept="image/jpeg,image/png,image/gif,image/webp,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/plain,text/csv,audio/mpeg,audio/ogg,audio/wav,video/mp4,video/webm"
+                className="hidden"
+                onChange={(e) => {
+                  if (e.target.files?.length) {
+                    const selectedFiles = Array.from(e.target.files);
+                    e.target.value = '';
+                    handleFileSelect(selectedFiles);
+                  }
+                }}
+              />
+
+              {/* Composer */}
+              {isEmailPlatform ? (
+                <EmailReplyBox
+                  ref={replyBoxRef}
+                  showReplyBox={showReplyBox}
+                  replyingTo={replyingTo}
+                  newMessage={newMessage}
+                  setNewMessage={setNewMessage}
+                  handleSend={handleSend}
+                  sending={sending}
+                  attachments={attachments}
+                  onAttachClick={() => fileInputRef.current?.click()}
+                  removeAttachment={removeAttachment}
+                  uploadProgress={uploadProgress}
+                  onOpenReply={() => {
+                    const lastMsg = messages[messages.length - 1];
+                    openReplyBox(lastMsg || { subject: emailSubject });
+                  }}
+                  onClose={() => { setShowReplyBox(false); setReplyingTo(null); setAttachments([]); }}
+                />
+              ) : (
+                <>
+                  {attachments.length > 0 && (
+                    <AttachmentPreview attachments={attachments} onRemove={removeAttachment} uploadProgress={uploadProgress} />
+                  )}
+                  <ChatComposer
+                    newMessage={newMessage}
+                    setNewMessage={setNewMessage}
+                    handleSend={handleSend}
+                    sending={sending}
+                    attachments={attachments}
+                    onAttachClick={() => fileInputRef.current?.click()}
+                  />
+                </>
+              )}
+            </>
+          ) : null}
+        </div>
+      </div>
+    );
+  }
+
+  // ═══════════════════════════════════════════════════════════════════
+  // RENDER: INBOX LIST VIEW (no conversation selected)
+  // ═══════════════════════════════════════════════════════════════════
+
   return (
-    <div className="flex h-full">
-      {/* ─── Conversation List ─── */}
-      <div
-        className={`bg-white border-r border-gray-200 flex flex-col w-full md:w-80 lg:w-96 flex-shrink-0 ${conversationId ? 'hidden md:flex' : 'flex'}`}
-      >
-        <div className="px-4 py-4 border-b border-gray-200">
-          <div className="flex items-center justify-between mb-3">
-            <div className="flex items-center gap-2">
-              <h1 className="text-lg sm:text-xl font-bold text-gray-900">Smart Inbox</h1>
-              <span
-                className={`w-2 h-2 rounded-full flex-shrink-0 ${socketConnected ? 'bg-green-500' : 'bg-red-400'}`}
-                title={socketConnected ? 'Live — real-time updates active' : 'Disconnected — updates may be delayed'}
+    <div className="flex h-full bg-[#0c1a2e]">
+      {/* Filter Panel */}
+      <div className="hidden md:flex w-64 flex-shrink-0 flex-col bg-[#0f1d33] border-r border-white/5">
+        <FilterPanel
+          activeFilter={activeFilter}
+          setActiveFilter={setActiveFilter}
+          filterCounts={filterCounts}
+          sourceFilters={sourceFilters}
+          toggleSourceFilter={toggleSourceFilter}
+          sourceCounts={sourceCounts}
+        />
+      </div>
+
+      {/* Main content */}
+      <div className="flex-1 flex flex-col min-w-0 bg-[#0f1d33] rounded-tl-2xl">
+        {/* Top bar */}
+        <div className="flex items-center justify-between px-4 sm:px-6 py-4 border-b border-white/10">
+          <h1 className="text-xl font-bold text-white hidden sm:block">Smart Inbox</h1>
+          <div className="flex items-center gap-3 flex-1 sm:flex-none sm:ml-4">
+            <div className="relative flex-1 sm:w-72">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" size={16} />
+              <input
+                type="text"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search inbox"
+                className="w-full pl-9 pr-4 py-2.5 bg-white/5 border border-white/10 rounded-xl text-sm text-white placeholder-gray-500 focus:bg-white/10 focus:border-primary-400 focus:ring-1 focus:ring-primary-400 outline-none transition"
               />
             </div>
-          </div>
-          <div className="relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
-            <input
-              type="text"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search conversations..."
-              className="w-full pl-9 pr-4 py-2.5 bg-gray-100 border border-transparent rounded-lg text-sm focus:bg-white focus:border-primary-300 focus:ring-1 focus:ring-primary-300 outline-none"
-            />
+            <button
+              onClick={() => navigate('/connections')}
+              className="flex items-center gap-2 px-4 py-2.5 bg-primary-500 hover:bg-primary-600 text-white text-sm font-semibold rounded-xl transition whitespace-nowrap"
+            >
+              <Link2 size={16} />
+              LINK ACCOUNT
+            </button>
           </div>
         </div>
 
+        {/* Toolbar row */}
+        <div className="flex items-center gap-3 px-4 sm:px-6 py-2.5 border-b border-white/5">
+          <input
+            type="checkbox"
+            checked={selectedMessages.size > 0 && selectedMessages.size === paginatedConversations.length}
+            onChange={toggleSelectAll}
+            className="w-4 h-4 rounded border-gray-600 bg-transparent text-primary-500 focus:ring-primary-500 focus:ring-offset-0 cursor-pointer"
+          />
+          <button className="p-1.5 text-gray-500 hover:text-gray-300 transition rounded" title="Refresh">
+            <RotateCw size={16} onClick={() => fetchConversations()} />
+          </button>
+          <button className="p-1.5 text-gray-500 hover:text-gray-300 transition rounded" title="More actions">
+            <MoreHorizontal size={16} />
+          </button>
+        </div>
+
+        {/* Message rows */}
         <div className="flex-1 overflow-y-auto">
           {showConversationSkeleton && filteredConversations.length === 0 ? (
-            <ConversationListSkeleton />
+            <InboxListSkeleton />
           ) : filteredConversations.length === 0 && !loadingConversations ? (
-            <div className="flex flex-col items-center justify-center h-full text-gray-400 px-6">
-              <MessageSquare size={40} className="mb-3" />
-              <p className="text-sm font-medium">No conversations yet</p>
-              <p className="text-xs mt-1">Connect an account to start</p>
+            <div className="flex flex-col items-center justify-center h-full text-gray-500 px-6">
+              <MessageSquare size={48} className="mb-3 text-gray-600" />
+              <p className="text-sm font-medium text-gray-400">No conversations found</p>
+              <p className="text-xs mt-1 text-gray-600">Connect an account or adjust your filters</p>
             </div>
-          ) : filteredConversations.length === 0 ? null : (
-            filteredConversations.map((conv) => {
+          ) : (
+            paginatedConversations.map((conv) => {
               const lastMessage = conv.messages?.[0];
               const preview = lastMessage?.content
                 ? lastMessage.content.replace(/<[^>]+>/g, '').replace(/\n+/g, ' ').slice(0, 80)
                 : 'No messages';
               const convPlatform = conv.connectedAccount?.platform;
+              const isStarred = starredConversations.has(conv.id);
+              const isSelected = selectedMessages.has(conv.id);
+              const isUnread = conv.unreadCount > 0;
 
               return (
                 <button
                   key={conv.id}
                   onClick={() => handleSelectConversation(conv.id)}
-                  className={`w-full px-4 py-3.5 flex items-center gap-3 hover:bg-gray-50 border-b border-gray-100 transition text-left ${
-                    conv.id === conversationId ? 'bg-primary-50 border-l-[3px] border-l-primary-500' : ''
+                  className={`w-full px-4 sm:px-6 py-3.5 flex items-center gap-3 border-b border-white/5 transition text-left group hover:bg-white/5 ${
+                    isUnread ? 'bg-white/[0.02]' : ''
                   }`}
                 >
-                  <div className="relative flex-shrink-0">
-                    <div className={`w-11 h-11 rounded-full flex items-center justify-center ${getPlatformAvatarStyle(convPlatform)}`}>
-                      <PlatformIcon platform={convPlatform} size={20} />
-                    </div>
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center justify-between">
-                      <span className={`text-sm truncate ${conv.unreadCount > 0 ? 'font-semibold text-gray-900' : 'font-medium text-gray-700'}`}>
-                        {getContactDisplayName(conv.contact, convPlatform)}
-                      </span>
-                      <span className="text-xs text-gray-400 flex-shrink-0 ml-2">{formatTime(conv.lastMessageAt)}</span>
-                    </div>
-                    <div className="flex items-center justify-between mt-0.5">
-                      <p className={`text-xs truncate ${conv.unreadCount > 0 ? 'text-gray-700 font-medium' : 'text-gray-500'}`}>
-                        {lastMessage?.direction === 'outbound' ? 'You: ' : ''}{preview}
-                      </p>
-                      {conv.unreadCount > 0 && (
-                        <span className="ml-2 bg-primary-500 text-white text-xs rounded-full w-5 h-5 flex items-center justify-center flex-shrink-0">
-                          {conv.unreadCount}
-                        </span>
-                      )}
-                    </div>
-                  </div>
+                  {/* Checkbox */}
+                  <input
+                    type="checkbox"
+                    checked={isSelected}
+                    onChange={(e) => toggleSelectMessage(conv.id, e)}
+                    onClick={(e) => e.stopPropagation()}
+                    className="w-4 h-4 rounded border-gray-600 bg-transparent text-primary-500 focus:ring-primary-500 focus:ring-offset-0 cursor-pointer flex-shrink-0"
+                  />
+
+                  {/* Star */}
+                  <button
+                    onClick={(e) => toggleStar(conv.id, e)}
+                    className={`flex-shrink-0 transition ${isStarred ? 'text-yellow-400' : 'text-gray-600 hover:text-yellow-400'}`}
+                  >
+                    <Star size={16} fill={isStarred ? 'currentColor' : 'none'} />
+                  </button>
+
+                  {/* Sender name */}
+                  <span className={`w-36 truncate text-sm flex-shrink-0 ${isUnread ? 'font-semibold text-white' : 'text-gray-300'}`}>
+                    {getContactDisplayName(conv.contact, convPlatform)}
+                  </span>
+
+                  {/* Platform badge */}
+                  <span className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold flex-shrink-0 ${getPlatformBadgeStyle(convPlatform)}`}>
+                    {getPlatformLabel(convPlatform)}
+                  </span>
+
+                  {/* Message preview */}
+                  <span className={`flex-1 truncate text-sm ${isUnread ? 'text-gray-200' : 'text-gray-500'}`}>
+                    {preview}
+                  </span>
+
+                  {/* Timestamp */}
+                  <span className="text-xs text-gray-500 flex-shrink-0 ml-2">
+                    {formatTimeShort(conv.lastMessageAt)}
+                  </span>
                 </button>
               );
             })
           )}
         </div>
-      </div>
 
-      {/* ─── Chat Area ─── */}
-      <div
-        className={`flex-1 flex flex-col ${conversationId ? 'flex' : 'hidden md:flex'}`}
-        style={{ backgroundColor: platformTheme.chatBg }}
-        onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
-        onDragLeave={() => setDragOver(false)}
-        onDrop={handleDrop}
-      >
-        {/* Drop overlay */}
-        {dragOver && (
-          <div className="absolute inset-0 bg-primary-500/10 border-2 border-dashed border-primary-400 z-10 flex items-center justify-center rounded-lg pointer-events-none">
-            <div className="bg-white px-6 py-4 rounded-xl shadow-lg text-center">
-              <UploadCloud size={32} className="text-primary-500 mx-auto mb-2" />
-              <p className="text-sm font-medium text-gray-700">Drop files here to attach</p>
-            </div>
-          </div>
-        )}
-
-        {conversationId && !activeConversation ? (
-          /* Chat loading skeleton — conversationId is set but data hasn't arrived yet */
-          <>
-            <div className="border-b px-4 sm:px-6 py-3 flex items-center gap-3 bg-white border-gray-200">
-              <button onClick={handleBackToList} className="md:hidden text-gray-600 hover:text-gray-900 transition flex-shrink-0">
-                <ArrowLeft size={20} />
+        {/* Pagination */}
+        {filteredConversations.length > 0 && (
+          <div className="flex items-center justify-between px-4 sm:px-6 py-3 border-t border-white/10 text-sm text-gray-400">
+            <span>
+              Showing {Math.min((currentPage - 1) * ITEMS_PER_PAGE + 1, filteredConversations.length)}-{Math.min(currentPage * ITEMS_PER_PAGE, filteredConversations.length)} of {filteredConversations.length.toLocaleString()}
+            </span>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                disabled={currentPage === 1}
+                className="p-1.5 rounded-lg border border-white/10 text-gray-400 hover:text-white hover:bg-white/5 transition disabled:opacity-30 disabled:cursor-not-allowed"
+              >
+                <ChevronLeft size={16} />
               </button>
-              <div className="w-10 h-10 rounded-full bg-gray-200 animate-pulse flex-shrink-0" />
-              <div className="flex-1 min-w-0 space-y-2">
-                <div className="h-4 w-32 bg-gray-200 rounded animate-pulse" />
-                <div className="h-3 w-20 bg-gray-100 rounded animate-pulse" />
-              </div>
-            </div>
-            <MessagesSkeleton />
-          </>
-        ) : conversationId && activeConversation ? (
-          <>
-            {/* Chat header */}
-            <div className={`border-b px-4 sm:px-6 py-3 flex items-center gap-3 ${platformTheme.headerBg} ${platformTheme.headerBorder}`}>
-              <button onClick={handleBackToList} className="md:hidden text-gray-600 hover:text-gray-900 transition flex-shrink-0">
-                <ArrowLeft size={20} />
+              <button
+                onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                disabled={currentPage === totalPages}
+                className="p-1.5 rounded-lg border border-white/10 text-gray-400 hover:text-white hover:bg-white/5 transition disabled:opacity-30 disabled:cursor-not-allowed"
+              >
+                <ChevronRight size={16} />
               </button>
-              <div className={`w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0 ${getPlatformAvatarStyle(platform)}`}>
-                <PlatformIcon platform={platform} size={18} />
-              </div>
-              <div className="flex-1 min-w-0">
-                <h2 className="font-semibold text-gray-900 truncate text-sm sm:text-base">
-                  {getContactDisplayName(activeConversation.contact, platform)}
-                </h2>
-                <div className="flex items-center gap-2">
-                  <PlatformBadge platform={platform} size="xs" />
-                  {isEmailPlatform && emailSubject && (
-                    <span className="text-xs text-gray-400 truncate hidden sm:inline">&mdash; {emailSubject}</span>
-                  )}
-                </div>
-              </div>
             </div>
-
-            {/* Messages area */}
-            {showMessageSkeleton && messages.length === 0 ? (
-              <MessagesSkeleton />
-            ) : isEmailPlatform ? (
-              <EmailThreadView
-                messages={messages}
-                emailSubject={emailSubject}
-                collapsedMessages={collapsedMessages}
-                toggleCollapsed={toggleCollapsed}
-                onReply={openReplyBox}
-                messagesEndRef={messagesEndRef}
-              />
-            ) : (
-              <div className="flex-1 overflow-y-auto px-3 sm:px-6 py-4 space-y-3 animate-fade-in">
-                {messages.map((msg, idx) => {
-                  const isOutbound = msg.direction === 'outbound';
-                  const prevMsg = idx > 0 ? messages[idx - 1] : null;
-                  const showDate = !prevMsg || !isSameDay(prevMsg.sentAt, msg.sentAt);
-                  return (
-                    <div key={msg.id || `msg-${idx}`}>
-                      {showDate && (
-                        <div className="flex items-center justify-center my-4">
-                          <span className={`text-xs px-3 py-1 rounded-full ${platformTheme.dateBadgeBg} ${platformTheme.dateBadgeText}`}>
-                            {formatDate(msg.sentAt)}
-                          </span>
-                        </div>
-                      )}
-                      {platform === 'whatsapp'
-                        ? renderWhatsAppMessage(msg, isOutbound)
-                        : platform === 'instagram'
-                        ? renderInstagramMessage(msg, isOutbound)
-                        : platform === 'facebook'
-                        ? renderFacebookMessage(msg, isOutbound)
-                        : renderDefaultMessage(msg, isOutbound)}
-                      {msg.status === 'failed' && (
-                        <div className="flex justify-end items-center gap-2 mt-1 px-2">
-                          <AlertCircle size={12} className="text-red-500" />
-                          <span className="text-[10px] text-red-500">Failed to send</span>
-                          <button
-                            onClick={() => {
-                              // Remove failed message and restore content for retry
-                              setMessages((prev) => prev.filter((m) => m.id !== msg.id));
-                              setNewMessage(msg.content || '');
-                              setSendError('');
-                            }}
-                            className="text-[10px] text-blue-500 hover:text-blue-700 flex items-center gap-0.5"
-                          >
-                            <RefreshCw size={10} />
-                            Retry
-                          </button>
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-                <div ref={messagesEndRef} />
-              </div>
-            )}
-
-            {/* Send error */}
-            {sendError && (
-              <div className="px-4 sm:px-6 py-2 bg-red-50 border-t border-red-200">
-                <p className="text-xs text-red-600">{sendError}</p>
-              </div>
-            )}
-
-            {/* File validation toast */}
-            {fileError && (
-              <div className="absolute bottom-24 left-1/2 -translate-x-1/2 z-50 w-[90%] max-w-md animate-fade-in">
-                <div className="bg-red-600 text-white rounded-xl shadow-lg px-4 py-3 flex items-start gap-3">
-                  <AlertCircle size={18} className="flex-shrink-0 mt-0.5" />
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium leading-snug">{fileError.message}</p>
-                    {fileError.details && (
-                      <p className="text-xs text-red-200 mt-1 leading-snug">{fileError.details}</p>
-                    )}
-                  </div>
-                  <button
-                    onClick={() => { clearTimeout(fileErrorTimerRef.current); setFileError(null); }}
-                    className="flex-shrink-0 text-red-200 hover:text-white transition"
-                  >
-                    <X size={16} />
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {/* Hidden file input */}
-            <input
-              ref={fileInputRef}
-              type="file"
-              multiple
-              accept="image/jpeg,image/png,image/gif,image/webp,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/plain,text/csv,audio/mpeg,audio/ogg,audio/wav,video/mp4,video/webm"
-              className="hidden"
-              onChange={(e) => {
-                if (e.target.files?.length) {
-                  const selectedFiles = Array.from(e.target.files);
-                  e.target.value = '';
-                  handleFileSelect(selectedFiles);
-                }
-              }}
-            />
-
-            {/* Email reply box OR chat composer */}
-            {isEmailPlatform ? (
-              <EmailReplyBox
-                ref={replyBoxRef}
-                showReplyBox={showReplyBox}
-                replyingTo={replyingTo}
-                newMessage={newMessage}
-                setNewMessage={setNewMessage}
-                handleSend={handleSend}
-                sending={sending}
-                attachments={attachments}
-                onAttachClick={() => fileInputRef.current?.click()}
-                removeAttachment={removeAttachment}
-                uploadProgress={uploadProgress}
-                onOpenReply={() => {
-                  const lastMsg = messages[messages.length - 1];
-                  openReplyBox(lastMsg || { subject: emailSubject });
-                }}
-                onClose={() => { setShowReplyBox(false); setReplyingTo(null); setAttachments([]); }}
-              />
-            ) : (
-              <>
-                {attachments.length > 0 && (
-                  <AttachmentPreview attachments={attachments} onRemove={removeAttachment} uploadProgress={uploadProgress} />
-                )}
-                {renderComposer({
-                  platform,
-                  newMessage,
-                  setNewMessage,
-                  handleSend,
-                  sending,
-                  attachments,
-                  onAttachClick: () => fileInputRef.current?.click(),
-                  showEmojiPicker,
-                  setShowEmojiPicker,
-                })}
-              </>
-            )}
-          </>
-        ) : (
-          <div className="flex-1 flex flex-col items-center justify-center text-gray-400 px-6">
-            <div className="w-20 h-20 bg-gray-100 rounded-full flex items-center justify-center mb-4">
-              <MessageSquare size={36} className="text-gray-300" />
-            </div>
-            <h2 className="text-lg sm:text-xl font-semibold text-gray-600">Select a conversation</h2>
-            <p className="text-sm mt-1 text-center">Choose a conversation from the list to start messaging</p>
           </div>
         )}
       </div>
@@ -1006,34 +1152,195 @@ export default function InboxPage() {
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// EMAIL THREAD VIEW — Gmail-like conversation view
+// FILTER PANEL COMPONENT
+// ═══════════════════════════════════════════════════════════════════
+
+function FilterPanel({ activeFilter, setActiveFilter, filterCounts, sourceFilters, toggleSourceFilter, sourceCounts }) {
+  return (
+    <div className="flex flex-col h-full py-4">
+      {/* Filter categories */}
+      <div className="px-3 space-y-0.5">
+        {FILTER_CATEGORIES.map(({ key, label, icon: Icon }) => {
+          const isActive = activeFilter === key;
+          const count = filterCounts[key] || 0;
+          return (
+            <button
+              key={key}
+              onClick={() => setActiveFilter(key)}
+              className={`w-full flex items-center justify-between px-3 py-2.5 rounded-lg text-sm transition ${
+                isActive
+                  ? 'bg-primary-600/20 text-primary-400'
+                  : 'text-gray-400 hover:bg-white/5 hover:text-gray-200'
+              }`}
+            >
+              <div className="flex items-center gap-3">
+                <Icon size={18} className={isActive ? 'text-primary-400' : 'text-gray-500'} />
+                <span className={isActive ? 'font-medium' : ''}>{label}</span>
+              </div>
+              {count > 0 && (
+                <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${
+                  isActive ? 'bg-primary-500/20 text-primary-300' : 'text-gray-500'
+                }`}>
+                  {count}
+                </span>
+              )}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Source section */}
+      <div className="mt-6 px-3">
+        <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider px-3 mb-2">Source</h3>
+        <div className="space-y-1">
+          {SOURCE_FILTERS.map(({ key, label }) => {
+            const isChecked = sourceFilters.has(key);
+            const count = sourceCounts[key] || 0;
+            return (
+              <label
+                key={key}
+                className="flex items-center gap-3 px-3 py-2 rounded-lg text-sm text-gray-400 hover:bg-white/5 hover:text-gray-200 cursor-pointer transition"
+              >
+                <input
+                  type="checkbox"
+                  checked={isChecked}
+                  onChange={() => toggleSourceFilter(key)}
+                  className="w-4 h-4 rounded border-gray-600 bg-transparent text-primary-500 focus:ring-primary-500 focus:ring-offset-0 cursor-pointer"
+                />
+                <span className="flex-1">{label}</span>
+                {count > 0 && <span className="text-xs text-gray-600">{count}</span>}
+              </label>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Connect account link */}
+      <div className="mt-4 px-6">
+        <button className="flex items-center gap-2 text-sm text-gray-500 hover:text-primary-400 transition">
+          <span className="text-lg leading-none">+</span>
+          Connect account
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// CHAT COMPOSER (dark theme, matching design)
+// ═══════════════════════════════════════════════════════════════════
+
+function ChatComposer({ newMessage, setNewMessage, handleSend, sending, attachments, onAttachClick }) {
+  const hasContent = newMessage.trim() || attachments.length > 0;
+
+  return (
+    <div className="border-t border-white/10 bg-[#0f1d33] px-4 sm:px-6 py-3">
+      <form onSubmit={handleSend} className="flex items-center gap-3">
+        {/* AI Respond button */}
+        <button
+          type="button"
+          className="flex items-center gap-2 px-3 py-2 text-sm text-primary-400 hover:text-primary-300 hover:bg-primary-500/10 rounded-lg transition whitespace-nowrap"
+        >
+          <Bot size={16} />
+          AI Respond
+        </button>
+
+        {/* Input */}
+        <div className="flex-1 relative">
+          <input
+            type="text"
+            value={newMessage}
+            onChange={(e) => setNewMessage(e.target.value)}
+            placeholder="Write message"
+            className="w-full px-4 py-2.5 bg-white/5 border border-white/10 rounded-xl text-sm text-white placeholder-gray-500 focus:bg-white/10 focus:border-primary-400 outline-none transition"
+          />
+        </div>
+
+        {/* Attach */}
+        <button
+          type="button"
+          onClick={onAttachClick}
+          className="p-2 text-gray-500 hover:text-gray-300 transition"
+          title="Attach file"
+        >
+          <Paperclip size={18} />
+        </button>
+
+        {/* Emoji */}
+        <button
+          type="button"
+          className="p-2 text-gray-500 hover:text-gray-300 transition hidden sm:block"
+        >
+          <Smile size={18} />
+        </button>
+
+        {/* Send */}
+        <button
+          type="submit"
+          disabled={!hasContent || sending}
+          className="flex items-center gap-2 px-4 py-2.5 bg-primary-500 hover:bg-primary-600 text-white text-sm font-medium rounded-xl transition disabled:opacity-40 disabled:cursor-not-allowed"
+        >
+          Send
+          <Send size={14} />
+        </button>
+      </form>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// CHAT BUBBLE (dark theme, matching design)
+// ═══════════════════════════════════════════════════════════════════
+
+function renderChatBubble(msg, isOutbound) {
+  const isSending = msg._optimistic || msg.status === 'sending';
+  const isPlaceholder = msg.attachments?.length > 0 && msg.content && /^\[[\w\s.,_-]+\]$/.test(msg.content.trim());
+  const textContent = isPlaceholder ? '' : (msg.content || '');
+  const hasAttachments = msg.attachments && Array.isArray(msg.attachments) && msg.attachments.length > 0;
+  if (!textContent && !hasAttachments && !isSending) return null;
+
+  return (
+    <div className={`flex ${isOutbound ? 'justify-end' : 'justify-start'}`}>
+      <div className={`max-w-[80%] sm:max-w-[65%] px-4 py-3 rounded-2xl text-sm ${
+        isOutbound
+          ? 'bg-primary-500 text-white rounded-br-md'
+          : 'bg-white/10 text-gray-200 rounded-bl-md'
+      } ${isSending ? 'opacity-70' : ''}`}>
+        {textContent && <p className="whitespace-pre-wrap break-words leading-relaxed">{textContent}</p>}
+        <MessageAttachments attachments={msg.attachments} messageId={msg.id} isOutbound={isOutbound} />
+        <p className={`text-[10px] mt-1.5 text-right ${isOutbound ? 'text-primary-200' : 'text-gray-500'}`}>
+          {isSending ? 'Sending...' : formatTime(msg.sentAt)}
+        </p>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// EMAIL THREAD VIEW
 // ═══════════════════════════════════════════════════════════════════
 
 function EmailThreadView({ messages, emailSubject, collapsedMessages, toggleCollapsed, onReply, messagesEndRef }) {
-  // Auto-collapse all messages except the last 2 for long threads
   const autoCollapsed = messages.length > 3;
 
   return (
-    <div className="flex-1 overflow-y-auto">
+    <div className="flex-1 overflow-y-auto bg-[#0c1a2e]">
       <div className="max-w-3xl mx-auto px-4 sm:px-6 py-6">
-        {/* Thread subject header */}
         <div className="mb-6">
-          <h1 className="text-xl sm:text-2xl font-semibold text-gray-900 leading-tight">{emailSubject}</h1>
+          <h1 className="text-xl sm:text-2xl font-semibold text-white leading-tight">{emailSubject}</h1>
           <div className="flex items-center gap-2 mt-2">
-            <span className="text-xs bg-gray-100 text-gray-500 px-2 py-0.5 rounded">Inbox</span>
-            <span className="text-xs text-gray-400">{messages.length} message{messages.length !== 1 ? 's' : ''}</span>
+            <span className="text-xs bg-white/10 text-gray-400 px-2 py-0.5 rounded">Inbox</span>
+            <span className="text-xs text-gray-500">{messages.length} message{messages.length !== 1 ? 's' : ''}</span>
           </div>
         </div>
 
-        {/* Email messages in chronological order */}
         <div className="space-y-0">
           {messages.map((msg, idx) => {
             const isOutbound = msg.direction === 'outbound';
             const isLast = idx === messages.length - 1;
             const isSecondLast = idx === messages.length - 2;
-            // Auto-collapse older messages in long threads, except last 2
             const isCollapsed = autoCollapsed && !isLast && !isSecondLast
-              ? !collapsedMessages.has(msg.id) // inverted: starts collapsed, click to expand
+              ? !collapsedMessages.has(msg.id)
               : collapsedMessages.has(msg.id);
 
             return (
@@ -1079,84 +1386,68 @@ function EmailMessageCard({ msg, isOutbound, isLast, isCollapsed, onToggleCollap
   const hasAttachments = msg.attachments && Array.isArray(msg.attachments) && msg.attachments.length > 0;
 
   return (
-    <div className={`border border-gray-200 bg-white ${isLast ? 'rounded-xl' : 'rounded-t-xl border-b-0'} overflow-hidden`}>
-      {/* Email header — always visible */}
+    <div className={`border border-white/10 bg-white/5 ${isLast ? 'rounded-xl' : 'rounded-t-xl border-b-0'} overflow-hidden`}>
       <div
-        className="flex items-center gap-3 px-4 sm:px-5 py-3 cursor-pointer hover:bg-gray-50 transition-colors"
+        className="flex items-center gap-3 px-4 sm:px-5 py-3 cursor-pointer hover:bg-white/5 transition-colors"
         onClick={onToggleCollapse}
       >
-        {/* Avatar */}
         <div className={`w-9 h-9 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0 ${
-          isOutbound ? 'bg-blue-100 text-blue-600' : 'bg-red-100 text-red-600'
+          isOutbound ? 'bg-blue-500/20 text-blue-400' : 'bg-red-500/20 text-red-400'
         }`}>
           {senderInitial}
         </div>
-
-        {/* Sender info */}
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
-            <span className="text-sm font-semibold text-gray-900">{senderName}</span>
+            <span className="text-sm font-semibold text-white">{senderName}</span>
             {isCollapsed && (
-              <span className="text-xs text-gray-400 truncate hidden sm:inline">
+              <span className="text-xs text-gray-500 truncate hidden sm:inline">
                 &mdash; {msg.content?.replace(/<[^>]+>/g, '').replace(/\n+/g, ' ').slice(0, 60) || '(empty)'}
               </span>
             )}
           </div>
           {!isCollapsed && (
-            <p className="text-xs text-gray-400 truncate">to {isOutbound ? (msg.sender || 'recipient') : 'me'}</p>
+            <p className="text-xs text-gray-500 truncate">to {isOutbound ? (msg.sender || 'recipient') : 'me'}</p>
           )}
         </div>
-
-        {/* Timestamp and expand/collapse */}
         <div className="flex items-center gap-2 flex-shrink-0">
-          <span className="text-xs text-gray-400 hidden sm:inline">{timestamp}</span>
-          {isCollapsed ? <ChevronDown size={16} className="text-gray-400" /> : <ChevronUp size={16} className="text-gray-400" />}
+          <span className="text-xs text-gray-500 hidden sm:inline">{timestamp}</span>
+          {isCollapsed ? <ChevronDown size={16} className="text-gray-500" /> : <ChevronUp size={16} className="text-gray-500" />}
         </div>
       </div>
 
-      {/* Email body — hidden when collapsed */}
       {!isCollapsed && (
         <>
-          {/* Subject shown on first message or when different */}
           {msg.subject && (
             <div className="px-4 sm:px-5 pb-1">
-              <div className="flex items-center gap-1.5 text-xs text-gray-400">
+              <div className="flex items-center gap-1.5 text-xs text-gray-500">
                 <Mail size={12} />
                 <span className="truncate">{msg.subject}</span>
               </div>
             </div>
           )}
-
-          {/* Timestamp on mobile */}
           <div className="px-4 sm:px-5 pb-2 sm:hidden">
-            <span className="text-xs text-gray-400">{timestamp}</span>
+            <span className="text-xs text-gray-500">{timestamp}</span>
           </div>
-
-          {/* Email body content */}
-          <div className="px-4 sm:px-5 py-4 border-t border-gray-50">
+          <div className="px-4 sm:px-5 py-4 border-t border-white/5">
             {sanitizedHtml ? (
               <div
-                className="email-html-content text-sm text-gray-800 leading-relaxed"
+                className="email-html-content text-sm text-gray-300 leading-relaxed"
                 dangerouslySetInnerHTML={{ __html: sanitizedHtml }}
               />
             ) : (
-              <div className="text-sm text-gray-800 whitespace-pre-wrap break-words leading-relaxed">
+              <div className="text-sm text-gray-300 whitespace-pre-wrap break-words leading-relaxed">
                 {msg.content}
               </div>
             )}
           </div>
-
-          {/* Attachments */}
           {hasAttachments && (
             <EmailAttachments attachments={msg.attachments} messageId={msg.id} />
           )}
-
-          {/* Reply/Forward footer */}
           {isLast && (
-            <div className="px-4 sm:px-5 py-3 border-t border-gray-100 flex items-center gap-2">
+            <div className="px-4 sm:px-5 py-3 border-t border-white/5 flex items-center gap-2">
               <button
                 onClick={(e) => { e.stopPropagation(); onReply(); }}
-                className="flex items-center gap-1.5 px-4 py-2 text-sm text-gray-600 bg-white border border-gray-200 rounded-full hover:bg-gray-50 hover:border-gray-300 transition"
+                className="flex items-center gap-1.5 px-4 py-2 text-sm text-gray-300 bg-white/5 border border-white/10 rounded-full hover:bg-white/10 hover:border-white/20 transition"
               >
                 <Reply size={14} />
                 Reply
@@ -1170,16 +1461,14 @@ function EmailMessageCard({ msg, isOutbound, isLast, isCollapsed, onToggleCollap
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// EMAIL ATTACHMENTS — with preview and download
+// EMAIL ATTACHMENTS
 // ═══════════════════════════════════════════════════════════════════
 
 function EmailAttachments({ attachments, messageId }) {
   const handleDownload = async (att, index) => {
     if (!messageId) return;
     try {
-      const response = await api.get(`/api/messages/${messageId}/attachments/${index}/download`, {
-        responseType: 'blob',
-      });
+      const response = await api.get(`/api/messages/${messageId}/attachments/${index}/download`, { responseType: 'blob' });
       const url = window.URL.createObjectURL(response.data);
       const a = document.createElement('a');
       a.href = url;
@@ -1201,60 +1490,52 @@ function EmailAttachments({ attachments, messageId }) {
   };
 
   return (
-    <div className="px-4 sm:px-5 py-3 border-t border-gray-100 bg-gray-50/50">
-      <p className="text-[10px] uppercase tracking-wider text-gray-400 font-medium mb-2">
+    <div className="px-4 sm:px-5 py-3 border-t border-white/5 bg-white/[0.02]">
+      <p className="text-[10px] uppercase tracking-wider text-gray-500 font-medium mb-2">
         {attachments.length} Attachment{attachments.length !== 1 ? 's' : ''}
       </p>
-      {/* Inline image previews */}
       {attachments.some(a => a.mimeType?.startsWith('image/') && (a.attachmentId || a.fileUrl || a.mediaId || a.localPath)) && (
         <div className="flex flex-wrap gap-2 mb-2">
           {attachments.map((att, i) => {
             if (!att.mimeType?.startsWith('image/') || !(att.attachmentId || att.fileUrl || att.mediaId || att.localPath)) return null;
             return (
-              <div key={i} className="relative bg-gray-200 animate-pulse rounded-lg min-h-[80px] min-w-[80px]">
+              <div key={i} className="relative bg-white/5 animate-pulse rounded-lg min-h-[80px] min-w-[80px]">
                 <img
                   src={getPreviewUrl(i)}
                   alt={att.filename}
-                  className="max-h-[200px] rounded-lg cursor-pointer border border-gray-200 relative z-[1]"
+                  className="max-h-[200px] rounded-lg cursor-pointer border border-white/10 relative z-[1]"
                   onClick={() => window.open(getPreviewUrl(i), '_blank')}
                   loading="lazy"
-                  onLoad={(e) => { e.target.parentElement.classList.remove('animate-pulse', 'bg-gray-200'); e.target.parentElement.style.minHeight = ''; e.target.parentElement.style.minWidth = ''; }}
+                  onLoad={(e) => { e.target.parentElement.classList.remove('animate-pulse', 'bg-white/5'); e.target.parentElement.style.minHeight = ''; e.target.parentElement.style.minWidth = ''; }}
                 />
               </div>
             );
           })}
         </div>
       )}
-      {/* File cards */}
       <div className="flex flex-wrap gap-2">
         {attachments.map((att, i) => (
           <div
             key={i}
             onClick={() => handleDownload(att, i)}
-            className="flex items-center gap-2 px-3 py-2 bg-white rounded-lg border border-gray-200 hover:border-blue-300 hover:shadow-sm transition-all cursor-pointer group"
+            className="flex items-center gap-2 px-3 py-2 bg-white/5 rounded-lg border border-white/10 hover:border-primary-400/50 hover:bg-white/10 transition-all cursor-pointer group"
           >
             <div className={`w-8 h-8 rounded flex items-center justify-center ${
-              att.mimeType?.startsWith('image/') ? 'bg-blue-50'
-              : att.mimeType?.includes('pdf') ? 'bg-red-50'
-              : 'bg-gray-100'
+              att.mimeType?.startsWith('image/') ? 'bg-blue-500/10'
+              : att.mimeType?.includes('pdf') ? 'bg-red-500/10'
+              : 'bg-white/5'
             }`}>
-              {att.mimeType?.startsWith('image/') ? (
-                <ImageIcon size={16} className="text-blue-500" />
-              ) : att.mimeType?.includes('pdf') ? (
-                <FileText size={16} className="text-red-500" />
-              ) : att.mimeType?.startsWith('audio/') ? (
-                <Music size={16} className="text-purple-500" />
-              ) : att.mimeType?.startsWith('video/') ? (
-                <Play size={16} className="text-orange-500" />
-              ) : (
-                <FileText size={16} className="text-gray-400" />
-              )}
+              {att.mimeType?.startsWith('image/') ? <ImageIcon size={16} className="text-blue-400" />
+              : att.mimeType?.includes('pdf') ? <FileText size={16} className="text-red-400" />
+              : att.mimeType?.startsWith('audio/') ? <Music size={16} className="text-purple-400" />
+              : att.mimeType?.startsWith('video/') ? <Play size={16} className="text-orange-400" />
+              : <FileText size={16} className="text-gray-500" />}
             </div>
             <div className="min-w-0">
-              <p className="text-xs font-medium text-gray-700 truncate max-w-[140px]">{att.filename}</p>
-              {formatFileSize(att.size) && <p className="text-[10px] text-gray-400">{formatFileSize(att.size)}</p>}
+              <p className="text-xs font-medium text-gray-300 truncate max-w-[140px]">{att.filename}</p>
+              {formatFileSize(att.size) && <p className="text-[10px] text-gray-500">{formatFileSize(att.size)}</p>}
             </div>
-            <Download size={14} className="text-gray-300 group-hover:text-blue-500 ml-1 transition-colors" />
+            <Download size={14} className="text-gray-600 group-hover:text-primary-400 ml-1 transition-colors" />
           </div>
         ))}
       </div>
@@ -1263,7 +1544,7 @@ function EmailAttachments({ attachments, messageId }) {
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// EMAIL REPLY BOX — Gmail-like reply composer
+// EMAIL REPLY BOX
 // ═══════════════════════════════════════════════════════════════════
 
 const EmailReplyBox = forwardRef(function EmailReplyBox(
@@ -1274,11 +1555,11 @@ const EmailReplyBox = forwardRef(function EmailReplyBox(
 
   if (!showReplyBox) {
     return (
-      <div className="border-t border-gray-200 bg-white px-4 sm:px-6 py-3">
+      <div className="border-t border-white/10 bg-[#0f1d33] px-4 sm:px-6 py-3">
         <div className="max-w-3xl mx-auto">
           <button
             onClick={onOpenReply}
-            className="flex items-center gap-2 px-4 py-2.5 text-sm text-gray-500 bg-gray-50 border border-gray-200 rounded-xl hover:bg-gray-100 hover:text-gray-700 transition w-full"
+            className="flex items-center gap-2 px-4 py-2.5 text-sm text-gray-500 bg-white/5 border border-white/10 rounded-xl hover:bg-white/10 hover:text-gray-300 transition w-full"
           >
             <Reply size={16} />
             Click here to reply...
@@ -1289,22 +1570,17 @@ const EmailReplyBox = forwardRef(function EmailReplyBox(
   }
 
   return (
-    <div ref={ref} className="border-t border-gray-200 bg-white px-4 sm:px-6 py-4">
+    <div ref={ref} className="border-t border-white/10 bg-[#0f1d33] px-4 sm:px-6 py-4">
       <div className="max-w-3xl mx-auto">
         <form onSubmit={handleSend}>
-          <div className="border border-gray-200 rounded-xl overflow-hidden shadow-sm focus-within:border-blue-300 focus-within:ring-1 focus-within:ring-blue-300 transition">
-            {/* Reply header */}
-            <div className="flex items-center justify-between px-4 py-2 bg-gray-50 border-b border-gray-100">
+          <div className="border border-white/10 rounded-xl overflow-hidden shadow-sm focus-within:border-primary-400 focus-within:ring-1 focus-within:ring-primary-400 transition">
+            <div className="flex items-center justify-between px-4 py-2 bg-white/5 border-b border-white/5">
               <div className="flex items-center gap-2 text-xs text-gray-500">
                 <Reply size={13} />
                 <span>Replying to {replyingTo?.sender || 'Unknown'}</span>
               </div>
-              <button type="button" onClick={onClose} className="text-gray-400 hover:text-gray-600 transition">
-                <X size={16} />
-              </button>
+              <button type="button" onClick={onClose} className="text-gray-500 hover:text-gray-300 transition"><X size={16} /></button>
             </div>
-
-            {/* Textarea */}
             <textarea
               value={newMessage}
               onChange={(e) => setNewMessage(e.target.value)}
@@ -1313,74 +1589,48 @@ const EmailReplyBox = forwardRef(function EmailReplyBox(
               }}
               placeholder="Write your reply..."
               rows={4}
-              className="w-full px-4 py-3 text-sm outline-none resize-none"
+              className="w-full px-4 py-3 text-sm outline-none resize-none bg-transparent text-white placeholder-gray-500"
               autoFocus
             />
-
-            {/* Attachment preview inside reply box */}
             {attachments.length > 0 && (
-              <div className="px-4 py-2 border-t border-gray-100 bg-gray-50/50">
+              <div className="px-4 py-2 border-t border-white/5 bg-white/[0.02]">
                 <div className="flex gap-2 flex-wrap">
                   {attachments.map((att) => (
-                    <div key={att.id} className="relative group flex items-center gap-2 px-2.5 py-1.5 bg-white rounded-lg border border-gray-200 text-xs">
+                    <div key={att.id} className="relative group flex items-center gap-2 px-2.5 py-1.5 bg-white/5 rounded-lg border border-white/10 text-xs">
                       {att.preview ? (
                         <img src={att.preview} alt={att.name} className="w-8 h-8 rounded object-cover" />
                       ) : (
-                        <FileText size={16} className="text-gray-400" />
+                        <FileText size={16} className="text-gray-500" />
                       )}
                       <div className="min-w-0">
-                        <p className="truncate max-w-[100px] font-medium text-gray-700">{att.name}</p>
-                        {formatFileSize(att.size) && <p className="text-[10px] text-gray-400">{formatFileSize(att.size)}</p>}
+                        <p className="truncate max-w-[100px] font-medium text-gray-300">{att.name}</p>
+                        {formatFileSize(att.size) && <p className="text-[10px] text-gray-500">{formatFileSize(att.size)}</p>}
                       </div>
-                      <button
-                        type="button"
-                        onClick={() => removeAttachment(att.id)}
-                        className="text-gray-300 hover:text-red-500 transition ml-1"
-                      >
-                        <X size={14} />
-                      </button>
+                      <button type="button" onClick={() => removeAttachment(att.id)} className="text-gray-600 hover:text-red-400 transition ml-1"><X size={14} /></button>
                     </div>
                   ))}
                 </div>
-                {/* Upload progress */}
                 {uploadProgress !== null && uploadProgress < 100 && (
                   <div className="mt-2">
-                    <div className="h-1 bg-gray-200 rounded-full overflow-hidden">
-                      <div className="h-full bg-blue-500 transition-all" style={{ width: `${uploadProgress}%` }} />
+                    <div className="h-1 bg-white/10 rounded-full overflow-hidden">
+                      <div className="h-full bg-primary-500 transition-all" style={{ width: `${uploadProgress}%` }} />
                     </div>
-                    <p className="text-[10px] text-gray-400 mt-0.5">{uploadProgress}% uploaded</p>
+                    <p className="text-[10px] text-gray-500 mt-0.5">{uploadProgress}% uploaded</p>
                   </div>
                 )}
               </div>
             )}
-
-            {/* Toolbar */}
-            <div className="flex items-center justify-between px-4 py-2 bg-gray-50 border-t border-gray-100">
-              <div className="flex items-center gap-1">
-                <button
-                  type="button"
-                  onClick={onAttachClick}
-                  className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-200 rounded transition"
-                  title="Attach files"
-                >
-                  <Paperclip size={16} />
-                </button>
-              </div>
+            <div className="flex items-center justify-between px-4 py-2 bg-white/5 border-t border-white/5">
+              <button type="button" onClick={onAttachClick} className="p-1.5 text-gray-500 hover:text-gray-300 hover:bg-white/10 rounded transition" title="Attach files"><Paperclip size={16} /></button>
               <button
                 type="submit"
                 disabled={!hasContent || sending}
-                className="bg-blue-600 hover:bg-blue-700 text-white px-5 py-1.5 rounded-lg text-sm font-medium transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                className="bg-primary-500 hover:bg-primary-600 text-white px-5 py-1.5 rounded-lg text-sm font-medium transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
               >
                 {sending ? (
-                  <>
-                    <span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                    Sending...
-                  </>
+                  <><span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />Sending...</>
                 ) : (
-                  <>
-                    <Send size={14} />
-                    Send
-                  </>
+                  <><Send size={14} />Send</>
                 )}
               </button>
             </div>
@@ -1392,22 +1642,22 @@ const EmailReplyBox = forwardRef(function EmailReplyBox(
 });
 
 // ═══════════════════════════════════════════════════════════════════
-// ATTACHMENT PREVIEW BAR (for non-email platforms)
+// ATTACHMENT PREVIEW BAR
 // ═══════════════════════════════════════════════════════════════════
 
 function AttachmentPreview({ attachments, onRemove, uploadProgress }) {
   return (
-    <div className="px-4 sm:px-6 py-2 bg-white border-t border-gray-100">
+    <div className="px-4 sm:px-6 py-2 bg-[#0f1d33] border-t border-white/10">
       <div className="flex gap-2 overflow-x-auto pb-1">
         {attachments.map((att) => (
           <div key={att.id} className="relative flex-shrink-0 group">
             {att.preview ? (
-              <div className="w-16 h-16 rounded-lg overflow-hidden border border-gray-200">
+              <div className="w-16 h-16 rounded-lg overflow-hidden border border-white/10">
                 <img src={att.preview} alt={att.name} className="w-full h-full object-cover" />
               </div>
             ) : (
-              <div className="w-16 h-16 rounded-lg border border-gray-200 bg-gray-50 flex flex-col items-center justify-center px-1">
-                <FileText size={18} className="text-gray-400 mb-0.5" />
+              <div className="w-16 h-16 rounded-lg border border-white/10 bg-white/5 flex flex-col items-center justify-center px-1">
+                <FileText size={18} className="text-gray-500 mb-0.5" />
                 <span className="text-[9px] text-gray-500 truncate w-full text-center">{att.name.split('.').pop()}</span>
               </div>
             )}
@@ -1417,13 +1667,13 @@ function AttachmentPreview({ attachments, onRemove, uploadProgress }) {
             >
               <X size={12} />
             </button>
-            <p className="text-[9px] text-gray-400 truncate w-16 mt-0.5 text-center">{att.name}</p>
+            <p className="text-[9px] text-gray-500 truncate w-16 mt-0.5 text-center">{att.name}</p>
           </div>
         ))}
       </div>
       {uploadProgress !== null && uploadProgress < 100 && (
         <div className="mt-1">
-          <div className="h-1 bg-gray-200 rounded-full overflow-hidden">
+          <div className="h-1 bg-white/10 rounded-full overflow-hidden">
             <div className="h-full bg-primary-500 transition-all" style={{ width: `${uploadProgress}%` }} />
           </div>
         </div>
@@ -1433,95 +1683,7 @@ function AttachmentPreview({ attachments, onRemove, uploadProgress }) {
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// SKELETON LOADING COMPONENTS
-// ═══════════════════════════════════════════════════════════════════
-
-function SkeletonPulse({ className }) {
-  return <div className={`skeleton-shimmer rounded ${className}`} />;
-}
-
-function ConversationListSkeleton() {
-  return (
-    <div className="flex flex-col">
-      {Array.from({ length: 8 }).map((_, i) => (
-        <div key={i} className="px-4 py-3.5 flex items-center gap-3 border-b border-gray-100">
-          <SkeletonPulse className="w-11 h-11 rounded-full flex-shrink-0" />
-          <div className="flex-1 min-w-0 space-y-2">
-            <div className="flex items-center justify-between">
-              <SkeletonPulse className={`h-3.5 ${i % 3 === 0 ? 'w-28' : i % 3 === 1 ? 'w-36' : 'w-24'}`} />
-              <SkeletonPulse className="h-3 w-10" />
-            </div>
-            <SkeletonPulse className={`h-3 ${i % 2 === 0 ? 'w-48' : 'w-40'}`} />
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function MessagesSkeleton() {
-  const bubbles = [
-    { align: 'start', w: 'w-48', h: 'h-10', lines: 1 },
-    { align: 'start', w: 'w-56', h: 'h-16', lines: 2 },
-    { align: 'end',   w: 'w-40', h: 'h-10', lines: 1 },
-    { align: 'start', w: 'w-52', h: 'h-10', lines: 1 },
-    { align: 'end',   w: 'w-60', h: 'h-20', lines: 3, hasImage: true },
-    { align: 'start', w: 'w-44', h: 'h-10', lines: 1 },
-    { align: 'end',   w: 'w-36', h: 'h-12', lines: 1 },
-  ];
-
-  return (
-    <div className="flex-1 overflow-hidden px-3 sm:px-6 py-4 space-y-3">
-      {/* Date badge skeleton */}
-      <div className="flex justify-center my-2">
-        <SkeletonPulse className="h-5 w-20 rounded-full" />
-      </div>
-      {bubbles.map((b, i) => (
-        <div key={i} className={`flex ${b.align === 'end' ? 'justify-end' : 'justify-start'}`}>
-          <div className={`${b.w} max-w-[65%] rounded-2xl ${b.align === 'start' ? 'rounded-tl-md' : 'rounded-tr-md'} bg-gray-200/60 animate-pulse p-3 space-y-1.5`}>
-            {b.hasImage && <SkeletonPulse className="w-full h-28 rounded-lg !bg-gray-300/50" />}
-            {Array.from({ length: b.lines }).map((_, j) => (
-              <SkeletonPulse key={j} className={`h-3 !bg-gray-300/50 rounded ${j === b.lines - 1 && b.lines > 1 ? 'w-3/4' : 'w-full'}`} />
-            ))}
-            <SkeletonPulse className={`h-2 w-12 !bg-gray-300/40 rounded mt-1 ${b.align === 'end' ? 'ml-auto' : ''}`} />
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-// ═══════════════════════════════════════════════════════════════════
-// PLATFORM THEMES & STYLES
-// ═══════════════════════════════════════════════════════════════════
-
-function getPlatformTheme(platform) {
-  switch (platform) {
-    case 'whatsapp':
-      return { chatBg: '#e5ddd5', headerBg: 'bg-[#075e54]', headerBorder: 'border-[#064e45]', dateBadgeBg: 'bg-white/80', dateBadgeText: 'text-gray-600' };
-    case 'instagram':
-      return { chatBg: '#fafafa', headerBg: 'bg-white', headerBorder: 'border-gray-200', dateBadgeBg: 'bg-gray-100', dateBadgeText: 'text-gray-400' };
-    case 'facebook':
-      return { chatBg: '#f0f2f5', headerBg: 'bg-white', headerBorder: 'border-gray-200', dateBadgeBg: 'bg-gray-200', dateBadgeText: 'text-gray-500' };
-    case 'gmail':
-      return { chatBg: '#f8f9fa', headerBg: 'bg-white', headerBorder: 'border-gray-200', dateBadgeBg: 'bg-gray-100', dateBadgeText: 'text-gray-400' };
-    default:
-      return { chatBg: '#f9fafb', headerBg: 'bg-white', headerBorder: 'border-gray-200', dateBadgeBg: 'bg-gray-100', dateBadgeText: 'text-gray-400' };
-  }
-}
-
-function getPlatformAvatarStyle(platform) {
-  switch (platform) {
-    case 'gmail': return 'bg-red-100 text-red-500';
-    case 'whatsapp': return 'bg-green-100 text-green-600';
-    case 'instagram': return 'bg-pink-100 text-pink-500';
-    case 'facebook': return 'bg-blue-100 text-blue-500';
-    default: return 'bg-gray-200 text-gray-500';
-  }
-}
-
-// ═══════════════════════════════════════════════════════════════════
-// MESSAGE ATTACHMENT INDICATOR (for non-email platforms)
+// MESSAGE ATTACHMENTS (inline in chat bubbles)
 // ═══════════════════════════════════════════════════════════════════
 
 const MessageAttachments = memo(function MessageAttachments({ attachments, messageId, isOutbound }) {
@@ -1530,9 +1692,7 @@ const MessageAttachments = memo(function MessageAttachments({ attachments, messa
   const handleDownload = async (att, index) => {
     if (!messageId) return;
     try {
-      const response = await api.get(`/api/messages/${messageId}/attachments/${index}/download`, {
-        responseType: 'blob',
-      });
+      const response = await api.get(`/api/messages/${messageId}/attachments/${index}/download`, { responseType: 'blob' });
       const url = window.URL.createObjectURL(response.data);
       const a = document.createElement('a');
       a.href = url;
@@ -1568,16 +1728,15 @@ const MessageAttachments = memo(function MessageAttachments({ attachments, messa
             <div key={i} className="relative rounded-lg overflow-hidden max-w-[280px] group cursor-pointer"
               onClick={() => window.open(previewUrl, '_blank')}
             >
-              <div className="relative bg-gray-200/60 animate-pulse rounded-lg min-h-[100px]">
+              <div className="relative bg-white/5 animate-pulse rounded-lg min-h-[100px]">
                 <img
                   src={previewUrl}
                   alt={att.filename || 'Image'}
                   className="w-full max-h-[300px] object-cover rounded-lg relative z-[1]"
                   loading="lazy"
-                  onLoad={(e) => { e.target.parentElement.classList.remove('animate-pulse', 'bg-gray-200/60'); e.target.parentElement.style.minHeight = ''; }}
+                  onLoad={(e) => { e.target.parentElement.classList.remove('animate-pulse', 'bg-white/5'); e.target.parentElement.style.minHeight = ''; }}
                 />
               </div>
-              {/* Overlay with download button — appears on hover */}
               <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors z-[2] rounded-lg flex items-end justify-between px-2 py-1.5">
                 <span className="text-[10px] text-white truncate opacity-0 group-hover:opacity-100 transition-opacity drop-shadow">{att.filename}</span>
                 <button
@@ -1595,21 +1754,10 @@ const MessageAttachments = memo(function MessageAttachments({ attachments, messa
         if (isVideo && previewUrl) {
           return (
             <div key={i} className="relative rounded-lg overflow-hidden max-w-[280px] group">
-              <video
-                src={previewUrl}
-                controls
-                preload="metadata"
-                className="w-full max-h-[300px] rounded-lg"
-              />
+              <video src={previewUrl} controls preload="metadata" className="w-full max-h-[300px] rounded-lg" />
               <div className="flex items-center justify-between mt-1 px-1">
                 <span className="text-[10px] text-gray-500 truncate">{att.filename}</span>
-                <button
-                  onClick={() => handleDownload(att, i)}
-                  className="p-1 rounded hover:bg-black/10 transition text-gray-400"
-                  title="Download"
-                >
-                  <Download size={12} />
-                </button>
+                <button onClick={() => handleDownload(att, i)} className="p-1 rounded hover:bg-white/10 transition text-gray-500" title="Download"><Download size={12} /></button>
               </div>
             </div>
           );
@@ -1621,30 +1769,23 @@ const MessageAttachments = memo(function MessageAttachments({ attachments, messa
               <audio src={previewUrl} controls preload="metadata" className="w-full h-10" />
               <div className="flex items-center justify-between px-1">
                 <span className="text-[10px] text-gray-500 truncate">{att.filename}</span>
-                <button
-                  onClick={() => handleDownload(att, i)}
-                  className={`p-1 rounded hover:bg-black/10 transition ${isOutbound ? 'text-gray-600' : 'text-gray-400'}`}
-                  title="Download"
-                >
-                  <Download size={12} />
-                </button>
+                <button onClick={() => handleDownload(att, i)} className="p-1 rounded hover:bg-white/10 transition text-gray-500" title="Download"><Download size={12} /></button>
               </div>
             </div>
           );
         }
 
-        // File card for documents, PDFs, etc.
         return (
           <div
             key={i}
-            className="flex items-center gap-2.5 px-3 py-2.5 bg-black/5 rounded-lg cursor-pointer hover:bg-black/10 transition max-w-[280px]"
+            className="flex items-center gap-2.5 px-3 py-2.5 bg-white/5 rounded-lg cursor-pointer hover:bg-white/10 transition max-w-[280px]"
             onClick={() => hasSource && handleDownload(att, i)}
           >
             <div className={`w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0 ${
-              mime.includes('pdf') ? 'bg-red-100 text-red-500'
-              : mime.includes('word') || mime.includes('document') ? 'bg-blue-100 text-blue-500'
-              : mime.includes('sheet') || mime.includes('excel') ? 'bg-green-100 text-green-500'
-              : 'bg-gray-200 text-gray-500'
+              mime.includes('pdf') ? 'bg-red-500/10 text-red-400'
+              : mime.includes('word') || mime.includes('document') ? 'bg-blue-500/10 text-blue-400'
+              : mime.includes('sheet') || mime.includes('excel') ? 'bg-green-500/10 text-green-400'
+              : 'bg-white/5 text-gray-500'
             }`}>
               {mime.includes('pdf') ? <FileText size={20} /> :
                isImage ? <ImageIcon size={20} /> :
@@ -1653,10 +1794,10 @@ const MessageAttachments = memo(function MessageAttachments({ attachments, messa
                <FileIcon size={20} />}
             </div>
             <div className="min-w-0 flex-1">
-              <p className="text-xs font-medium truncate">{att.filename || 'Unnamed file'}</p>
-              {formatFileSize(att.size) && <p className="text-[10px] text-gray-400">{formatFileSize(att.size)}</p>}
+              <p className="text-xs font-medium text-gray-300 truncate">{att.filename || 'Unnamed file'}</p>
+              {formatFileSize(att.size) && <p className="text-[10px] text-gray-500">{formatFileSize(att.size)}</p>}
             </div>
-            {hasSource && <Download size={14} className="text-gray-400 flex-shrink-0" />}
+            {hasSource && <Download size={14} className="text-gray-500 flex-shrink-0" />}
           </div>
         );
       })}
@@ -1665,238 +1806,110 @@ const MessageAttachments = memo(function MessageAttachments({ attachments, messa
 });
 
 // ═══════════════════════════════════════════════════════════════════
-// PLATFORM-SPECIFIC CHAT BUBBLES
+// SKELETON LOADING COMPONENTS
 // ═══════════════════════════════════════════════════════════════════
 
-function renderWhatsAppMessage(msg, isOutbound) {
-  const isSending = msg._optimistic || msg.status === 'sending';
-  const isPlaceholder = msg.attachments?.length > 0 && msg.content && /^\[[\w\s.,_-]+\]$/.test(msg.content.trim());
-  const textContent = isPlaceholder ? '' : (msg.content || '');
-  const hasAttachments = msg.attachments && Array.isArray(msg.attachments) && msg.attachments.length > 0;
+function SkeletonPulse({ className }) {
+  return <div className={`skeleton-shimmer rounded ${className}`} />;
+}
 
-  // Don't render completely empty bubbles (no text, no attachments)
-  if (!textContent && !hasAttachments && !isSending) return null;
-
+function InboxListSkeleton() {
   return (
-    <div className={`flex ${isOutbound ? 'justify-end' : 'justify-start'}`}>
-      <div className={`max-w-[80%] sm:max-w-[65%] px-3 py-2 rounded-lg text-sm shadow-sm relative ${
-        isOutbound ? 'bg-[#dcf8c6] text-gray-900 rounded-tr-none' : 'bg-white text-gray-900 rounded-tl-none'
-      } ${isSending ? 'opacity-70' : ''}`}>
-        {textContent && <p className="whitespace-pre-wrap break-words">{textContent}</p>}
-        <MessageAttachments attachments={msg.attachments} messageId={msg.id} isOutbound={isOutbound} />
-        <div className="flex items-center justify-end gap-1 mt-1">
-          <span className="text-[10px] text-gray-500">{formatTime(msg.sentAt)}</span>
-          {isOutbound && (
-            <span className="text-[10px] text-blue-500">
-              {isSending ? '○' : msg.status === 'delivered' || msg.status === 'read' ? '✓✓' : '✓'}
-            </span>
-          )}
+    <div className="flex flex-col">
+      {Array.from({ length: 8 }).map((_, i) => (
+        <div key={i} className="px-4 sm:px-6 py-3.5 flex items-center gap-3 border-b border-white/5">
+          <div className="w-4 h-4 rounded bg-white/5 animate-pulse flex-shrink-0" />
+          <div className="w-4 h-4 rounded bg-white/5 animate-pulse flex-shrink-0" />
+          <SkeletonPulse className={`h-3.5 w-28 !bg-white/5 flex-shrink-0`} />
+          <SkeletonPulse className="h-5 w-16 !bg-white/5 rounded-md flex-shrink-0" />
+          <SkeletonPulse className={`h-3.5 flex-1 !bg-white/5`} />
+          <SkeletonPulse className="h-3 w-14 !bg-white/5 flex-shrink-0" />
         </div>
-      </div>
+      ))}
     </div>
   );
 }
 
-function renderInstagramMessage(msg, isOutbound) {
-  const isSending = msg._optimistic || msg.status === 'sending';
-  const isPlaceholder = msg.attachments?.length > 0 && msg.content && /^\[[\w\s.,_-]+\]$/.test(msg.content.trim());
-  const textContent = isPlaceholder ? '' : (msg.content || '');
-  const hasAttachments = msg.attachments && Array.isArray(msg.attachments) && msg.attachments.length > 0;
-  if (!textContent && !hasAttachments && !isSending) return null;
-  return (
-    <div className={`flex ${isOutbound ? 'justify-end' : 'justify-start'}`}>
-      <div className={`max-w-[80%] sm:max-w-[65%] px-4 py-2.5 text-sm ${
-        isOutbound
-          ? 'bg-gradient-to-br from-purple-500 via-pink-500 to-orange-400 text-white rounded-3xl rounded-br-md'
-          : 'bg-gray-200 text-gray-900 rounded-3xl rounded-bl-md'
-      } ${isSending ? 'opacity-70' : ''}`}>
-        {textContent && <p className="whitespace-pre-wrap break-words">{textContent}</p>}
-        <MessageAttachments attachments={msg.attachments} messageId={msg.id} isOutbound={isOutbound} />
-        <p className={`text-[10px] mt-1 text-right ${isOutbound ? 'text-white/70' : 'text-gray-400'}`}>
-          {isSending ? 'Sending...' : formatTime(msg.sentAt)}
-        </p>
-      </div>
-    </div>
-  );
-}
+function MessagesSkeleton({ dark }) {
+  const bgClass = dark ? '!bg-white/5' : '!bg-gray-200/60';
+  const innerBgClass = dark ? '!bg-white/10' : '!bg-gray-300/50';
 
-function renderFacebookMessage(msg, isOutbound) {
-  const isSending = msg._optimistic || msg.status === 'sending';
-  const isPlaceholder = msg.attachments?.length > 0 && msg.content && /^\[[\w\s.,_-]+\]$/.test(msg.content.trim());
-  const textContent = isPlaceholder ? '' : (msg.content || '');
-  const hasAttachments = msg.attachments && Array.isArray(msg.attachments) && msg.attachments.length > 0;
-  if (!textContent && !hasAttachments && !isSending) return null;
-  return (
-    <div className={`flex ${isOutbound ? 'justify-end' : 'justify-start'}`}>
-      <div className={`max-w-[80%] sm:max-w-[65%] px-4 py-2.5 rounded-3xl text-sm ${
-        isOutbound ? 'bg-[#0084ff] text-white rounded-br-md' : 'bg-gray-200 text-gray-900 rounded-bl-md'
-      } ${isSending ? 'opacity-70' : ''}`}>
-        {textContent && <p className="whitespace-pre-wrap break-words">{textContent}</p>}
-        <MessageAttachments attachments={msg.attachments} messageId={msg.id} isOutbound={isOutbound} />
-        <p className={`text-[10px] mt-1 text-right ${isOutbound ? 'text-blue-200' : 'text-gray-400'}`}>
-          {isSending ? 'Sending...' : formatTime(msg.sentAt)}
-        </p>
-      </div>
-    </div>
-  );
-}
-
-function renderDefaultMessage(msg, isOutbound) {
-  const isSending = msg._optimistic || msg.status === 'sending';
-  const isPlaceholder = msg.attachments?.length > 0 && msg.content && /^\[[\w\s.,_-]+\]$/.test(msg.content.trim());
-  const textContent = isPlaceholder ? '' : (msg.content || '');
-  const hasAttachments = msg.attachments && Array.isArray(msg.attachments) && msg.attachments.length > 0;
-  if (!textContent && !hasAttachments && !isSending) return null;
-  return (
-    <div className={`flex ${isOutbound ? 'justify-end' : 'justify-start'}`}>
-      <div className={`max-w-[80%] sm:max-w-[65%] px-4 py-2.5 rounded-2xl text-sm ${
-        isOutbound
-          ? 'bg-primary-500 text-white rounded-br-md'
-          : 'bg-white text-gray-900 border border-gray-200 rounded-bl-md'
-      } ${isSending ? 'opacity-70' : ''}`}>
-        {textContent && <p className="whitespace-pre-wrap break-words">{textContent}</p>}
-        <MessageAttachments attachments={msg.attachments} messageId={msg.id} isOutbound={isOutbound} />
-        <p className={`text-xs mt-1 ${isOutbound ? 'text-primary-200' : 'text-gray-400'}`}>
-          {isSending ? 'Sending...' : formatTime(msg.sentAt)}
-        </p>
-      </div>
-    </div>
-  );
-}
-
-// ═══════════════════════════════════════════════════════════════════
-// EMOJI PICKER — lightweight inline picker for WhatsApp composer
-// ═══════════════════════════════════════════════════════════════════
-
-const EMOJI_CATEGORIES = {
-  'Smileys': ['😀','😃','😄','😁','😆','😅','🤣','😂','🙂','😊','😇','🥰','😍','🤩','😘','😗','😚','😙','🥲','😋','😛','😜','🤪','😝','🤑','🤗','🤭','🤫','🤔','🫡','🤐','🤨','😐','😑','😶','🫥','😏','😒','🙄','😬','🤥','😌','😔','😪','🤤','😴','😷','🤒','🤕','🤢','🤮','🥵','🥶','🥴','😵','🤯','🤠','🥳','🥸','😎','🤓','🧐'],
-  'Gestures': ['👋','🤚','🖐️','✋','🖖','🫱','🫲','👌','🤌','🤏','✌️','🤞','🫰','🤟','🤘','🤙','👈','👉','👆','🖕','👇','☝️','🫵','👍','👎','✊','👊','🤛','🤜','👏','🙌','🫶','👐','🤲','🤝','🙏'],
-  'Hearts': ['❤️','🧡','💛','💚','💙','💜','🖤','🤍','🤎','💔','❤️‍🔥','❤️‍🩹','💕','💞','💓','💗','💖','💘','💝','💟'],
-  'Objects': ['🎉','🎊','🎈','🎁','🎀','🏆','🥇','⭐','🌟','💫','✨','🔥','💯','👑','💎','📱','💻','📷','🎵','🎶','☀️','🌈','🌸','🍕','🍔','☕','🍺','🥂'],
-};
-
-function EmojiPicker({ onSelect, onClose }) {
-  const [activeCategory, setActiveCategory] = useState(Object.keys(EMOJI_CATEGORIES)[0]);
-  const pickerRef = useRef(null);
-
-  useEffect(() => {
-    const handleClickOutside = (e) => {
-      if (pickerRef.current && !pickerRef.current.contains(e.target)) onClose();
-    };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, [onClose]);
+  const bubbles = [
+    { align: 'start', w: 'w-48', lines: 1 },
+    { align: 'start', w: 'w-56', lines: 2 },
+    { align: 'end', w: 'w-40', lines: 1 },
+    { align: 'start', w: 'w-52', lines: 1 },
+    { align: 'end', w: 'w-60', lines: 3 },
+    { align: 'start', w: 'w-44', lines: 1 },
+    { align: 'end', w: 'w-36', lines: 1 },
+  ];
 
   return (
-    <div ref={pickerRef} className="absolute bottom-full left-0 mb-2 bg-white rounded-xl shadow-xl border border-gray-200 w-72 sm:w-80 z-20">
-      <div className="flex border-b border-gray-100 px-2 pt-2 gap-1 overflow-x-auto">
-        {Object.keys(EMOJI_CATEGORIES).map((cat) => (
-          <button
-            key={cat}
-            type="button"
-            onClick={() => setActiveCategory(cat)}
-            className={`px-2.5 py-1.5 text-xs font-medium rounded-t-lg whitespace-nowrap transition ${
-              activeCategory === cat ? 'bg-gray-100 text-gray-900' : 'text-gray-400 hover:text-gray-600'
-            }`}
-          >
-            {cat}
-          </button>
-        ))}
+    <div className="flex-1 overflow-hidden px-3 sm:px-6 py-4 space-y-3">
+      <div className="flex justify-center my-2">
+        <SkeletonPulse className={`h-5 w-20 rounded-full ${bgClass}`} />
       </div>
-      <div className="grid grid-cols-8 gap-0.5 p-2 max-h-48 overflow-y-auto">
-        {EMOJI_CATEGORIES[activeCategory].map((emoji) => (
-          <button
-            key={emoji}
-            type="button"
-            onClick={() => onSelect(emoji)}
-            className="w-8 h-8 flex items-center justify-center text-xl hover:bg-gray-100 rounded transition"
-          >
-            {emoji}
-          </button>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-// ═══════════════════════════════════════════════════════════════════
-// NON-EMAIL COMPOSER
-// ═══════════════════════════════════════════════════════════════════
-
-function renderComposer({ platform, newMessage, setNewMessage, handleSend, sending, attachments, onAttachClick, showEmojiPicker, setShowEmojiPicker }) {
-  const hasContent = newMessage.trim() || attachments.length > 0;
-
-  const insertEmoji = (emoji) => {
-    setNewMessage((prev) => prev + emoji);
-  };
-
-  if (platform === 'whatsapp') {
-    return (
-      <div className="relative">
-        {showEmojiPicker && (
-          <EmojiPicker onSelect={insertEmoji} onClose={() => setShowEmojiPicker(false)} />
-        )}
-        <form onSubmit={handleSend} className="bg-[#f0f0f0] px-3 sm:px-4 py-2.5">
-          <div className="flex items-center gap-2">
-            <button type="button" onClick={() => setShowEmojiPicker((p) => !p)} className={`transition p-1.5 ${showEmojiPicker ? 'text-[#075e54]' : 'text-gray-500 hover:text-gray-700'}`}><Smile size={22} /></button>
-            <button type="button" onClick={onAttachClick} className="text-gray-500 hover:text-gray-700 transition p-1.5" title="Attach file"><Paperclip size={20} /></button>
-            <input type="text" value={newMessage} onChange={(e) => setNewMessage(e.target.value)} placeholder="Type a message" className="flex-1 px-4 py-2.5 bg-white rounded-full border-none outline-none text-sm" />
-            <button type="submit" disabled={!hasContent || sending} className="bg-[#075e54] hover:bg-[#064e45] text-white p-2.5 rounded-full transition disabled:opacity-50 disabled:cursor-not-allowed"><Send size={18} /></button>
+      {bubbles.map((b, i) => (
+        <div key={i} className={`flex ${b.align === 'end' ? 'justify-end' : 'justify-start'}`}>
+          <div className={`${b.w} max-w-[65%] rounded-2xl ${b.align === 'start' ? 'rounded-tl-md' : 'rounded-tr-md'} ${bgClass} animate-pulse p-3 space-y-1.5`}>
+            {Array.from({ length: b.lines }).map((_, j) => (
+              <SkeletonPulse key={j} className={`h-3 ${innerBgClass} rounded ${j === b.lines - 1 && b.lines > 1 ? 'w-3/4' : 'w-full'}`} />
+            ))}
+            <SkeletonPulse className={`h-2 w-12 ${innerBgClass} rounded mt-1 ${b.align === 'end' ? 'ml-auto' : ''}`} />
           </div>
-        </form>
-      </div>
-    );
-  }
-
-  if (platform === 'instagram') {
-    return (
-      <form onSubmit={handleSend} className="bg-white border-t border-gray-200 px-3 sm:px-4 py-3">
-        <div className="flex items-center gap-2">
-          <button type="button" onClick={onAttachClick} className="text-gray-400 hover:text-gray-600 transition p-1" title="Attach file"><Paperclip size={18} /></button>
-          <input type="text" value={newMessage} onChange={(e) => setNewMessage(e.target.value)} placeholder="Message..." className="flex-1 px-4 py-2.5 bg-gray-100 rounded-full border border-gray-200 outline-none text-sm focus:border-gray-300" />
-          <button type="submit" disabled={!hasContent || sending} className="text-primary-500 hover:text-primary-600 font-semibold text-sm transition disabled:opacity-50 disabled:cursor-not-allowed px-2">Send</button>
         </div>
-      </form>
-    );
-  }
-
-  if (platform === 'facebook') {
-    return (
-      <form onSubmit={handleSend} className="bg-white border-t border-gray-100 px-3 sm:px-4 py-2.5">
-        <div className="flex items-center gap-2">
-          <button type="button" onClick={onAttachClick} className="text-[#0084ff] hover:text-[#0073e6] transition p-1" title="Attach file"><Paperclip size={20} /></button>
-          <input type="text" value={newMessage} onChange={(e) => setNewMessage(e.target.value)} placeholder="Aa" className="flex-1 px-4 py-2.5 bg-gray-100 rounded-full border-none outline-none text-sm" />
-          <button type="submit" disabled={!hasContent || sending} className="text-[#0084ff] hover:text-[#0073e6] transition disabled:opacity-50 disabled:cursor-not-allowed p-1.5"><Send size={20} /></button>
-        </div>
-      </form>
-    );
-  }
-
-  return (
-    <form onSubmit={handleSend} className="bg-white border-t border-gray-200 px-4 sm:px-6 py-3">
-      <div className="flex items-center gap-3">
-        <button type="button" onClick={onAttachClick} className="text-gray-400 hover:text-gray-600 transition p-1" title="Attach file"><Paperclip size={18} /></button>
-        <input type="text" value={newMessage} onChange={(e) => setNewMessage(e.target.value)} placeholder="Write a message..." className="flex-1 px-4 py-2.5 bg-gray-100 rounded-xl border border-transparent focus:bg-white focus:border-primary-300 focus:ring-1 focus:ring-primary-300 outline-none text-sm" />
-        <button type="submit" disabled={!hasContent || sending} className="bg-primary-500 hover:bg-primary-600 text-white p-2.5 rounded-xl transition disabled:opacity-50 disabled:cursor-not-allowed"><Send size={18} /></button>
-      </div>
-    </form>
+      ))}
+    </div>
   );
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// PLATFORM HELPERS
+// ═══════════════════════════════════════════════════════════════════
+
+function getPlatformTheme(platform) {
+  // All conversations now use the dark theme
+  return { chatBg: '#0c1a2e', headerBg: 'bg-[#0f1d33]', headerBorder: 'border-white/10', dateBadgeBg: 'bg-white/10', dateBadgeText: 'text-gray-400' };
+}
+
+function getPlatformBadgeStyle(platform) {
+  switch (platform) {
+    case 'instagram': return 'bg-pink-500/20 text-pink-400';
+    case 'facebook': return 'bg-blue-500/20 text-blue-400';
+    case 'gmail': return 'bg-red-500/20 text-red-400';
+    case 'whatsapp': return 'bg-green-500/20 text-green-400';
+    case 'linkedin': return 'bg-sky-500/20 text-sky-400';
+    default: return 'bg-gray-500/20 text-gray-400';
+  }
+}
+
+function getPlatformLabel(platform) {
+  switch (platform) {
+    case 'instagram': return 'Instagram';
+    case 'facebook': return 'Facebook';
+    case 'gmail': return 'Email';
+    case 'whatsapp': return 'WhatsApp';
+    case 'linkedin': return 'Linkedin';
+    default: return platform || 'Unknown';
+  }
+}
+
+function getPlatformAvatarStyle(platform) {
+  switch (platform) {
+    case 'gmail': return 'bg-red-500/20 text-red-400';
+    case 'whatsapp': return 'bg-green-500/20 text-green-400';
+    case 'instagram': return 'bg-pink-500/20 text-pink-400';
+    case 'facebook': return 'bg-blue-500/20 text-blue-400';
+    default: return 'bg-white/10 text-gray-400';
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════════
 // UTILITY FUNCTIONS
 // ═══════════════════════════════════════════════════════════════════
 
-/**
- * Get the best display name for a contact based on platform.
- * - Instagram: username (e.g., @johndoe)
- * - Facebook: display name (e.g., John Doe)
- * - WhatsApp: profile name or phone number
- * - Gmail: sender name + email
- */
 function getContactDisplayName(contact, platform) {
   if (!contact) return 'Unknown';
-
   switch (platform) {
     case 'instagram':
       return contact.username || contact.name || `IG User ${(contact.platformUserId || '').slice(-4)}`;
@@ -1907,7 +1920,7 @@ function getContactDisplayName(contact, platform) {
     case 'gmail': {
       const name = contact.name || '';
       const email = contact.platformUserId || '';
-      if (name && email && name !== email) return `${name} <${email}>`;
+      if (name && email && name !== email) return name;
       return name || email || 'Unknown';
     }
     default:
@@ -1934,6 +1947,12 @@ function formatTime(dateStr) {
   return date.toLocaleDateString([], { month: 'short', day: 'numeric' });
 }
 
+function formatTimeShort(dateStr) {
+  if (!dateStr) return '';
+  const date = new Date(dateStr);
+  return date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', hour12: true }).toUpperCase();
+}
+
 function formatDate(dateStr) {
   if (!dateStr) return '';
   const date = new Date(dateStr);
@@ -1952,11 +1971,10 @@ function isSameDay(dateStr1, dateStr2) {
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// IMAGE COMPRESSION — reduces upload size for large images
+// IMAGE COMPRESSION
 // ═══════════════════════════════════════════════════════════════════
 
 function compressImage(file, maxDimension = 1200, quality = 0.8) {
-  // Skip compression for GIFs (canvas strips animation) and unsupported types
   if (file.type === 'image/gif') return Promise.resolve(file);
 
   return new Promise((resolve, reject) => {
@@ -1964,7 +1982,6 @@ function compressImage(file, maxDimension = 1200, quality = 0.8) {
     const url = URL.createObjectURL(file);
     let settled = false;
 
-    // Timeout fallback — resolve with the original file if loading takes too long
     const timeout = setTimeout(() => {
       if (!settled) {
         settled = true;
@@ -1989,7 +2006,6 @@ function compressImage(file, maxDimension = 1200, quality = 0.8) {
       canvas.height = height;
       const ctx = canvas.getContext('2d');
       ctx.drawImage(img, 0, 0, width, height);
-      // Use image/jpeg for output to ensure broad browser support; fall back to original on failure
       const outputType = file.type === 'image/png' ? 'image/png' : 'image/jpeg';
       canvas.toBlob(
         (blob) => {

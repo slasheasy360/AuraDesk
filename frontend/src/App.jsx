@@ -101,8 +101,8 @@ export default function App() {
       {/* Pricing — accessible when logged in (trial expired or choosing plan) */}
       <Route path="/pricing" element={<RequireAuth><PricingPage /></RequireAuth>} />
 
-      {/* Onboarding — accessible when logged in with active plan */}
-      <Route path="/onboarding" element={<RequireAuth><OnboardingPage /></RequireAuth>} />
+      {/* Onboarding — renders immediately; auth checked via its own API calls */}
+      <Route path="/onboarding" element={<OnboardingPage />} />
 
       {/* Main app — requires auth + active plan + completed onboarding */}
       <Route
@@ -117,6 +117,9 @@ export default function App() {
         <Route path="inbox" element={<InboxPage />} />
         <Route path="inbox/:conversationId" element={<InboxPage />} />
         <Route path="connections" element={<ConnectionsPage />} />
+        <Route path="leads" element={<div className="flex items-center justify-center h-full text-gray-400"><p className="text-lg">Leads — Coming Soon</p></div>} />
+        <Route path="invoices" element={<div className="flex items-center justify-center h-full text-gray-400"><p className="text-lg">Invoices — Coming Soon</p></div>} />
+        <Route path="ai-training" element={<div className="flex items-center justify-center h-full text-gray-400"><p className="text-lg">AI Training — Coming Soon</p></div>} />
       </Route>
 
       {/* Catch-all */}

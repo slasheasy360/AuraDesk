@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { Outlet, NavLink, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext.jsx';
 import { connectSocket, disconnectSocket } from '../services/socket.js';
-import { LayoutDashboard, Inbox, Link2, LogOut, Menu, X } from 'lucide-react';
+import { LayoutDashboard, Inbox, Users, FileText, Brain, LogOut, Menu, X, ChevronRight } from 'lucide-react';
 
 export default function DashboardLayout() {
   const { user, logout } = useAuth();
@@ -30,8 +30,14 @@ export default function DashboardLayout() {
   const navItems = [
     { to: '/', icon: LayoutDashboard, label: 'Dashboard' },
     { to: '/inbox', icon: Inbox, label: 'Smart Inbox' },
-    { to: '/connections', icon: Link2, label: 'Connections' },
+    { to: '/leads', icon: Users, label: 'Leads' },
+    { to: '/invoices', icon: FileText, label: 'Invoices' },
+    { to: '/ai-training', icon: Brain, label: 'AI Training' },
   ];
+
+  const companyName = user?.companyName || 'ABC Company';
+  const companyLogo = user?.companyLogo;
+  const planLabel = user?.plan === 'pro' ? 'PRO' : user?.plan === 'elite' ? 'ELITE' : user?.plan === 'starter' ? 'STARTER' : user?.plan === 'trial' ? 'TRIAL' : 'FREE';
 
   return (
     <div className="flex h-screen bg-gray-100">
@@ -74,9 +80,10 @@ export default function DashboardLayout() {
             <NavLink
               key={to}
               to={to}
+              end={to === '/'}
               className={({ isActive }) =>
                 `flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-medium transition ${
-                  isActive
+                  isActive || (to === '/inbox' && location.pathname.startsWith('/inbox'))
                     ? 'bg-primary-600 text-white'
                     : 'text-gray-300 hover:bg-white/10 hover:text-white'
                 }`
@@ -88,16 +95,22 @@ export default function DashboardLayout() {
           ))}
         </nav>
 
-        {/* User section */}
+        {/* Company section */}
         <div className="px-4 py-4 border-t border-white/10">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3 min-w-0">
-              <div className="w-8 h-8 bg-primary-600 rounded-full flex items-center justify-center text-sm font-bold flex-shrink-0">
-                {user?.name?.[0]?.toUpperCase()}
-              </div>
-              <div className="text-sm min-w-0">
-                <p className="font-medium truncate">{user?.name}</p>
-                <p className="text-xs text-gray-400 truncate">{user?.email}</p>
+              {companyLogo ? (
+                <img src={companyLogo} alt={companyName} className="w-9 h-9 rounded-full object-cover flex-shrink-0" />
+              ) : (
+                <div className="w-9 h-9 bg-primary-600 rounded-full flex items-center justify-center text-sm font-bold flex-shrink-0">
+                  {companyName?.[0]?.toUpperCase()}
+                </div>
+              )}
+              <div className="min-w-0">
+                <p className="text-sm font-medium truncate">{companyName}</p>
+                <span className="inline-block px-2 py-0.5 text-[10px] font-bold bg-primary-500 rounded text-white mt-0.5">
+                  {planLabel}
+                </span>
               </div>
             </div>
             <button
@@ -105,7 +118,7 @@ export default function DashboardLayout() {
               className="text-gray-400 hover:text-white transition flex-shrink-0"
               title="Logout"
             >
-              <LogOut size={18} />
+              <ChevronRight size={18} />
             </button>
           </div>
         </div>

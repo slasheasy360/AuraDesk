@@ -439,6 +439,11 @@ export default function OnboardingPage() {
   }, [successPlatform, setSearchParams]);
 
   useEffect(() => {
+    // If no token, redirect to login immediately
+    if (!localStorage.getItem('token')) {
+      navigate('/login');
+      return;
+    }
     api.get('/api/onboarding/status').then((res) => {
       const s = res.data.onboardingStep || 0;
       if (s >= 4) {
@@ -460,7 +465,12 @@ export default function OnboardingPage() {
         }
         if (res.data.cannedResponse) setCannedMessage(res.data.cannedResponse);
       }
-    }).catch(() => {});
+    }).catch((err) => {
+      // Auth failed (401) — redirect to login
+      if (err.response?.status === 401) {
+        navigate('/login');
+      }
+    });
   }, [navigate]);
 
   const handleNext = () => {
