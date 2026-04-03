@@ -90,6 +90,9 @@ app.use('/webhooks', express.raw({ type: 'application/json' }));
 app.use(cors({ origin: allowedOrigins, credentials: true }));
 app.use(express.json());
 
+// Serve uploaded files (logos, etc.)
+app.use('/uploads', express.static(path.join(process.cwd(), 'uploads')));
+
 // Auth routes (no /api prefix — OAuth redirects)
 app.use('/auth', authRoutes);
 app.use('/auth/gmail', gmailRoutes);
