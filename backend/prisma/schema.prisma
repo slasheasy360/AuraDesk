@@ -137,11 +137,16 @@ model Conversation {
   lastMessageAt            DateTime? @map("last_message_at")
   status                   ConversationStatus @default(open)
   unreadCount              Int      @default(0) @map("unread_count")
+  isStarred                Boolean  @default(false) @map("is_starred")
+  isLead                   Boolean  @default(false) @map("is_lead")
+  isDeleted                Boolean  @default(false) @map("is_deleted")
+  deletedAt                DateTime? @map("deleted_at")
   createdAt                DateTime @default(now()) @map("created_at")
 
   connectedAccount         ConnectedAccount @relation(fields: [connectedAccountId], references: [id], onDelete: Cascade)
   contact                  Contact? @relation(fields: [contactId], references: [id])
   messages                 Message[]
+  drafts                   Draft[]
 
   @@unique([connectedAccountId, platformConversationId])
   @@map("conversations")
@@ -168,6 +173,21 @@ model Message {
 
   @@unique([conversationId, platformMessageId], name: "conversation_platform_message")
   @@map("messages")
+}
+
+model Draft {
+  id              String   @id @default(uuid())
+  conversationId  String   @map("conversation_id")
+  content         String?
+  subject         String?
+  attachments     Json?
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  conversation    Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@unique([conversationId])
+  @@map("drafts")
 }
 
 model WebhookSubscription {

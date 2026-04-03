@@ -8,7 +8,7 @@ import {
   Smile, X, FileText, Image as ImageIcon, Reply, ChevronDown,
   ChevronUp, Download, UploadCloud, Play, Music, File as FileIcon, AlertCircle, RefreshCw,
   Star, Inbox, Clock, Sparkles, FileEdit, Trash2, ChevronLeft, ChevronRight,
-  RotateCw, Archive, MoreHorizontal, Bot, Link2,
+  RotateCw, Archive, MoreHorizontal, Bot, Link2, Users, Undo2,
 } from 'lucide-react';
 import PlatformBadge, { PlatformIcon } from '../components/PlatformBadge.jsx';
 
@@ -69,10 +69,10 @@ const FILTER_CATEGORIES = [
   { key: 'bin', label: 'Bin', icon: Trash2 },
 ];
 
-const SOURCE_FILTERS = [
+const ALL_SOURCE_FILTERS = [
   { key: 'instagram', label: 'Instagram' },
   { key: 'facebook', label: 'Facebook' },
-  { key: 'linkedin', label: 'LinkedIn' },
+  { key: 'whatsapp', label: 'WhatsApp' },
   { key: 'gmail', label: 'Gmail' },
 ];
 
@@ -104,14 +104,11 @@ export default function InboxPage() {
   // ── New filter & pagination state ──
   const [activeFilter, setActiveFilter] = useState('all');
   const [sourceFilters, setSourceFilters] = useState(new Set());
-  const [starredConversations, setStarredConversations] = useState(() => {
-    try {
-      const saved = localStorage.getItem('auradesk:starred');
-      return saved ? new Set(JSON.parse(saved)) : new Set();
-    } catch { return new Set(); }
-  });
   const [selectedMessages, setSelectedMessages] = useState(new Set());
   const [currentPage, setCurrentPage] = useState(1);
+  const [connectedPlatforms, setConnectedPlatforms] = useState(new Set());
+  const draftTimerRef = useRef(null);
+  const lastSavedDraftRef = useRef('');
 
   // Deferred skeletons
   const showConversationSkeleton = useDeferredLoading(loadingConversations, 150);
@@ -132,10 +129,15 @@ export default function InboxPage() {
   const knownMessageIds = useRef(new Set());
   const messageCache = useRef(new Map());
 
-  // Persist starred conversations
+  // Derive connected platforms from conversations
   useEffect(() => {
-    localStorage.setItem('auradesk:starred', JSON.stringify([...starredConversations]));
-  }, [starredConversations]);
+    const platforms = new Set();
+    conversations.forEach((c) => {
+      const p = c.connectedAccount?.platform;
+      if (p) platforms.add(p);
+    });
+    setConnectedPlatforms(platforms);
+  }, [conversations]);
 
   // ═══════════════════════════════════════════════════════════════════
   // DATA FETCHING & REAL-TIME
@@ -299,13 +301,35 @@ export default function InboxPage() {
         );
       };
 
+      const handleStateChange = (data) => {
+        const { conversationId: convId, field, value } = data;
+        setConversations((prev) =>
+          prev.map((c) => (c.id === convId ? { ...c, [field]: value } : c))
+        );
+      };
+
+      const handleDraftUpdate = (data) => {
+        const { conversationId: convId, draft } = data;
+        setConversations((prev) =>
+          prev.map((c) =>
+            c.id === convId
+              ? { ...c, hasDraft: !!draft, draftPreview: draft?.content?.slice(0, 80) || null, drafts: draft ? [draft] : [] }
+              : c
+          )
+        );
+      };
+
       socket.on('new_message', handleNewMessage);
       socket.on('conversation_update', handleConversationUpdate);
+      socket.on('conversation_state_change', handleStateChange);
+      socket.on('draft_update', handleDraftUpdate);
 
       cleanupFn = () => {
         socket.off('connect', handleReconnect);
         socket.off('new_message', handleNewMessage);
         socket.off('conversation_update', handleConversationUpdate);
+        socket.off('conversation_state_change', handleStateChange);
+        socket.off('draft_update', handleDraftUpdate);
       };
       return true;
     };
@@ -360,6 +384,16 @@ export default function InboxPage() {
       setConversations((prev) =>
         prev.map((c) => (c.id === conversationId ? { ...c, unreadCount: 0 } : c))
       );
+      // Load draft if any
+      api.get(`/api/conversations/${conversationId}/draft`).then((res) => {
+        if (res.data.draft?.content) {
+          setNewMessage(res.data.draft.content);
+          lastSavedDraftRef.current = res.data.draft.content;
+        } else {
+          setNewMessage('');
+          lastSavedDraftRef.current = '';
+        }
+      }).catch(() => {});
     } else {
       setMessages([]);
       setActiveConversation(null);
@@ -427,6 +461,22 @@ export default function InboxPage() {
 
   const activeConversationRef = useRef(activeConversation);
   useEffect(() => { activeConversationRef.current = activeConversation; }, [activeConversation]);
+
+  // Keep activeConversation in sync with conversation list state changes (star, lead, delete)
+  useEffect(() => {
+    if (activeConversation && conversationId) {
+      const fromList = conversations.find((c) => c.id === conversationId);
+      if (fromList) {
+        setActiveConversation((prev) => {
+          if (!prev) return prev;
+          if (prev.isStarred !== fromList.isStarred || prev.isLead !== fromList.isLead || prev.isDeleted !== fromList.isDeleted) {
+            return { ...prev, isStarred: fromList.isStarred, isLead: fromList.isLead, isDeleted: fromList.isDeleted };
+          }
+          return prev;
+        });
+      }
+    }
+  }, [conversations, conversationId, activeConversation]);
 
   // ═══════════════════════════════════════════════════════════════════
   // SEND MESSAGE
@@ -503,6 +553,7 @@ export default function InboxPage() {
         );
         messageCache.current.set(activeId, null);
         setUploadProgress(null);
+        clearDraft(activeId);
         if (!isEmail) {
           setShowReplyBox(false);
           setReplyingTo(null);
@@ -533,7 +584,7 @@ export default function InboxPage() {
     } finally {
       setSending(false);
     }
-  }, [newMessage, attachments, sending, replyingTo]);
+  }, [newMessage, attachments, sending, replyingTo, clearDraft]);
 
   const showFileError = useCallback((message, details) => {
     clearTimeout(fileErrorTimerRef.current);
@@ -652,6 +703,18 @@ export default function InboxPage() {
     return cleanup;
   }, []);
 
+  // Wrap setNewMessage to auto-save drafts
+  const handleNewMessageChange = useCallback((value) => {
+    setNewMessage(value);
+    const activeId = conversationIdRef.current;
+    if (activeId) {
+      saveDraft(activeId, value);
+    }
+  }, [saveDraft]);
+
+  // Cleanup draft timer on unmount
+  useEffect(() => () => { if (draftTimerRef.current) clearTimeout(draftTimerRef.current); }, []);
+
   const platform = activeConversation?.connectedAccount?.platform;
   const isEmailPlatform = platform === 'gmail';
   const emailSubject = useMemo(
@@ -663,14 +726,118 @@ export default function InboxPage() {
   // FILTER & PAGINATION LOGIC
   // ═══════════════════════════════════════════════════════════════════
 
-  const toggleStar = useCallback((convId, e) => {
-    e.stopPropagation();
-    setStarredConversations((prev) => {
-      const next = new Set(prev);
-      if (next.has(convId)) next.delete(convId);
-      else next.add(convId);
-      return next;
-    });
+  const toggleStar = useCallback(async (convId, e) => {
+    if (e) e.stopPropagation();
+    // Optimistic update
+    setConversations((prev) =>
+      prev.map((c) => (c.id === convId ? { ...c, isStarred: !c.isStarred } : c))
+    );
+    try {
+      await api.patch(`/api/conversations/${convId}/star`);
+    } catch (err) {
+      console.error('Failed to toggle star:', err);
+      // Revert on failure
+      setConversations((prev) =>
+        prev.map((c) => (c.id === convId ? { ...c, isStarred: !c.isStarred } : c))
+      );
+    }
+  }, []);
+
+  const toggleLead = useCallback(async (convId, e) => {
+    if (e) e.stopPropagation();
+    setConversations((prev) =>
+      prev.map((c) => (c.id === convId ? { ...c, isLead: !c.isLead } : c))
+    );
+    try {
+      await api.patch(`/api/conversations/${convId}/lead`);
+    } catch (err) {
+      console.error('Failed to toggle lead:', err);
+      setConversations((prev) =>
+        prev.map((c) => (c.id === convId ? { ...c, isLead: !c.isLead } : c))
+      );
+    }
+  }, []);
+
+  const deleteConversation = useCallback(async (convId, e) => {
+    if (e) e.stopPropagation();
+    setConversations((prev) =>
+      prev.map((c) => (c.id === convId ? { ...c, isDeleted: true } : c))
+    );
+    try {
+      await api.patch(`/api/conversations/${convId}/delete`);
+    } catch (err) {
+      console.error('Failed to delete conversation:', err);
+      setConversations((prev) =>
+        prev.map((c) => (c.id === convId ? { ...c, isDeleted: false } : c))
+      );
+    }
+    // Navigate away if viewing deleted conversation
+    if (conversationIdRef.current === convId) {
+      navigate('/inbox');
+    }
+  }, [navigate]);
+
+  const restoreConversation = useCallback(async (convId, e) => {
+    if (e) e.stopPropagation();
+    setConversations((prev) =>
+      prev.map((c) => (c.id === convId ? { ...c, isDeleted: false, deletedAt: null } : c))
+    );
+    try {
+      await api.patch(`/api/conversations/${convId}/restore`);
+    } catch (err) {
+      console.error('Failed to restore conversation:', err);
+      setConversations((prev) =>
+        prev.map((c) => (c.id === convId ? { ...c, isDeleted: true } : c))
+      );
+    }
+  }, []);
+
+  const permanentDeleteConversation = useCallback(async (convId, e) => {
+    if (e) e.stopPropagation();
+    try {
+      await api.delete(`/api/conversations/${convId}/permanent`);
+      setConversations((prev) => prev.filter((c) => c.id !== convId));
+      if (conversationIdRef.current === convId) {
+        navigate('/inbox');
+      }
+    } catch (err) {
+      console.error('Failed to permanently delete:', err);
+    }
+  }, [navigate]);
+
+  // ── Draft auto-save ──
+  const saveDraft = useCallback((convId, content) => {
+    if (draftTimerRef.current) clearTimeout(draftTimerRef.current);
+    draftTimerRef.current = setTimeout(async () => {
+      if (content === lastSavedDraftRef.current) return;
+      try {
+        await api.put(`/api/conversations/${convId}/draft`, { content });
+        lastSavedDraftRef.current = content;
+        setConversations((prev) =>
+          prev.map((c) =>
+            c.id === convId
+              ? { ...c, hasDraft: !!content.trim(), draftPreview: content.trim().slice(0, 80) || null }
+              : c
+          )
+        );
+      } catch (err) {
+        console.error('Failed to save draft:', err);
+      }
+    }, 1500);
+  }, []);
+
+  // Clear draft on send
+  const clearDraft = useCallback(async (convId) => {
+    if (draftTimerRef.current) clearTimeout(draftTimerRef.current);
+    lastSavedDraftRef.current = '';
+    try {
+      await api.delete(`/api/conversations/${convId}/draft`);
+      setConversations((prev) =>
+        prev.map((c) =>
+          c.id === convId ? { ...c, hasDraft: false, draftPreview: null, drafts: [] } : c
+        )
+      );
+    } catch { /* silent */ }
   }, []);
 
   const toggleSourceFilter = useCallback((source) => {
@@ -721,51 +888,57 @@ export default function InboxPage() {
     // Apply category filter
     switch (activeFilter) {
       case 'unread':
-        result = result.filter((c) => c.unreadCount > 0);
+        result = result.filter((c) => !c.isDeleted && c.unreadCount > 0);
         break;
       case 'starred':
-        result = result.filter((c) => starredConversations.has(c.id));
+        result = result.filter((c) => !c.isDeleted && c.isStarred);
         break;
       case 'ai_responded':
-        result = result.filter((c) => c._aiResponded);
+        result = result.filter((c) => !c.isDeleted && c._aiResponded);
         break;
       case 'draft':
-        result = result.filter((c) => c._draft);
+        result = result.filter((c) => !c.isDeleted && c.hasDraft);
         break;
       case 'bin':
-        result = result.filter((c) => c._deleted);
+        result = result.filter((c) => c.isDeleted);
         break;
       default:
+        // Default: exclude deleted
+        result = result.filter((c) => !c.isDeleted);
         break;
     }
 
     return result;
-  }, [conversations, search, sourceFilters, activeFilter, starredConversations]);
+  }, [conversations, search, sourceFilters, activeFilter]);
 
   // Filter counts
   const filterCounts = useMemo(() => {
-    const total = conversations.length;
-    const unread = conversations.filter((c) => c.unreadCount > 0).length;
-    const starred = conversations.filter((c) => starredConversations.has(c.id)).length;
+    const nonDeleted = conversations.filter((c) => !c.isDeleted);
     return {
-      all: total,
-      unread: unread,
-      starred: starred,
+      all: nonDeleted.length,
+      unread: nonDeleted.filter((c) => c.unreadCount > 0).length,
+      starred: nonDeleted.filter((c) => c.isStarred).length,
       ai_responded: 0,
-      draft: 0,
-      bin: 0,
+      draft: nonDeleted.filter((c) => c.hasDraft).length,
+      bin: conversations.filter((c) => c.isDeleted).length,
     };
-  }, [conversations, starredConversations]);
+  }, [conversations]);
 
-  // Source counts
+  // Source counts — only from non-deleted conversations
   const sourceCounts = useMemo(() => {
     const counts = {};
-    conversations.forEach((c) => {
+    conversations.filter((c) => !c.isDeleted).forEach((c) => {
       const p = c.connectedAccount?.platform;
       if (p) counts[p] = (counts[p] || 0) + 1;
     });
     return counts;
   }, [conversations]);
+
+  // Only show source filters for connected platforms
+  const availableSourceFilters = useMemo(
+    () => ALL_SOURCE_FILTERS.filter((sf) => connectedPlatforms.has(sf.key)),
+    [connectedPlatforms]
+  );
 
   // Pagination
   const totalPages = Math.max(1, Math.ceil(filteredConversations.length / ITEMS_PER_PAGE));
@@ -797,6 +970,7 @@ export default function InboxPage() {
             sourceFilters={sourceFilters}
             toggleSourceFilter={toggleSourceFilter}
             sourceCounts={sourceCounts}
+            availableSourceFilters={availableSourceFilters}
           />
         </div>
 
@@ -844,19 +1018,38 @@ export default function InboxPage() {
                   </h2>
                   <PlatformBadge platform={platform} size="xs" />
                 </div>
-                <div className="flex items-center gap-2">
-                  <button className="p-2 text-gray-400 hover:text-white hover:bg-white/10 rounded-lg transition">
-                    <Star size={18} />
+                <div className="flex items-center gap-1">
+                  <button
+                    onClick={() => toggleStar(conversationId)}
+                    className={`p-2 rounded-lg transition ${activeConversation?.isStarred ? 'text-yellow-400 hover:bg-yellow-500/10' : 'text-gray-400 hover:text-yellow-400 hover:bg-white/10'}`}
+                    title={activeConversation?.isStarred ? 'Unstar' : 'Star'}
+                  >
+                    <Star size={18} fill={activeConversation?.isStarred ? 'currentColor' : 'none'} />
                   </button>
-                  <button className="p-2 text-gray-400 hover:text-white hover:bg-white/10 rounded-lg transition">
-                    <Archive size={18} />
+                  <button
+                    onClick={() => toggleLead(conversationId)}
+                    className={`p-2 rounded-lg transition ${activeConversation?.isLead ? 'text-primary-400 hover:bg-primary-500/10' : 'text-gray-400 hover:text-primary-400 hover:bg-white/10'}`}
+                    title={activeConversation?.isLead ? 'Remove from Leads' : 'Mark as Lead'}
+                  >
+                    <Users size={18} />
                   </button>
-                  <button className="p-2 text-gray-400 hover:text-white hover:bg-white/10 rounded-lg transition">
-                    <Trash2 size={18} />
-                  </button>
-                  <button className="p-2 text-gray-400 hover:text-white hover:bg-white/10 rounded-lg transition">
-                    <MoreHorizontal size={18} />
-                  </button>
+                  {activeConversation?.isDeleted ? (
+                    <button
+                      onClick={() => restoreConversation(conversationId)}
+                      className="p-2 text-gray-400 hover:text-green-400 hover:bg-white/10 rounded-lg transition"
+                      title="Restore from Bin"
+                    >
+                      <Undo2 size={18} />
+                    </button>
+                  ) : (
+                    <button
+                      onClick={() => deleteConversation(conversationId)}
+                      className="p-2 text-gray-400 hover:text-red-400 hover:bg-white/10 rounded-lg transition"
+                      title="Move to Bin"
+                    >
+                      <Trash2 size={18} />
+                    </button>
+                  )}
                 </div>
               </div>
 
@@ -956,7 +1149,7 @@ export default function InboxPage() {
                   showReplyBox={showReplyBox}
                   replyingTo={replyingTo}
                   newMessage={newMessage}
-                  setNewMessage={setNewMessage}
+                  setNewMessage={handleNewMessageChange}
                   handleSend={handleSend}
                   sending={sending}
                   attachments={attachments}
@@ -976,7 +1169,7 @@ export default function InboxPage() {
                   )}
                   <ChatComposer
                     newMessage={newMessage}
-                    setNewMessage={setNewMessage}
+                    setNewMessage={handleNewMessageChange}
                     handleSend={handleSend}
                     sending={sending}
                     attachments={attachments}
@@ -1006,6 +1199,7 @@ export default function InboxPage() {
           sourceFilters={sourceFilters}
           toggleSourceFilter={toggleSourceFilter}
           sourceCounts={sourceCounts}
+          availableSourceFilters={availableSourceFilters}
         />
       </div>
 
@@ -1068,9 +1262,10 @@ export default function InboxPage() {
                 ? lastMessage.content.replace(/<[^>]+>/g, '').replace(/\n+/g, ' ').slice(0, 80)
                 : 'No messages';
               const convPlatform = conv.connectedAccount?.platform;
-              const isStarred = starredConversations.has(conv.id);
+              const isStarred = !!conv.isStarred;
               const isSelected = selectedMessages.has(conv.id);
               const isUnread = conv.unreadCount > 0;
+              const isBinView = activeFilter === 'bin';
 
               return (
                 <button
@@ -1112,10 +1307,35 @@ export default function InboxPage() {
                     {preview}
                   </span>
 
+                  {/* Draft indicator */}
+                  {conv.hasDraft && !isBinView && (
+                    <span className="text-xs text-orange-400 flex-shrink-0">Draft</span>
+                  )}
+
                   {/* Timestamp */}
                   <span className="text-xs text-gray-500 flex-shrink-0 ml-2">
                     {formatTimeShort(conv.lastMessageAt)}
                   </span>
+
+                  {/* Bin actions */}
+                  {isBinView && (
+                    <div className="flex items-center gap-1 ml-2 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0">
+                      <button
+                        onClick={(e) => restoreConversation(conv.id, e)}
+                        className="p-1 text-gray-500 hover:text-green-400 transition rounded"
+                        title="Restore"
+                      >
+                        <Undo2 size={14} />
+                      </button>
+                      <button
+                        onClick={(e) => permanentDeleteConversation(conv.id, e)}
+                        className="p-1 text-gray-500 hover:text-red-400 transition rounded"
+                        title="Delete permanently"
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
+                  )}
                 </button>
               );
             })
@@ -1155,7 +1375,7 @@ export default function InboxPage() {
 // FILTER PANEL COMPONENT
 // ═══════════════════════════════════════════════════════════════════
 
-function FilterPanel({ activeFilter, setActiveFilter, filterCounts, sourceFilters, toggleSourceFilter, sourceCounts }) {
+function FilterPanel({ activeFilter, setActiveFilter, filterCounts, sourceFilters, toggleSourceFilter, sourceCounts, availableSourceFilters }) {
   return (
     <div className="flex flex-col h-full py-4">
       {/* Filter categories */}
@@ -1193,7 +1413,7 @@ function FilterPanel({ activeFilter, setActiveFilter, filterCounts, sourceFilter
       <div className="mt-6 px-3">
         <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider px-3 mb-2">Source</h3>
         <div className="space-y-1">
-          {SOURCE_FILTERS.map(({ key, label }) => {
+          {(availableSourceFilters || ALL_SOURCE_FILTERS).map(({ key, label }) => {
             const isChecked = sourceFilters.has(key);
             const count = sourceCounts[key] || 0;
             return (
@@ -1217,10 +1437,10 @@ function FilterPanel({ activeFilter, setActiveFilter, filterCounts, sourceFilter
 
       {/* Connect account link */}
       <div className="mt-4 px-6">
-        <button className="flex items-center gap-2 text-sm text-gray-500 hover:text-primary-400 transition">
+        <a href="/connections" className="flex items-center gap-2 text-sm text-gray-500 hover:text-primary-400 transition">
           <span className="text-lg leading-none">+</span>
           Connect account
-        </button>
+        </a>
       </div>
     </div>
   );

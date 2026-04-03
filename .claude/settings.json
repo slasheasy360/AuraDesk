@@ -26,7 +26,8 @@
       "Bash(grep -E \"\\\\.\\(js|ts|json\\)$\")",
       "Bash(find /c/Users/gondy/OneDrive/Desktop/AuraDesk-c95011bfd8ce24744fa00916cd9e931522da589f -name README* -o -name *.md)",
       "Bash(find /c/Users/gondy/OneDrive/Desktop/AuraDesk-c95011bfd8ce24744fa00916cd9e931522da589f/backend/src -type f \\\\\\( -name \"*.js\" \\\\\\) -exec wc -l {} +)",
-      "Bash(find /c/Users/gondy/OneDrive/Desktop/AuraDesk-c95011bfd8ce24744fa00916cd9e931522da589f/frontend/src -type f \\\\\\( -name \"*.jsx\" -o -name \"*.js\" \\\\\\) -exec wc -l {} +)"
+      "Bash(find /c/Users/gondy/OneDrive/Desktop/AuraDesk-c95011bfd8ce24744fa00916cd9e931522da589f/frontend/src -type f \\\\\\( -name \"*.jsx\" -o -name \"*.js\" \\\\\\) -exec wc -l {} +)",
+      "Bash(node -e \"import\\('./src/routes/conversations.js'\\).then\\(\\(\\) => console.log\\('OK'\\)\\).catch\\(e => console.error\\(e.message\\)\\)\")"
     ]
   }
 }
