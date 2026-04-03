@@ -54,17 +54,28 @@ function PlatformStep({ onNext, onBack }) {
 
   useEffect(() => { fetchAccounts(); }, [fetchAccounts]);
 
-  const handleConnect = (platformId) => {
-    const urls = {
+  const handleConnect = async (platformId) => {
+    // WhatsApp uses a different flow (embedded signup) — redirect directly with token
+    if (platformId === 'whatsapp') {
+      const base = import.meta.env.VITE_API_URL || 'http://localhost:3001';
+      const token = localStorage.getItem('token');
+      window.location.href = `${base}/auth/whatsapp/exchange?token=${token}`;
+      return;
+    }
+
+    // Other platforms: call /start API to get OAuth URL, then redirect
+    const endpoints = {
       instagram: '/auth/instagram/start',
       facebook: '/auth/facebook/start',
-      whatsapp: '/auth/whatsapp/exchange',
       gmail: '/auth/gmail/start',
     };
-    const url = urls[platformId];
-    if (url) {
-      const base = import.meta.env.VITE_API_URL || 'http://localhost:3001';
-      window.location.href = `${base}${url}`;
+    try {
+      const res = await api.get(endpoints[platformId]);
+      if (res.data.url) {
+        window.location.href = res.data.url;
+      }
+    } catch (err) {
+      console.error(`Connect ${platformId} failed:`, err);
     }
   };
 
