@@ -26,5 +26,11 @@ CREATE UNIQUE INDEX IF NOT EXISTS "users_stripe_subscription_id_key" ON "users"(
 -- Set trial for existing users
 UPDATE "users" SET "trial_ends_at" = NOW() + INTERVAL '14 days' WHERE "trial_ends_at" IS NULL;
 
--- Message dedup index
+-- Message dedup index — first remove duplicates, then create the index
+DELETE FROM "messages" a USING "messages" b
+  WHERE a.id > b.id
+    AND a."conversation_id" = b."conversation_id"
+    AND a."platform_message_id" = b."platform_message_id"
+    AND a."platform_message_id" IS NOT NULL;
+
 CREATE UNIQUE INDEX IF NOT EXISTS "conversation_platform_message" ON "messages"("conversation_id", "platform_message_id");
