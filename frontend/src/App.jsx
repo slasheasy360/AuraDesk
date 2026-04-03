@@ -74,10 +74,19 @@ function ProtectedRoute({ children }) {
   return children;
 }
 
+/** Minimal full-page loader — used for auth-only routes (pricing, onboarding) to avoid dashboard skeleton flash */
+function FullPageLoader() {
+  return (
+    <div className="flex items-center justify-center h-screen bg-[#f0f4ff]">
+      <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500" />
+    </div>
+  );
+}
+
 /** Only redirect to pricing if user has no active plan (expired trial, no subscription) */
 function RequireAuth({ children }) {
   const { user, loading } = useAuth();
-  if (loading) return <FullPageSkeleton />;
+  if (loading) return <FullPageLoader />;
   if (!user) return <Navigate to="/login" />;
   return children;
 }

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext.jsx';
 import api from '../services/api.js';
 import { Check, Upload, ArrowRight, ArrowLeft, X, RefreshCw } from 'lucide-react';
@@ -34,9 +34,10 @@ function StepIndicator({ current, onStepClick }) {
 }
 
 // ── Step 1: Connect Platform ──
-function PlatformStep({ onNext, onBack }) {
+function PlatformStep({ onNext, onBack, successPlatform }) {
   const [accounts, setAccounts] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [successMsg, setSuccessMsg] = useState(successPlatform || null);
 
   const platforms = [
     { id: 'instagram', name: 'Instagram', icon: '📷' },
@@ -53,6 +54,14 @@ function PlatformStep({ onNext, onBack }) {
   }, []);
 
   useEffect(() => { fetchAccounts(); }, [fetchAccounts]);
+
+  // Clear success message after 4 seconds
+  useEffect(() => {
+    if (successMsg) {
+      const timer = setTimeout(() => setSuccessMsg(null), 4000);
+      return () => clearTimeout(timer);
+    }
+  }, [successMsg]);
 
   const handleConnect = async (platformId) => {
     // WhatsApp uses a different flow (embedded signup) — redirect directly with token
@@ -96,6 +105,12 @@ function PlatformStep({ onNext, onBack }) {
     <div className="text-center">
       <h2 className="text-2xl font-bold mb-1">Connect Platform</h2>
       <p className="text-gray-400 text-sm mb-8">SETUP YOUR ORGANISATION</p>
+
+      {successMsg && (
+        <div className="mb-4 max-w-md mx-auto bg-green-50 border border-green-200 text-green-700 px-4 py-2 rounded-lg text-sm">
+          ✓ {successMsg.charAt(0).toUpperCase() + successMsg.slice(1)} connected successfully!
+        </div>
+      )}
 
       <div className="space-y-3 max-w-md mx-auto">
         {platforms.map((p) => {
@@ -412,14 +427,24 @@ export default function OnboardingPage() {
   const [brandingData, setBrandingData] = useState(null);
   const [cannedMessage, setCannedMessage] = useState('');
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const { refreshUser } = useAuth();
+
+  // Extract ?success= param from OAuth redirect and clean URL
+  const successPlatform = searchParams.get('success');
+  useEffect(() => {
+    if (successPlatform) {
+      setSearchParams({}, { replace: true });
+    }
+  }, [successPlatform, setSearchParams]);
 
   useEffect(() => {
     api.get('/api/onboarding/status').then((res) => {
       const s = res.data.onboardingStep || 0;
       if (s >= 4) {
         navigate('/');
-      } else if (s > 0) {
+      } else if (s > 0 && !successPlatform) {
+        // Only advance step if not returning from OAuth (user should stay on connect-platform)
         const displayStep = Math.min(s, 2);
         setStep(displayStep);
         setMaxStep(displayStep);
@@ -479,7 +504,7 @@ export default function OnboardingPage() {
         ) : (
           <>
             <StepIndicator current={step} onStepClick={handleStepClick} />
-            {step === 0 && <PlatformStep onNext={handleNext} onBack={null} />}
+            {step === 0 && <PlatformStep onNext={handleNext} onBack={null} successPlatform={successPlatform} />}
             {step === 1 && (
               <BrandingStep
                 onNext={handleNext}

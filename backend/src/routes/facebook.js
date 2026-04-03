@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { authenticate } from '../middleware/auth.js';
 import * as facebookService from '../services/facebook.js';
+import prisma from '../utils/prisma.js';
 
 const router = Router();
 const DEFAULT_FRONTEND_URL = 'https://aura-desk.vercel.app';
@@ -79,13 +80,16 @@ router.get('/callback', async (req, res) => {
 
     const result = await facebookService.handleCallbackWithToken(tokenResponse.access_token, userId);
 
-    console.log('[Facebook OAuth] /callback — SUCCESS, redirecting to connections', {
+    console.log('[Facebook OAuth] /callback — SUCCESS, redirecting', {
       fbAccountId: result.connectedAccount.id,
       pagesCount: result.pages.length,
       hasInstagram: Boolean(result.igAccount),
     });
 
-    return res.redirect(`${frontendUrl}/connections?success=facebook`);
+    // Redirect to onboarding if user hasn't completed it, otherwise connections page
+    const user = await prisma.user.findUnique({ where: { id: userId }, select: { onboardingStep: true } });
+    const redirectPath = (user && user.onboardingStep < 4) ? '/onboarding' : '/connections';
+    return res.redirect(`${frontendUrl}${redirectPath}?success=facebook`);
   } catch (err) {
     const fbError = err.response?.data?.error;
     console.error('[Facebook OAuth] /callback — FAILED', {

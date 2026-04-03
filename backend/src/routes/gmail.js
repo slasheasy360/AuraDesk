@@ -117,7 +117,10 @@ router.get('/callback', async (req, res) => {
         console.error('Gmail watch start failed (Pub/Sub may not be configured):', watchErr.message);
       }
 
-      res.redirect(`${frontendUrl}/connections?success=gmail`);
+      // Redirect to onboarding if user hasn't completed it, otherwise connections page
+      const user = await prisma.user.findUnique({ where: { id: userId }, select: { onboardingStep: true } });
+      const redirectPath = (user && user.onboardingStep < 4) ? '/onboarding' : '/connections';
+      res.redirect(`${frontendUrl}${redirectPath}?success=gmail`);
     }
   } catch (err) {
     console.error('Gmail callback error:', err);

@@ -2,6 +2,7 @@ import { Router } from 'express';
 import jwt from 'jsonwebtoken';
 import { authenticate } from '../middleware/auth.js';
 import * as instagramService from '../services/instagram.js';
+import prisma from '../utils/prisma.js';
 
 const router = Router();
 
@@ -40,7 +41,11 @@ router.get('/callback', async (req, res) => {
     const { userId } = JSON.parse(Buffer.from(state, 'base64url').toString());
     await instagramService.handleCallback(code, userId);
 
-    res.redirect(`${process.env.FRONTEND_URL || 'http://localhost:5173'}/connections?success=instagram`);
+    // Redirect to onboarding if user hasn't completed it, otherwise connections page
+    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+    const user = await prisma.user.findUnique({ where: { id: userId }, select: { onboardingStep: true } });
+    const redirectPath = (user && user.onboardingStep < 4) ? '/onboarding' : '/connections';
+    res.redirect(`${frontendUrl}${redirectPath}?success=instagram`);
   } catch (err) {
     console.error('Instagram callback error:', err);
     const reason = err.code === 'DUPLICATE_ACCOUNT' ? err.message : 'Connection failed. Please try again.';
