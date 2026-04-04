@@ -9,6 +9,7 @@ import DashboardLayout from './components/DashboardLayout.jsx';
 import DashboardHome from './pages/DashboardHome.jsx';
 import InboxPage from './pages/InboxPage.jsx';
 import ConnectionsPage from './pages/ConnectionsPage.jsx';
+import LeadsPage from './pages/LeadsPage.jsx';
 
 function FullPageSkeleton() {
   return (
@@ -117,7 +118,7 @@ export default function App() {
         <Route path="inbox" element={<InboxPage />} />
         <Route path="inbox/:conversationId" element={<InboxPage />} />
         <Route path="connections" element={<ConnectionsPage />} />
-        <Route path="leads" element={<div className="flex items-center justify-center h-full text-gray-400"><p className="text-lg">Leads — Coming Soon</p></div>} />
+        <Route path="leads" element={<LeadsPage />} />
         <Route path="invoices" element={<div className="flex items-center justify-center h-full text-gray-400"><p className="text-lg">Invoices — Coming Soon</p></div>} />
         <Route path="ai-training" element={<div className="flex items-center justify-center h-full text-gray-400"><p className="text-lg">AI Training — Coming Soon</p></div>} />
       </Route>

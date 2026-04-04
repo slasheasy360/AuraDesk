@@ -150,9 +150,14 @@ export default function InboxPage() {
     const initializeInbox = async () => {
       for (let attempt = 0; attempt < 3; attempt++) {
         try {
-          const res = await api.get('/api/conversations');
+          // Fetch both active and deleted (bin) conversations so all filters work client-side
+          const [activeRes, binRes] = await Promise.all([
+            api.get('/api/conversations'),
+            api.get('/api/conversations', { params: { filter: 'bin' } }),
+          ]);
           if (!cancelled) {
-            setConversations(res.data.conversations);
+            const all = [...(activeRes.data.conversations || []), ...(binRes.data.conversations || [])];
+            setConversations(all);
             setLoadingConversations(false);
           }
           break;
@@ -173,9 +178,12 @@ export default function InboxPage() {
           (r) => r.status === 'fulfilled' && (r.value?.data?.newMessages || 0) > 0
         );
         if (hasNew) {
-          api.get('/api/conversations')
-            .then((res) => { if (!cancelled) setConversations(res.data.conversations); })
-            .catch(() => {});
+          Promise.all([
+            api.get('/api/conversations'),
+            api.get('/api/conversations', { params: { filter: 'bin' } }),
+          ]).then(([activeRes, binRes]) => {
+            if (!cancelled) setConversations([...(activeRes.data.conversations || []), ...(binRes.data.conversations || [])]);
+          }).catch(() => {});
         }
       });
     };
@@ -194,11 +202,7 @@ export default function InboxPage() {
     }, 60000);
 
     const safetyRefresh = setInterval(() => {
-      if (!cancelled) {
-        api.get('/api/conversations')
-          .then((res) => { if (!cancelled) setConversations(res.data.conversations); })
-          .catch(() => {});
-      }
+      if (!cancelled) fetchConversations();
     }, 30000);
 
     return () => {
@@ -423,8 +427,12 @@ export default function InboxPage() {
 
   const fetchConversations = useCallback(async () => {
     try {
-      const res = await api.get('/api/conversations');
-      setConversations(res.data.conversations);
+      const [activeRes, binRes] = await Promise.all([
+        api.get('/api/conversations'),
+        api.get('/api/conversations', { params: { filter: 'bin' } }),
+      ]);
+      const all = [...(activeRes.data.conversations || []), ...(binRes.data.conversations || [])];
+      setConversations(all);
     } catch (err) {
       console.error('Failed to fetch conversations:', err);
     }
@@ -1094,8 +1102,13 @@ export default function InboxPage() {
               </div>
 
               {/* Messages area */}
-              {showMessageSkeleton && messages.length === 0 ? (
+              {(loadingMessages || showMessageSkeleton) && messages.length === 0 ? (
                 <MessagesSkeleton dark />
+              ) : !loadingMessages && messages.length === 0 ? (
+                <div className="flex-1 flex flex-col items-center justify-center text-gray-500 px-6">
+                  <MessageSquare size={40} className="mb-3 text-gray-600" />
+                  <p className="text-sm text-gray-400">No messages yet</p>
+                </div>
               ) : isEmailPlatform ? (
                 <EmailThreadView
                   messages={messages}
