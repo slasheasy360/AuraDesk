@@ -38,6 +38,7 @@ function PlatformStep({ onNext, onBack, successPlatform }) {
   const [accounts, setAccounts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [successMsg, setSuccessMsg] = useState(successPlatform || null);
+  const pollRef = useRef(null);
 
   const platforms = [
     { id: 'instagram', name: 'Instagram', icon: '📷' },
@@ -48,12 +49,46 @@ function PlatformStep({ onNext, onBack, successPlatform }) {
 
   const fetchAccounts = useCallback(() => {
     setLoading(true);
-    api.get('/api/accounts').then((res) => {
+    return api.get('/api/accounts').then((res) => {
       setAccounts(res.data.accounts || []);
-    }).catch(() => {}).finally(() => setLoading(false));
+      return res.data.accounts || [];
+    }).catch((err) => {
+      console.error('Failed to fetch accounts:', err);
+      return [];
+    }).finally(() => setLoading(false));
   }, []);
 
   useEffect(() => { fetchAccounts(); }, [fetchAccounts]);
+
+  // When returning from OAuth, poll until the connected platform appears
+  useEffect(() => {
+    if (!successPlatform) return;
+
+    let attempts = 0;
+    const maxAttempts = 8;
+
+    const poll = async () => {
+      attempts++;
+      const accts = await fetchAccounts();
+      const found = accts.some((a) => a.platform === successPlatform && a.status === 'active');
+      if (found || attempts >= maxAttempts) {
+        clearInterval(pollRef.current);
+        pollRef.current = null;
+      }
+    };
+
+    // First check after a short delay to let DB propagate
+    const initialTimer = setTimeout(() => {
+      poll();
+      // Then poll every 2 seconds if not found yet
+      pollRef.current = setInterval(poll, 2000);
+    }, 500);
+
+    return () => {
+      clearTimeout(initialTimer);
+      if (pollRef.current) clearInterval(pollRef.current);
+    };
+  }, [successPlatform, fetchAccounts]);
 
   // Clear success message after 4 seconds
   useEffect(() => {
@@ -430,13 +465,16 @@ export default function OnboardingPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const { refreshUser } = useAuth();
 
-  // Extract ?success= param from OAuth redirect and clean URL
-  const successPlatform = searchParams.get('success');
+  // Extract ?success= param from OAuth redirect and persist it before cleaning URL
+  const successPlatformRef = useRef(searchParams.get('success'));
+  const successPlatform = successPlatformRef.current;
   useEffect(() => {
-    if (successPlatform) {
+    const sp = searchParams.get('success');
+    if (sp) {
+      successPlatformRef.current = sp;
       setSearchParams({}, { replace: true });
     }
-  }, [successPlatform, setSearchParams]);
+  }, [searchParams, setSearchParams]);
 
   useEffect(() => {
     // If no token, redirect to login immediately
