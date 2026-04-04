@@ -53,7 +53,13 @@ router.get('/', authenticate, async (req, res) => {
     }
 
     if (platform) {
-      where.connectedAccount = { ...where.connectedAccount, platform };
+      // Filter by platform through the connected account relation
+      // Use a nested AND to avoid overwriting the connectedAccountId filter
+      const platformAccountIds = await prisma.connectedAccount.findMany({
+        where: { id: { in: accountIds }, platform },
+        select: { id: true },
+      });
+      where.connectedAccountId = { in: platformAccountIds.map((a) => a.id) };
     }
 
     const conversations = await prisma.conversation.findMany({

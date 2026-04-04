@@ -99,6 +99,7 @@ export default function InboxPage() {
   const [uploadProgress, setUploadProgress] = useState(null);
   const [loadingConversations, setLoadingConversations] = useState(true);
   const [loadingMessages, setLoadingMessages] = useState(false);
+  const [messagesError, setMessagesError] = useState(null);
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
 
   // ── New filter & pagination state ──
@@ -377,6 +378,7 @@ export default function InboxPage() {
       }
       fetchMessages(conversationId);
       setSendError('');
+      setMessagesError(null);
       setAttachments([]);
       setShowReplyBox(false);
       setReplyingTo(null);
@@ -428,35 +430,50 @@ export default function InboxPage() {
   }, []);
 
   const fetchMessages = useCallback(async (convId, forceRefresh = false) => {
-    try {
-      if (!forceRefresh && messageCache.current.get(convId)?.fresh) return;
-      setLoadingMessages(true);
-      const [msgRes, convRes] = await Promise.all([
-        api.get(`/api/messages/${convId}`),
-        api.get(`/api/conversations/${convId}`),
-      ]);
-      const msgs = msgRes.data.messages;
-      msgs.forEach((m) => m.id && knownMessageIds.current.add(m.id));
-      if (conversationIdRef.current === convId) {
-        setMessages(msgs);
-        setActiveConversation(convRes.data.conversation);
+    if (!forceRefresh && messageCache.current.get(convId)?.fresh) return;
+    setLoadingMessages(true);
+    setMessagesError(null);
+
+    const MAX_ATTEMPTS = 3;
+    for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+      try {
+        const [msgRes, convRes] = await Promise.all([
+          api.get(`/api/messages/${convId}`),
+          api.get(`/api/conversations/${convId}`),
+        ]);
+        const msgs = msgRes.data.messages;
+        msgs.forEach((m) => m.id && knownMessageIds.current.add(m.id));
+        if (conversationIdRef.current === convId) {
+          setMessages(msgs);
+          setActiveConversation(convRes.data.conversation);
+          setMessagesError(null);
+        }
+        messageCache.current.set(convId, {
+          messages: msgs,
+          activeConversation: convRes.data.conversation,
+          fresh: true,
+        });
+        setTimeout(() => {
+          const entry = messageCache.current.get(convId);
+          if (entry) entry.fresh = false;
+        }, 30000);
+        sessionSet(SESSION_KEYS.MESSAGES + convId, msgs.slice(-50));
+        sessionSet(SESSION_KEYS.ACTIVE_CONVERSATION, convRes.data.conversation);
+        setLoadingMessages(false);
+        return; // success
+      } catch (err) {
+        console.error(`fetchMessages attempt ${attempt + 1} failed:`, err.message);
+        if (attempt < MAX_ATTEMPTS - 1) {
+          await new Promise((r) => setTimeout(r, 2000 * (attempt + 1)));
+        } else {
+          // All attempts failed
+          if (conversationIdRef.current === convId) {
+            setMessagesError('Failed to load messages. Please try again.');
+          }
+        }
       }
-      messageCache.current.set(convId, {
-        messages: msgs,
-        activeConversation: convRes.data.conversation,
-        fresh: true,
-      });
-      setTimeout(() => {
-        const entry = messageCache.current.get(convId);
-        if (entry) entry.fresh = false;
-      }, 30000);
-      sessionSet(SESSION_KEYS.MESSAGES + convId, msgs.slice(-50));
-      sessionSet(SESSION_KEYS.ACTIVE_CONVERSATION, convRes.data.conversation);
-    } catch (err) {
-      console.error('Failed to fetch messages:', err);
-    } finally {
-      setLoadingMessages(false);
     }
+    setLoadingMessages(false);
   }, []);
 
   const activeConversationRef = useRef(activeConversation);
@@ -991,7 +1008,29 @@ export default function InboxPage() {
             </div>
           )}
 
-          {conversationId && !activeConversation ? (
+          {conversationId && !activeConversation && messagesError ? (
+            /* Error state — all retries exhausted */
+            <>
+              <div className="border-b border-white/10 px-4 sm:px-6 py-3 flex items-center gap-3 bg-[#0f1d33]">
+                <button onClick={handleBackToList} className="text-gray-400 hover:text-white transition flex-shrink-0">
+                  <ArrowLeft size={20} />
+                </button>
+                <span className="text-sm text-gray-400">Conversation</span>
+              </div>
+              <div className="flex-1 flex flex-col items-center justify-center text-center px-6">
+                <AlertCircle size={40} className="text-red-400 mb-3" />
+                <p className="text-sm font-medium text-gray-300 mb-1">{messagesError}</p>
+                <button
+                  onClick={() => fetchMessages(conversationId, true)}
+                  className="mt-3 px-4 py-2 bg-primary-500 hover:bg-primary-600 text-white text-sm rounded-lg transition flex items-center gap-2"
+                >
+                  <RefreshCw size={14} />
+                  Retry
+                </button>
+              </div>
+            </>
+          ) : conversationId && !activeConversation ? (
+            /* Loading skeleton */
             <>
               <div className="border-b border-white/10 px-4 sm:px-6 py-3 flex items-center gap-3 bg-[#0f1d33]">
                 <button onClick={handleBackToList} className="text-gray-400 hover:text-white transition flex-shrink-0">
@@ -1317,8 +1356,8 @@ export default function InboxPage() {
                     {formatTimeShort(conv.lastMessageAt)}
                   </span>
 
-                  {/* Bin actions */}
-                  {isBinView && (
+                  {/* Row actions — on hover */}
+                  {isBinView ? (
                     <div className="flex items-center gap-1 ml-2 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0">
                       <button
                         onClick={(e) => restoreConversation(conv.id, e)}
@@ -1331,6 +1370,23 @@ export default function InboxPage() {
                         onClick={(e) => permanentDeleteConversation(conv.id, e)}
                         className="p-1 text-gray-500 hover:text-red-400 transition rounded"
                         title="Delete permanently"
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-1 ml-2 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0">
+                      <button
+                        onClick={(e) => toggleLead(conv.id, e)}
+                        className={`p-1 transition rounded ${conv.isLead ? 'text-primary-400 hover:text-primary-300' : 'text-gray-500 hover:text-primary-400'}`}
+                        title={conv.isLead ? 'Remove from Leads' : 'Mark as Lead'}
+                      >
+                        <Users size={14} />
+                      </button>
+                      <button
+                        onClick={(e) => deleteConversation(conv.id, e)}
+                        className="p-1 text-gray-500 hover:text-red-400 transition rounded"
+                        title="Move to Bin"
                       >
                         <Trash2 size={14} />
                       </button>
@@ -1409,31 +1465,46 @@ function FilterPanel({ activeFilter, setActiveFilter, filterCounts, sourceFilter
         })}
       </div>
 
-      {/* Source section */}
-      <div className="mt-6 px-3">
-        <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider px-3 mb-2">Source</h3>
-        <div className="space-y-1">
-          {(availableSourceFilters || ALL_SOURCE_FILTERS).map(({ key, label }) => {
-            const isChecked = sourceFilters.has(key);
-            const count = sourceCounts[key] || 0;
-            return (
-              <label
-                key={key}
-                className="flex items-center gap-3 px-3 py-2 rounded-lg text-sm text-gray-400 hover:bg-white/5 hover:text-gray-200 cursor-pointer transition"
-              >
-                <input
-                  type="checkbox"
-                  checked={isChecked}
-                  onChange={() => toggleSourceFilter(key)}
-                  className="w-4 h-4 rounded border-gray-600 bg-transparent text-primary-500 focus:ring-primary-500 focus:ring-offset-0 cursor-pointer"
-                />
-                <span className="flex-1">{label}</span>
-                {count > 0 && <span className="text-xs text-gray-600">{count}</span>}
-              </label>
-            );
-          })}
+      {/* Source section — only connected platforms, clickable filters */}
+      {availableSourceFilters.length > 0 && (
+        <div className="mt-6 px-3">
+          <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider px-3 mb-2">Source</h3>
+          <div className="space-y-0.5">
+            {availableSourceFilters.map(({ key, label }) => {
+              const isActive = sourceFilters.has(key);
+              const count = sourceCounts[key] || 0;
+              return (
+                <button
+                  key={key}
+                  onClick={() => toggleSourceFilter(key)}
+                  className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-sm transition ${
+                    isActive
+                      ? 'bg-primary-600/20 text-primary-400'
+                      : 'text-gray-400 hover:bg-white/5 hover:text-gray-200'
+                  }`}
+                >
+                  <div className="flex items-center gap-3">
+                    <span className={`w-2 h-2 rounded-full flex-shrink-0 ${
+                      key === 'instagram' ? 'bg-pink-500' :
+                      key === 'facebook' ? 'bg-blue-500' :
+                      key === 'whatsapp' ? 'bg-green-500' :
+                      key === 'gmail' ? 'bg-red-500' : 'bg-gray-500'
+                    }`} />
+                    <span className={isActive ? 'font-medium' : ''}>{label}</span>
+                  </div>
+                  {count > 0 && (
+                    <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${
+                      isActive ? 'bg-primary-500/20 text-primary-300' : 'text-gray-500'
+                    }`}>
+                      {count}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
         </div>
-      </div>
+      )}
 
       {/* Connect account link */}
       <div className="mt-4 px-6">
