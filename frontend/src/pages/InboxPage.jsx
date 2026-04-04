@@ -385,22 +385,28 @@ export default function InboxPage() {
       setSendError('');
       setMessagesError(null);
       setAttachments([]);
-      setShowReplyBox(false);
-      setReplyingTo(null);
       setCollapsedMessages(new Set());
       setConversations((prev) =>
         prev.map((c) => (c.id === conversationId ? { ...c, unreadCount: 0 } : c))
       );
-      // Load draft if any
+      // Load draft — if draft exists, auto-open the reply box with draft content
       api.get(`/api/conversations/${conversationId}/draft`).then((res) => {
         if (res.data.draft?.content) {
           setNewMessage(res.data.draft.content);
           lastSavedDraftRef.current = res.data.draft.content;
+          setShowReplyBox(true);
+          // Set replyingTo from the last message so the reply header shows correctly
+          setReplyingTo((prev) => prev || { sender: 'sender' });
         } else {
           setNewMessage('');
           lastSavedDraftRef.current = '';
+          setShowReplyBox(false);
+          setReplyingTo(null);
         }
-      }).catch(() => {});
+      }).catch(() => {
+        setShowReplyBox(false);
+        setReplyingTo(null);
+      });
     } else {
       setMessages([]);
       setActiveConversation(null);
@@ -456,6 +462,13 @@ export default function InboxPage() {
           setMessages(msgs);
           setActiveConversation(convRes.data.conversation);
           setMessagesError(null);
+          // If reply box is open (from draft restore), set replyingTo to the last message
+          if (msgs.length > 0) {
+            setReplyingTo((prev) => {
+              if (prev && !prev.id) return msgs[msgs.length - 1]; // replace placeholder with real message
+              return prev;
+            });
+          }
         }
         messageCache.current.set(convId, {
           messages: msgs,
@@ -748,7 +761,8 @@ export default function InboxPage() {
   const openReplyBox = (msg) => {
     setReplyingTo(msg);
     setShowReplyBox(true);
-    setNewMessage('');
+    // Only clear message if there's no existing draft content
+    setNewMessage((prev) => prev || '');
     setAttachments([]);
   };
 
@@ -1735,14 +1749,21 @@ function EmailMessageCard({ msg, isOutbound, isLast, isCollapsed, onToggleCollap
           </div>
           <div className="px-4 sm:px-5 py-4 border-t border-white/5">
             {sanitizedHtml ? (
-              <div
-                className="email-html-content text-sm text-gray-300 leading-relaxed"
-                dangerouslySetInnerHTML={{ __html: sanitizedHtml }}
-              />
-            ) : (
-              <div className="text-sm text-gray-300 whitespace-pre-wrap break-words leading-relaxed">
-                {msg.content}
+              <div className="bg-white rounded-lg p-4 sm:p-5">
+                <div
+                  className="email-html-content text-sm text-gray-900 leading-relaxed"
+                  style={{ color: '#1a1a1a' }}
+                  dangerouslySetInnerHTML={{ __html: sanitizedHtml }}
+                />
               </div>
+            ) : msg.content ? (
+              <div className="bg-white rounded-lg p-4 sm:p-5">
+                <div className="text-sm text-gray-900 whitespace-pre-wrap break-words leading-relaxed">
+                  {msg.content}
+                </div>
+              </div>
+            ) : (
+              <div className="text-sm text-gray-500 italic py-2">(No content)</div>
             )}
           </div>
           {hasAttachments && (

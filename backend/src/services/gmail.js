@@ -519,29 +519,26 @@ export function getEmailBody(payload) {
     return Buffer.from(payload.body.data, 'base64url').toString('utf8');
   }
   if (payload.parts) {
+    // First pass: look for text/plain at any nesting level
     for (const part of payload.parts) {
       if (part.mimeType === 'text/plain' && part.body?.data) {
         return Buffer.from(part.body.data, 'base64url').toString('utf8');
       }
+      // Recurse into multipart/alternative or multipart/mixed
+      if (part.parts) {
+        for (const subPart of part.parts) {
+          if (subPart.mimeType === 'text/plain' && subPart.body?.data) {
+            return Buffer.from(subPart.body.data, 'base64url').toString('utf8');
+          }
+        }
+      }
     }
+    // Second pass: fall back to text/html at any nesting level
     for (const part of payload.parts) {
       if (part.mimeType === 'text/html' && part.body?.data) {
         return Buffer.from(part.body.data, 'base64url').toString('utf8');
       }
-    }
-  }
-  return '';
-}
-
-export function getEmailHtmlBody(payload) {
-  // Extract HTML body specifically, falling back through multipart structure
-  if (payload.parts) {
-    for (const part of payload.parts) {
-      if (part.mimeType === 'text/html' && part.body?.data) {
-        return Buffer.from(part.body.data, 'base64url').toString('utf8');
-      }
-      // Check nested multipart/alternative
-      if (part.mimeType === 'multipart/alternative' && part.parts) {
+      if (part.parts) {
         for (const subPart of part.parts) {
           if (subPart.mimeType === 'text/html' && subPart.body?.data) {
             return Buffer.from(subPart.body.data, 'base64url').toString('utf8');
@@ -550,11 +547,25 @@ export function getEmailHtmlBody(payload) {
       }
     }
   }
-  // Single-part HTML email
-  if (payload.mimeType === 'text/html' && payload.body?.data) {
-    return Buffer.from(payload.body.data, 'base64url').toString('utf8');
+  return '';
+}
+
+export function getEmailHtmlBody(payload) {
+  // Recursively search for text/html at any depth
+  function findHtml(node) {
+    if (!node) return null;
+    if (node.mimeType === 'text/html' && node.body?.data) {
+      return Buffer.from(node.body.data, 'base64url').toString('utf8');
+    }
+    if (node.parts) {
+      for (const part of node.parts) {
+        const result = findHtml(part);
+        if (result) return result;
+      }
+    }
+    return null;
   }
-  return null;
+  return findHtml(payload);
 }
 
 export function getEmailAttachments(payload) {

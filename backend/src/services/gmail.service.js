@@ -300,11 +300,27 @@ export async function syncGmailMessages(userId) {
       });
     } catch (err) {
       if (err.code === 'P2002') {
-        // Duplicate message — already saved by Pub/Sub handler
+        // Duplicate message — update content if it was previously empty/truncated
         const existing = await prisma.message.findFirst({
           where: { conversationId: conversation.id, platformMessageId: item.gmailMessageId },
         });
-        if (existing) synced.push({ ...existing, _isNew: false });
+        if (existing) {
+          const newContent = item.body || item.snippet || item.subject;
+          const newHtml = item.htmlBody || null;
+          const needsUpdate =
+            (!existing.content || existing.content.length < 20) && newContent && newContent.length > (existing.content?.length || 0) ||
+            (!existing.htmlContent && newHtml);
+          if (needsUpdate) {
+            await prisma.message.update({
+              where: { id: existing.id },
+              data: {
+                content: newContent || existing.content,
+                htmlContent: newHtml || existing.htmlContent,
+              },
+            });
+          }
+          synced.push({ ...existing, _isNew: false });
+        }
         continue;
       }
       throw err;
