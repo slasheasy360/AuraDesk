@@ -1,9 +1,9 @@
 import { Router } from 'express';
-import fs from 'fs';
-import path from 'path';
+import { randomUUID } from 'crypto';
 import { authenticate } from '../middleware/auth.js';
 import { upload } from '../middleware/upload.js';
 import prisma from '../utils/prisma.js';
+import { uploadFile, getPresignedUrl } from '../utils/s3.js';
 import * as facebookService from '../services/facebook.js';
 import * as instagramService from '../services/instagram.js';
 import * as whatsappService from '../services/whatsapp.js';
@@ -12,10 +12,6 @@ import { syncGmailMessagesController, gmailDiagnosticController } from '../contr
 import { syncInstagramMessages } from '../services/instagram.sync.js';
 import { syncFacebookMessages } from '../services/facebook.sync.js';
 import axios from 'axios';
-
-// Ensure persistent outbound attachments directory exists
-const OUTBOUND_DIR = path.join(process.cwd(), 'uploads', 'outbound');
-fs.mkdirSync(OUTBOUND_DIR, { recursive: true });
 
 const router = Router();
 
@@ -200,14 +196,10 @@ router.get('/:messageId/attachments/:index/download', authenticate, async (req, 
       res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(att.filename || 'download')}"`);
       res.setHeader('Content-Length', buffer.length);
       res.send(buffer);
-    } else if (att.localPath && fs.existsSync(att.localPath)) {
-      const safePath = path.resolve(att.localPath);
-      if (!safePath.startsWith(path.resolve(OUTBOUND_DIR))) {
-        return res.status(403).json({ error: 'Access denied' });
-      }
-      res.setHeader('Content-Type', att.mimeType || 'application/octet-stream');
-      res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(att.filename || 'download')}"`);
-      fs.createReadStream(safePath).pipe(res);
+    } else if (att.s3Key) {
+      // Outbound attachments stored in S3
+      const url = await getPresignedUrl(att.s3Key);
+      res.redirect(url);
     } else {
       return res.status(400).json({ error: 'Attachment cannot be downloaded — no media reference found' });
     }
@@ -272,15 +264,10 @@ router.get('/:messageId/attachments/:index/preview', authenticate, async (req, r
       res.setHeader('Content-Disposition', 'inline');
       res.setHeader('Content-Length', buffer.length);
       res.send(buffer);
-    } else if (att.localPath && fs.existsSync(att.localPath)) {
-      // Outbound attachments stored locally (e.g. FB/IG sent images)
-      const safePath = path.resolve(att.localPath);
-      if (!safePath.startsWith(path.resolve(OUTBOUND_DIR))) {
-        return res.status(403).json({ error: 'Access denied' });
-      }
-      res.setHeader('Content-Type', att.mimeType || 'application/octet-stream');
-      res.setHeader('Content-Disposition', 'inline');
-      fs.createReadStream(safePath).pipe(res);
+    } else if (att.s3Key) {
+      // Outbound attachments stored in S3 — redirect to pre-signed URL
+      const url = await getPresignedUrl(att.s3Key);
+      res.redirect(url);
     } else {
       return res.status(404).json({ error: 'No preview available' });
     }
@@ -289,6 +276,16 @@ router.get('/:messageId/attachments/:index/preview', authenticate, async (req, r
     res.status(500).json({ error: 'Failed to preview attachment' });
   }
 });
+
+/**
+ * Upload an outbound attachment to S3 and return the S3 key + metadata.
+ */
+async function persistOutboundAttachment(file) {
+  const ext = file.originalname ? '.' + file.originalname.split('.').pop() : '';
+  const s3Key = `outbound/${randomUUID()}${ext}`;
+  await uploadFile(file.buffer, s3Key, file.mimetype);
+  return s3Key;
+}
 
 // Send a message (with optional file attachments)
 router.post('/send', authenticate, upload.array('attachments', 10), async (req, res) => {
@@ -343,10 +340,9 @@ router.post('/send', authenticate, upload.array('attachments', 10), async (req, 
               size: file.size,
               platformId: result.message_id || null,
             };
-            // Persist image files for outbound preview
-            if (file.mimetype.startsWith('image/')) {
-              const destPath = path.join(OUTBOUND_DIR, path.basename(file.path));
-              try { fs.copyFileSync(file.path, destPath); meta.localPath = destPath; } catch { /* skip */ }
+            // Persist image files to S3 for outbound preview
+            if (file.mimetype.startsWith('image/') && file.buffer) {
+              try { meta.s3Key = await persistOutboundAttachment(file); } catch { /* skip */ }
             }
             attachmentMeta.push(meta);
           }
@@ -374,10 +370,9 @@ router.post('/send', authenticate, upload.array('attachments', 10), async (req, 
               size: file.size,
               platformId: result.message_id || null,
             };
-            // Persist image files for outbound preview
-            if (file.mimetype.startsWith('image/')) {
-              const destPath = path.join(OUTBOUND_DIR, path.basename(file.path));
-              try { fs.copyFileSync(file.path, destPath); meta.localPath = destPath; } catch { /* skip */ }
+            // Persist image files to S3 for outbound preview
+            if (file.mimetype.startsWith('image/') && file.buffer) {
+              try { meta.s3Key = await persistOutboundAttachment(file); } catch { /* skip */ }
             }
             attachmentMeta.push(meta);
           }
@@ -444,10 +439,9 @@ router.post('/send', authenticate, upload.array('attachments', 10), async (req, 
               mimeType: file.mimetype,
               size: file.size,
             };
-            // Persist image files for outbound preview
-            if (file.mimetype.startsWith('image/')) {
-              const destPath = path.join(OUTBOUND_DIR, path.basename(file.path));
-              try { fs.copyFileSync(file.path, destPath); meta.localPath = destPath; } catch { /* skip */ }
+            // Persist image files to S3 for outbound preview
+            if (file.mimetype.startsWith('image/') && file.buffer) {
+              try { meta.s3Key = await persistOutboundAttachment(file); } catch { /* skip */ }
             }
             attachmentMeta.push(meta);
           }
@@ -466,12 +460,8 @@ router.post('/send', authenticate, upload.array('attachments', 10), async (req, 
       return res.status(typeof status === 'number' ? status : 502).json({
         error: `Failed to send via ${platform}: ${detail}`,
       });
-    } finally {
-      // Clean up uploaded files from disk
-      for (const file of files) {
-        try { fs.unlinkSync(file.path); } catch { /* ignore */ }
-      }
     }
+    // No file cleanup needed — memory storage buffers are garbage collected
 
     // Determine content type
     let contentType = platform === 'gmail' ? 'email' : 'text';

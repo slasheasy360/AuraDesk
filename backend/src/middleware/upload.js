@@ -1,16 +1,4 @@
 import multer from 'multer';
-import path from 'path';
-import { randomUUID } from 'crypto';
-
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, path.join(process.cwd(), 'uploads'));
-  },
-  filename: (req, file, cb) => {
-    const ext = path.extname(file.originalname);
-    cb(null, `${randomUUID()}${ext}`);
-  },
-});
 
 const fileFilter = (req, file, cb) => {
   const allowedTypes = [
@@ -33,7 +21,7 @@ const fileFilter = (req, file, cb) => {
 };
 
 export const upload = multer({
-  storage,
+  storage: multer.memoryStorage(),
   fileFilter,
   limits: { fileSize: 25 * 1024 * 1024 }, // 25MB max
 });

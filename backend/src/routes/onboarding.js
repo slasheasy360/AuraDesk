@@ -1,21 +1,14 @@
 import { Router } from 'express';
 import multer from 'multer';
-import path from 'path';
 import prisma from '../utils/prisma.js';
 import { authenticate } from '../middleware/auth.js';
+import { uploadFile, getPresignedUrl } from '../utils/s3.js';
 
 const router = Router();
 
-// Logo upload — store in /uploads directory, return URL
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, path.join(process.cwd(), 'uploads')),
-  filename: (req, file, cb) => {
-    const ext = path.extname(file.originalname) || '.png';
-    cb(null, `logo-${req.user.id}-${Date.now()}${ext}`);
-  },
-});
-const upload = multer({
-  storage,
+// Logo upload — store in S3, return pre-signed URL
+const logoUpload = multer({
+  storage: multer.memoryStorage(),
   limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
   fileFilter: (req, file, cb) => {
     if (file.mimetype.startsWith('image/')) cb(null, true);
@@ -41,18 +34,23 @@ router.get('/status', authenticate, async (req, res) => {
 });
 
 // ── Upload logo ──
-router.post('/upload-logo', authenticate, upload.single('logo'), async (req, res) => {
+router.post('/upload-logo', authenticate, logoUpload.single('logo'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
 
-  // Build URL relative to server
-  const url = `/uploads/${req.file.filename}`;
+  const ext = req.file.originalname ? '.' + req.file.originalname.split('.').pop() : '.png';
+  const s3Key = `logos/logo-${req.user.id}-${Date.now()}${ext}`;
 
+  await uploadFile(req.file.buffer, s3Key, req.file.mimetype);
+
+  // Store the S3 key as the logo reference
   await prisma.user.update({
     where: { id: req.user.id },
-    data: { companyLogo: url },
+    data: { companyLogo: s3Key },
   });
 
-  res.json({ url });
+  // Return a pre-signed URL for immediate display
+  const url = await getPresignedUrl(s3Key);
+  res.json({ url, s3Key });
 });
 
 // ── Step 1: Branding ──

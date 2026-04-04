@@ -1,17 +1,8 @@
 import 'dotenv/config';
-import fs from 'fs';
-import path from 'path';
 import express from 'express';
 import cors from 'cors';
 import http from 'http';
 import { Server } from 'socket.io';
-
-// Ensure uploads directory exists
-const uploadsDir = path.join(process.cwd(), 'uploads');
-if (!fs.existsSync(uploadsDir)) {
-  fs.mkdirSync(uploadsDir, { recursive: true });
-  console.log('[Startup] Created uploads directory');
-}
 
 import authRoutes from './routes/auth.js';
 import gmailRoutes from './routes/gmail.js';
@@ -26,6 +17,7 @@ import onboardingRoutes from './routes/onboarding.js';
 import metaWebhook from './webhooks/meta.js';
 import gmailWebhook from './webhooks/gmail.js';
 import { renewExpiringWatches, reRegisterAllWatches } from './services/gmail.js';
+import prisma from './utils/prisma.js';
 
 const app = express();
 const server = http.createServer(app);
@@ -85,13 +77,11 @@ io.on('connection', (socket) => {
 
 // Raw body for webhook signature validation — must be before express.json()
 app.use('/webhooks', express.raw({ type: 'application/json' }));
+app.use('/api/subscription/webhook', express.raw({ type: 'application/json' }));
 
 // Standard middleware
 app.use(cors({ origin: allowedOrigins, credentials: true }));
 app.use(express.json());
-
-// Serve uploaded files (logos, etc.)
-app.use('/uploads', express.static(path.join(process.cwd(), 'uploads')));
 
 // Auth routes (no /api prefix — OAuth redirects)
 app.use('/auth', authRoutes);
@@ -111,8 +101,15 @@ app.use('/api/onboarding', onboardingRoutes);
 app.use('/webhooks/meta', metaWebhook);
 app.use('/webhooks/gmail', gmailWebhook);
 
-// Health check
-app.get('/health', (req, res) => res.json({ status: 'ok', timestamp: new Date().toISOString() }));
+// Health check with DB connectivity
+app.get('/health', async (req, res) => {
+  try {
+    await prisma.$queryRaw`SELECT 1`;
+    res.json({ status: 'ok', db: 'ok', timestamp: new Date().toISOString() });
+  } catch (err) {
+    res.status(503).json({ status: 'degraded', db: 'error', timestamp: new Date().toISOString() });
+  }
+});
 
 const PORT = process.env.PORT || 3001;
 server.listen(PORT, () => {
