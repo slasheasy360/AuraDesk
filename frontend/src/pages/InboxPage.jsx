@@ -166,6 +166,7 @@ export default function InboxPage() {
       Promise.allSettled([
         api.get('/api/messages/gmail/sync').catch(() => ({ data: {} })),
         api.get('/api/messages/instagram/sync').catch(() => ({ data: {} })),
+        api.get('/api/messages/facebook/sync').catch(() => ({ data: {} })),
       ]).then((results) => {
         if (cancelled) return;
         const hasNew = results.some(

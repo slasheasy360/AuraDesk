@@ -1,13 +1,16 @@
 import { Router } from 'express';
 import { authenticate } from '../middleware/auth.js';
 import * as facebookService from '../services/facebook.js';
+import { syncFacebookMessages } from '../services/facebook.sync.js';
 import prisma from '../utils/prisma.js';
 
 const router = Router();
 const DEFAULT_FRONTEND_URL = 'https://aura-desk.vercel.app';
 
 function getFrontendUrl() {
-  return (process.env.FRONTEND_URL || DEFAULT_FRONTEND_URL).replace(/\/$/, '');
+  const raw = process.env.FRONTEND_URL || DEFAULT_FRONTEND_URL;
+  const urls = raw.split(',').map((u) => u.trim()).filter(Boolean);
+  return (urls.length > 1 ? urls[urls.length - 1] : urls[0]).replace(/\/$/, '');
 }
 
 // Backward-compatible shortcut for old clients that still call /auth/facebook.
@@ -80,11 +83,18 @@ router.get('/callback', async (req, res) => {
 
     const result = await facebookService.handleCallbackWithToken(tokenResponse.access_token, userId);
 
-    console.log('[Facebook OAuth] /callback — SUCCESS, redirecting', {
+    console.log('[Facebook OAuth] /callback — SUCCESS', {
       fbAccountId: result.connectedAccount.id,
       pagesCount: result.pages.length,
       hasInstagram: Boolean(result.igAccount),
     });
+
+    // Initial sync — pull existing Messenger conversations
+    try {
+      await syncFacebookMessages(userId);
+    } catch (syncErr) {
+      console.error('Initial Facebook sync after connect failed:', syncErr.message);
+    }
 
     // Redirect to onboarding if user hasn't completed it, otherwise connections page
     const user = await prisma.user.findUnique({ where: { id: userId }, select: { onboardingStep: true } });

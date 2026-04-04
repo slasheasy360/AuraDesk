@@ -111,7 +111,7 @@ async function fetchMessagesForAccount(connectedAccountId, afterDate, maxResults
   const messageRefs = listRes.data.messages || [];
   if (messageRefs.length === 0) return [];
 
-  return Promise.all(
+  const results = await Promise.allSettled(
     messageRefs.map(async (ref) => {
       const msgRes = await gmail.users.messages.get({
         userId: 'me',
@@ -121,6 +121,16 @@ async function fetchMessagesForAccount(connectedAccountId, afterDate, maxResults
       return msgRes.data;
     })
   );
+
+  const messages = [];
+  for (const result of results) {
+    if (result.status === 'fulfilled') {
+      messages.push(result.value);
+    } else {
+      console.warn('[Gmail Sync] Failed to fetch individual message:', result.reason?.message);
+    }
+  }
+  return messages;
 }
 
 function toPreviewBody(fullMessage) {

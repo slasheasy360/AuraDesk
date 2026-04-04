@@ -10,6 +10,13 @@ import prisma from '../utils/prisma.js';
 
 const router = Router();
 
+// Extract a single usable frontend URL from FRONTEND_URL (may be comma-separated)
+function getFrontendUrl() {
+  const raw = process.env.FRONTEND_URL || 'http://localhost:5173';
+  const urls = raw.split(',').map((u) => u.trim()).filter(Boolean);
+  return (urls.length > 1 ? urls[urls.length - 1] : urls[0]).replace(/\/$/, '');
+}
+
 // GET /auth/gmail — Google OAuth login (no auth required)
 // Redirects to Google consent screen for login (email + profile only)
 router.get('/', (req, res) => {
@@ -29,7 +36,7 @@ router.get('/start', authenticate, (req, res) => {
 router.get('/connect', (req, res) => {
   const { token } = req.query;
   if (!token) {
-    return res.redirect(`${process.env.FRONTEND_URL || 'http://localhost:5173'}/login?error=auth_required`);
+    return res.redirect(`${getFrontendUrl()}/login?error=auth_required`);
   }
 
   try {
@@ -38,13 +45,13 @@ router.get('/connect', (req, res) => {
     const url = gmailService.getAuthUrl(state);
     res.redirect(url);
   } catch {
-    res.redirect(`${process.env.FRONTEND_URL || 'http://localhost:5173'}/login?error=invalid_token`);
+    res.redirect(`${getFrontendUrl()}/login?error=invalid_token`);
   }
 });
 
 // GET /auth/gmail/callback — handles BOTH login and channel connection
 router.get('/callback', async (req, res) => {
-  const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+  const frontendUrl = getFrontendUrl();
   let mode = 'login';
 
   const redirectWithError = (errorCode) => {

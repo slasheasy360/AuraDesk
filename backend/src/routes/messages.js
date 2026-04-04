@@ -10,6 +10,7 @@ import * as whatsappService from '../services/whatsapp.js';
 import * as gmailService from '../services/gmail.js';
 import { syncGmailMessagesController, gmailDiagnosticController } from '../controllers/gmail.controller.js';
 import { syncInstagramMessages } from '../services/instagram.sync.js';
+import { syncFacebookMessages } from '../services/facebook.sync.js';
 import axios from 'axios';
 
 // Ensure persistent outbound attachments directory exists
@@ -94,6 +95,25 @@ router.get('/instagram/sync', authenticate, async (req, res) => {
     res.status(500).json({
       success: false,
       error: err.message || 'Failed to sync Instagram messages',
+    });
+  }
+});
+
+// Sync latest Facebook Messenger messages for the current user
+router.get('/facebook/sync', authenticate, async (req, res) => {
+  try {
+    const messages = await syncFacebookMessages(req.user.id);
+    const newCount = messages.filter((m) => m._isNew).length;
+    res.json({
+      success: true,
+      synced: messages.length,
+      newMessages: newCount,
+    });
+  } catch (err) {
+    console.error('Facebook sync error:', err);
+    res.status(500).json({
+      success: false,
+      error: err.message || 'Failed to sync Facebook messages',
     });
   }
 });
