@@ -391,7 +391,8 @@ function InviteModal({ onClose, showSuccess, showError }) {
     try {
       const r = await api.post('/api/team/invite', { email });
       setLink(r.data.inviteLink);
-      showSuccess('Invite sent!');
+      if (r.data.emailSent) showSuccess(`Invite emailed to ${email}`);
+      else showSuccess('Invite created — copy the link below (email not configured)');
     } catch (e) {
       showError(e.response?.data?.error || 'Failed to send invite');
     } finally {

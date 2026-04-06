@@ -4,6 +4,7 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import prisma from '../utils/prisma.js';
 import { authenticate } from '../middleware/auth.js';
+import { sendMail, buildInviteEmail } from '../utils/mailer.js';
 
 const router = Router();
 
@@ -84,8 +85,16 @@ router.post('/invite', authenticate, async (req, res) => {
     const frontendUrl = (process.env.FRONTEND_URL || 'http://localhost:5173').split(',')[0].trim();
     const inviteLink = `${frontendUrl}/invite/${token}`;
 
-    // TODO: Send email via SES/SendGrid. For now we return the link so the UI can copy it.
-    res.json({ invite, inviteLink });
+    // Send invite email via SMTP (nodemailer). If SMTP isn't configured, the
+    // link is still returned so the admin can copy it manually from the modal.
+    const { subject, html, text } = buildInviteEmail({
+      inviteLink,
+      companyName: me.companyName,
+      inviterName: me.name || me.firstName || me.email,
+    });
+    const mailResult = await sendMail({ to: email, subject, html, text });
+
+    res.json({ invite, inviteLink, emailSent: mailResult.sent, emailError: mailResult.sent ? null : mailResult.reason });
   } catch (err) {
     console.error('team/invite:', err);
     res.status(500).json({ error: 'Failed to send invite' });
