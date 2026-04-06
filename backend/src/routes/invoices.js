@@ -207,18 +207,35 @@ router.post('/', authenticate, async (req, res) => {
       try {
         const frontendBase = (process.env.FRONTEND_URL || 'http://localhost:5173').split(',')[0].trim();
         const link = `${frontendBase}/i/${publicSlug}`;
-        await prisma.message.create({
+        const content = `Your invoice is ready: ${link}`;
+
+        const message = await prisma.message.create({
           data: {
             conversationId: lead.conversationId,
             direction: 'outbound',
-            content: `Your invoice is ready: ${link}`,
+            content,
             contentType: 'text',
             status: 'sent',
           },
         });
-        emitToUser(req.user.id, 'message_created', {
+
+        // Bump conversation lastMessageAt so it sorts to top of inbox
+        const updatedConv = await prisma.conversation.update({
+          where: { id: lead.conversationId },
+          data: { lastMessageAt: message.sentAt },
+          include: { connectedAccount: { select: { platform: true } } },
+        });
+
+        // Emit the same events the inbox already listens to
+        emitToUser(req.user.id, 'new_message', {
           conversationId: lead.conversationId,
-          invoiceId: invoice.id,
+          message,
+          platform: updatedConv.connectedAccount?.platform,
+        });
+        emitToUser(req.user.id, 'conversation_update', {
+          conversationId: lead.conversationId,
+          lastMessageAt: updatedConv.lastMessageAt,
+          unreadCount: updatedConv.unreadCount,
         });
       } catch (e) {
         console.warn('Auto-send invoice message failed:', e.message);
