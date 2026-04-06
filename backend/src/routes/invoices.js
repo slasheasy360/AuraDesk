@@ -168,11 +168,20 @@ router.post('/', authenticate, async (req, res) => {
     const tax = Number(taxRate) || 0;
     const totals = calcTotals(cleanItems, tax);
 
-    // Validate lead ownership if provided
+    // Validate lead ownership if provided + block duplicate active invoices
     let lead = null;
     if (leadId) {
       lead = await prisma.lead.findFirst({ where: { id: leadId, userId: req.user.id } });
       if (!lead) return res.status(400).json({ error: 'Invalid leadId' });
+      const activeInvoice = await prisma.invoice.findFirst({
+        where: { leadId, status: { not: 'Paid' } },
+      });
+      if (activeInvoice) {
+        return res.status(409).json({
+          error: 'This lead already has an active invoice. Complete payment before creating a new one.',
+          activeInvoiceId: activeInvoice.id,
+        });
+      }
     }
 
     const invoiceNumber = await nextInvoiceNumber(req.user.id);

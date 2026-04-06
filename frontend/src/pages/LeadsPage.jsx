@@ -140,15 +140,22 @@ export default function LeadsPage() {
     const onDeleted = ({ id }) => {
       setLeads((prev) => prev.filter((l) => l.id !== id));
     };
+    const onInvoiceChange = () => fetchLeads();
     sock.on('lead_created', onCreated);
     sock.on('lead_updated', onUpdated);
     sock.on('lead_deleted', onDeleted);
+    sock.on('invoice_created', onInvoiceChange);
+    sock.on('invoice_updated', onInvoiceChange);
+    sock.on('invoice_deleted', onInvoiceChange);
     return () => {
       sock.off('lead_created', onCreated);
       sock.off('lead_updated', onUpdated);
       sock.off('lead_deleted', onDeleted);
+      sock.off('invoice_created', onInvoiceChange);
+      sock.off('invoice_updated', onInvoiceChange);
+      sock.off('invoice_deleted', onInvoiceChange);
     };
-  }, []);
+  }, [fetchLeads]);
 
   const filtered = useMemo(() => {
     if (!search.trim()) return leads;
@@ -278,21 +285,32 @@ export default function LeadsPage() {
                                   <MessageSquare size={12} /> OPEN CHAT
                                 </button>
                               )}
-                              {lead.invoices?.[0] ? (
-                                <button
-                                  onClick={() => navigate(`/invoices/${lead.invoices[0].id}`)}
-                                  className="flex items-center gap-1.5 px-3 py-1.5 bg-white border border-gray-200 rounded-md text-xs font-semibold text-gray-700 hover:bg-gray-50 shadow-sm"
-                                >
-                                  <FileText size={12} /> SHOW INVOICE
-                                </button>
-                              ) : (
-                                <button
-                                  onClick={() => navigate(`/invoices/new?leadId=${lead.id}`)}
-                                  className="flex items-center gap-1.5 px-3 py-1.5 bg-white border border-gray-200 rounded-md text-xs font-semibold text-gray-700 hover:bg-gray-50 shadow-sm"
-                                >
-                                  <Plus size={12} /> CREATE INVOICE
-                                </button>
-                              )}
+                              {(() => {
+                                const invoices = lead.invoices || [];
+                                const activeInvoice = invoices.find((i) => i.status !== 'Paid');
+                                const latest = invoices[0];
+                                const canCreate = !activeInvoice;
+                                return (
+                                  <>
+                                    {latest && (
+                                      <button
+                                        onClick={() => navigate(`/invoices/${(activeInvoice || latest).id}`)}
+                                        className="flex items-center gap-1.5 px-3 py-1.5 bg-white border border-gray-200 rounded-md text-xs font-semibold text-gray-700 hover:bg-gray-50 shadow-sm"
+                                      >
+                                        <FileText size={12} /> SHOW INVOICE
+                                      </button>
+                                    )}
+                                    {canCreate && (
+                                      <button
+                                        onClick={() => navigate(`/invoices/new?leadId=${lead.id}`)}
+                                        className="flex items-center gap-1.5 px-3 py-1.5 bg-white border border-gray-200 rounded-md text-xs font-semibold text-gray-700 hover:bg-gray-50 shadow-sm"
+                                      >
+                                        <Plus size={12} /> CREATE INVOICE
+                                      </button>
+                                    )}
+                                  </>
+                                );
+                              })()}
                             </div>
                           )}
                         </div>
