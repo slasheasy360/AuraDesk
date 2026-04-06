@@ -86,8 +86,9 @@ router.get('/public/:slug', async (req, res) => {
 // ═══════════════════════════════════════════════════════════════════
 router.get('/', authenticate, async (req, res) => {
   try {
-    const { search, status } = req.query;
+    const { search, status, leadId } = req.query;
     const where = { userId: req.user.id };
+    if (leadId) where.leadId = leadId;
     if (status && VALID_STATUSES.includes(status)) where.status = status;
     if (search) {
       where.OR = [

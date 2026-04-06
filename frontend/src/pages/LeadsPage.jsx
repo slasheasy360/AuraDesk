@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { Search, ChevronDown, RotateCcw, MessageSquare, FileText, Plus, UserPlus, Filter } from 'lucide-react';
 import api from '../services/api.js';
 import AddLeadModal from '../components/AddLeadModal.jsx';
+import LeadInvoicesModal from '../components/LeadInvoicesModal.jsx';
 import { getSocket } from '../services/socket.js';
 
 const STATUS_OPTIONS = ['New', 'Warm', 'Won', 'Lost'];
@@ -96,6 +97,7 @@ export default function LeadsPage() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [showAdd, setShowAdd] = useState(false);
+  const [invoicesLead, setInvoicesLead] = useState(null);
   const [hoveredId, setHoveredId] = useState(null);
   const [filters, setFilters] = useState({ date: '', platform: '', lastAction: '', status: '' });
 
@@ -292,14 +294,12 @@ export default function LeadsPage() {
                                 const canCreate = !activeInvoice;
                                 return (
                                   <>
-                                    {latest && (
-                                      <button
-                                        onClick={() => navigate(`/invoices/${(activeInvoice || latest).id}`)}
-                                        className="flex items-center gap-1.5 px-3 py-1.5 bg-white border border-gray-200 rounded-md text-xs font-semibold text-gray-700 hover:bg-gray-50 shadow-sm"
-                                      >
-                                        <FileText size={12} /> SHOW INVOICE
-                                      </button>
-                                    )}
+                                    <button
+                                      onClick={() => setInvoicesLead(lead)}
+                                      className="flex items-center gap-1.5 px-3 py-1.5 bg-white border border-gray-200 rounded-md text-xs font-semibold text-gray-700 hover:bg-gray-50 shadow-sm"
+                                    >
+                                      <FileText size={12} /> SHOW INVOICE{invoices.length > 1 ? `S (${invoices.length})` : ''}
+                                    </button>
                                     {canCreate && (
                                       <button
                                         onClick={() => navigate(`/invoices/new?leadId=${lead.id}`)}
@@ -328,6 +328,14 @@ export default function LeadsPage() {
       </div>
 
       {showAdd && <AddLeadModal onClose={() => setShowAdd(false)} onCreated={handleAdded} />}
+      {invoicesLead && (
+        <LeadInvoicesModal
+          lead={invoicesLead}
+          onClose={() => setInvoicesLead(null)}
+          onOpenInvoice={(id) => navigate(`/invoices/${id}`)}
+          onCreateInvoice={() => navigate(`/invoices/new?leadId=${invoicesLead.id}`)}
+        />
+      )}
     </div>
   );
 }
