@@ -52,7 +52,7 @@ model Lead {
   lastContactedAt DateTime?  @map("last_contacted_at")
   lastAction      String?    @map("last_action")
   status          LeadStatus @default(New)
-  conversationId  String?    @map("conversation_id")
+  conversationId  String?    @unique @map("conversation_id")
   email           String?
   phone           String?
   createdAt       DateTime   @default(now()) @map("created_at")

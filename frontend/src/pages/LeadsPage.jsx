@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { Search, ChevronDown, RotateCcw, MessageSquare, FileText, Plus, UserPlus, Filter } from 'lucide-react';
 import api from '../services/api.js';
 import AddLeadModal from '../components/AddLeadModal.jsx';
+import { getSocket } from '../services/socket.js';
 
 const STATUS_OPTIONS = ['New', 'Warm', 'Won', 'Lost'];
 const PLATFORM_OPTIONS = ['Instagram', 'WhatsApp', 'Gmail', 'Facebook'];
@@ -125,6 +126,29 @@ export default function LeadsPage() {
   }, [filters]);
 
   useEffect(() => { fetchLeads(); }, [fetchLeads]);
+
+  // ── Real-time sync: listen for lead create/update/delete from anywhere ──
+  useEffect(() => {
+    const sock = getSocket();
+    if (!sock) return;
+    const onCreated = ({ lead }) => {
+      setLeads((prev) => (prev.some((l) => l.id === lead.id) ? prev : [{ ...lead, invoices: [] }, ...prev]));
+    };
+    const onUpdated = ({ lead }) => {
+      setLeads((prev) => prev.map((l) => (l.id === lead.id ? { ...l, ...lead } : l)));
+    };
+    const onDeleted = ({ id }) => {
+      setLeads((prev) => prev.filter((l) => l.id !== id));
+    };
+    sock.on('lead_created', onCreated);
+    sock.on('lead_updated', onUpdated);
+    sock.on('lead_deleted', onDeleted);
+    return () => {
+      sock.off('lead_created', onCreated);
+      sock.off('lead_updated', onUpdated);
+      sock.off('lead_deleted', onDeleted);
+    };
+  }, []);
 
   const filtered = useMemo(() => {
     if (!search.trim()) return leads;
