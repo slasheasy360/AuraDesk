@@ -34,8 +34,117 @@ model User {
 
   connectedAccounts ConnectedAccount[]
   contacts          Contact[]
+  leads             Lead[]
+  invoices          Invoice[]
 
   @@map("users")
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// CRM: Leads, Invoices, Payments
+// ═══════════════════════════════════════════════════════════════════
+
+model Lead {
+  id              String     @id @default(uuid())
+  userId          String     @map("user_id")
+  name            String
+  platform        String?
+  lastContactedAt DateTime?  @map("last_contacted_at")
+  lastAction      String?    @map("last_action")
+  status          LeadStatus @default(New)
+  conversationId  String?    @map("conversation_id")
+  email           String?
+  phone           String?
+  createdAt       DateTime   @default(now()) @map("created_at")
+  updatedAt       DateTime   @updatedAt @map("updated_at")
+
+  user            User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  invoices        Invoice[]
+
+  @@index([userId])
+  @@map("leads")
+}
+
+enum LeadStatus {
+  New
+  Warm
+  Won
+  Lost
+}
+
+model Invoice {
+  id             String        @id @default(uuid())
+  userId         String        @map("user_id")
+  leadId         String?       @map("lead_id")
+  invoiceNumber  String        @map("invoice_number")
+  publicSlug     String        @unique @map("public_slug")
+  clientName     String        @map("client_name")
+  clientEmail    String?       @map("client_email")
+  clientPhone    String?       @map("client_phone")
+  billingAddress String?       @map("billing_address")
+  issueDate      DateTime      @map("issue_date")
+  dueDate        DateTime      @map("due_date")
+  note           String?
+  currency       String        @default("USD")
+  taxRate        Float         @default(0) @map("tax_rate")
+  subtotal       Float         @default(0)
+  taxAmount      Float         @default(0) @map("tax_amount")
+  total          Float         @default(0)
+  status         InvoiceStatus @default(Draft)
+  createdAt      DateTime      @default(now()) @map("created_at")
+  updatedAt      DateTime      @updatedAt @map("updated_at")
+
+  user           User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  lead           Lead?         @relation(fields: [leadId], references: [id], onDelete: SetNull)
+  items          InvoiceItem[]
+  payments       Payment[]
+
+  @@index([userId])
+  @@index([leadId])
+  @@map("invoices")
+}
+
+enum InvoiceStatus {
+  Draft
+  Sent
+  Paid
+  Overdue
+}
+
+model InvoiceItem {
+  id          String  @id @default(uuid())
+  invoiceId   String  @map("invoice_id")
+  description String
+  quantity    Float   @default(1)
+  unitPrice   Float   @default(0) @map("unit_price")
+  amount      Float   @default(0)
+  position    Int     @default(0)
+
+  invoice     Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  @@index([invoiceId])
+  @@map("invoice_items")
+}
+
+model Payment {
+  id        String      @id @default(uuid())
+  invoiceId String      @map("invoice_id")
+  amount    Float
+  date      DateTime    @default(now())
+  type      PaymentType @default(Partial)
+  note      String?
+  createdAt DateTime    @default(now()) @map("created_at")
+
+  invoice   Invoice     @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  @@index([invoiceId])
+  @@map("payments")
+}
+
+enum PaymentType {
+  Deposit
+  Partial
+  Full
 }
 
 enum PlanType {

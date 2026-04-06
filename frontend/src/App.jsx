@@ -10,6 +10,10 @@ import DashboardHome from './pages/DashboardHome.jsx';
 import InboxPage from './pages/InboxPage.jsx';
 import ConnectionsPage from './pages/ConnectionsPage.jsx';
 import LeadsPage from './pages/LeadsPage.jsx';
+import InvoiceListPage from './pages/InvoiceListPage.jsx';
+import CreateInvoicePage from './pages/CreateInvoicePage.jsx';
+import InvoiceDetailPage from './pages/InvoiceDetailPage.jsx';
+import PublicInvoicePage from './pages/PublicInvoicePage.jsx';
 
 function FullPageSkeleton() {
   return (
@@ -95,6 +99,9 @@ function RequireAuth({ children }) {
 export default function App() {
   return (
     <Routes>
+      {/* Public invoice — no auth */}
+      <Route path="/i/:slug" element={<PublicInvoicePage />} />
+
       <Route path="/login" element={<LoginPage />} />
       <Route path="/register" element={<RegisterPage />} />
       <Route path="/dashboard" element={<OAuthCallbackPage />} />
@@ -119,7 +126,9 @@ export default function App() {
         <Route path="inbox/:conversationId" element={<InboxPage />} />
         <Route path="connections" element={<ConnectionsPage />} />
         <Route path="leads" element={<LeadsPage />} />
-        <Route path="invoices" element={<div className="flex items-center justify-center h-full text-gray-400"><p className="text-lg">Invoices — Coming Soon</p></div>} />
+        <Route path="invoices" element={<InvoiceListPage />} />
+        <Route path="invoices/new" element={<CreateInvoicePage />} />
+        <Route path="invoices/:id" element={<InvoiceDetailPage />} />
         <Route path="ai-training" element={<div className="flex items-center justify-center h-full text-gray-400"><p className="text-lg">AI Training — Coming Soon</p></div>} />
       </Route>
 

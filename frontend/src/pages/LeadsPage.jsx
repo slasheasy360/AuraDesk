@@ -1,158 +1,291 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Users, Star, Trash2, MessageSquare, Search } from 'lucide-react';
+import { Search, ChevronDown, RotateCcw, MessageSquare, FileText, Plus, UserPlus, Filter } from 'lucide-react';
 import api from '../services/api.js';
-import PlatformBadge from '../components/PlatformBadge.jsx';
+import AddLeadModal from '../components/AddLeadModal.jsx';
 
-function formatTimeShort(dateStr) {
-  if (!dateStr) return '';
-  const d = new Date(dateStr);
-  const now = new Date();
-  const diffMs = now - d;
-  const diffMin = Math.floor(diffMs / 60000);
-  if (diffMin < 1) return 'Just now';
-  if (diffMin < 60) return `${diffMin}m ago`;
-  const diffHrs = Math.floor(diffMin / 60);
-  if (diffHrs < 24) {
-    return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  }
-  return d.toLocaleDateString([], { month: 'short', day: 'numeric' });
+const STATUS_OPTIONS = ['New', 'Warm', 'Won', 'Lost'];
+const PLATFORM_OPTIONS = ['Instagram', 'WhatsApp', 'Gmail', 'Facebook'];
+const ACTION_OPTIONS = ['Invoice Sent', 'Message Sent', 'Call Made', 'Meeting Set', 'Quote Sent'];
+
+const STATUS_STYLES = {
+  New: 'bg-violet-100 text-violet-700 border-violet-200',
+  Warm: 'bg-orange-100 text-orange-700 border-orange-200',
+  Won: 'bg-green-100 text-green-700 border-green-200',
+  Lost: 'bg-red-100 text-red-700 border-red-200',
+};
+
+function formatDate(d) {
+  if (!d) return '—';
+  const date = new Date(d);
+  return date.toLocaleDateString('en-US', { day: '2-digit', month: 'short', year: 'numeric' });
+}
+
+function Dropdown({ label, value, options, onChange, allowClear = true }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        onBlur={() => setTimeout(() => setOpen(false), 150)}
+        className="flex items-center gap-1.5 text-sm text-gray-600 hover:text-gray-900 font-medium"
+      >
+        {value || label}
+        <ChevronDown size={14} />
+      </button>
+      {open && (
+        <div className="absolute z-20 mt-2 w-44 bg-white rounded-lg shadow-lg border border-gray-200 py-1">
+          {allowClear && (
+            <button
+              onMouseDown={(e) => { e.preventDefault(); onChange(''); setOpen(false); }}
+              className="w-full text-left px-3 py-2 text-sm text-gray-500 hover:bg-gray-50"
+            >
+              All
+            </button>
+          )}
+          {options.map((opt) => (
+            <button
+              key={opt}
+              onMouseDown={(e) => { e.preventDefault(); onChange(opt); setOpen(false); }}
+              className="w-full text-left px-3 py-2 text-sm text-gray-700 hover:bg-gray-50"
+            >
+              {opt}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function StatusBadge({ value, onChange }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="relative inline-block">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        onBlur={() => setTimeout(() => setOpen(false), 150)}
+        className={`inline-flex items-center gap-1 px-3 py-1 rounded-full border text-xs font-semibold ${STATUS_STYLES[value] || STATUS_STYLES.New}`}
+      >
+        {value}
+        <ChevronDown size={12} />
+      </button>
+      {open && (
+        <div className="absolute right-0 z-20 mt-1 w-32 bg-white rounded-lg shadow-lg border border-gray-200 py-1">
+          {STATUS_OPTIONS.map((s) => (
+            <button
+              key={s}
+              onMouseDown={(e) => { e.preventDefault(); onChange(s); setOpen(false); }}
+              className="w-full text-left px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50"
+            >
+              {s}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
 }
 
 export default function LeadsPage() {
+  const navigate = useNavigate();
   const [leads, setLeads] = useState([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
-  const navigate = useNavigate();
+  const [showAdd, setShowAdd] = useState(false);
+  const [hoveredId, setHoveredId] = useState(null);
+  const [filters, setFilters] = useState({ date: '', platform: '', lastAction: '', status: '' });
 
   const fetchLeads = useCallback(async () => {
+    setLoading(true);
     try {
-      const res = await api.get('/api/conversations', { params: { filter: 'leads' } });
-      setLeads(res.data.conversations || []);
-    } catch (err) {
-      console.error('Failed to fetch leads:', err);
+      const params = {};
+      if (filters.platform) params.platform = filters.platform;
+      if (filters.status) params.status = filters.status;
+      if (filters.lastAction) params.lastAction = filters.lastAction;
+      if (filters.date) {
+        const now = new Date();
+        if (filters.date === 'Today') {
+          params.dateFrom = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
+        } else if (filters.date === 'Last 7 days') {
+          params.dateFrom = new Date(now.getTime() - 7 * 86400000).toISOString();
+        } else if (filters.date === 'Last 30 days') {
+          params.dateFrom = new Date(now.getTime() - 30 * 86400000).toISOString();
+        }
+      }
+      const res = await api.get('/api/leads', { params });
+      setLeads(res.data.leads || []);
+    } catch (e) {
+      console.error('Fetch leads:', e);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [filters]);
 
   useEffect(() => { fetchLeads(); }, [fetchLeads]);
 
-  const toggleLead = async (convId, e) => {
-    e.stopPropagation();
-    // Optimistic remove from list
-    setLeads((prev) => prev.filter((c) => c.id !== convId));
+  const filtered = useMemo(() => {
+    if (!search.trim()) return leads;
+    const q = search.toLowerCase();
+    return leads.filter((l) => l.name?.toLowerCase().includes(q) || l.email?.toLowerCase().includes(q));
+  }, [leads, search]);
+
+  const handleStatusChange = async (lead, newStatus) => {
+    setLeads((prev) => prev.map((l) => (l.id === lead.id ? { ...l, status: newStatus } : l)));
     try {
-      await api.patch(`/api/conversations/${convId}/lead`);
-    } catch (err) {
-      console.error('Failed to toggle lead:', err);
-      fetchLeads(); // revert
+      await api.patch(`/api/leads/${lead.id}`, { status: newStatus });
+    } catch (e) {
+      console.error('Status update failed:', e);
+      fetchLeads();
     }
   };
 
-  const filteredLeads = search
-    ? leads.filter((c) => {
-        const name = c.contact?.name || c.contact?.username || '';
-        const msg = c.messages?.[0]?.content || '';
-        const term = search.toLowerCase();
-        return name.toLowerCase().includes(term) || msg.toLowerCase().includes(term);
-      })
-    : leads;
+  const handleAdded = (newLead) => {
+    setLeads((prev) => [newLead, ...prev]);
+    setShowAdd(false);
+  };
+
+  const resetFilters = () => setFilters({ date: '', platform: '', lastAction: '', status: '' });
 
   return (
-    <div className="flex-1 flex flex-col h-full bg-[#0c1a2e]">
+    <div className="flex-1 flex flex-col h-full bg-[#0c1a2e] overflow-hidden">
       {/* Header */}
-      <div className="flex items-center justify-between px-6 py-4 border-b border-white/10 bg-[#0f1d33]">
-        <div className="flex items-center gap-3">
-          <Users size={22} className="text-primary-400" />
-          <h1 className="text-xl font-bold text-white">Leads</h1>
-          {leads.length > 0 && (
-            <span className="text-xs bg-primary-500/20 text-primary-300 px-2 py-0.5 rounded-full font-medium">
-              {leads.length}
-            </span>
-          )}
-        </div>
-        <div className="relative w-72">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" size={16} />
-          <input
-            type="text"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search leads"
-            className="w-full pl-9 pr-4 py-2.5 bg-white/5 border border-white/10 rounded-xl text-sm text-white placeholder-gray-500 focus:bg-white/10 focus:border-primary-400 outline-none transition"
-          />
+      <div className="flex items-center justify-between px-8 py-6">
+        <h1 className="text-2xl font-bold text-white">Leads</h1>
+        <div className="flex items-center gap-4">
+          <div className="relative w-80">
+            <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
+            <input
+              type="text"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search leads"
+              className="w-full pl-11 pr-4 py-2.5 bg-white/10 border border-white/10 rounded-full text-sm text-white placeholder-gray-400 focus:bg-white/15 focus:border-white/20 outline-none"
+            />
+          </div>
+          <button
+            onClick={() => setShowAdd(true)}
+            className="flex items-center gap-2 px-5 py-2.5 bg-blue-500 hover:bg-blue-600 text-white text-sm font-semibold rounded-lg transition shadow-lg shadow-blue-500/20"
+          >
+            <UserPlus size={16} />
+            ADD LEAD
+          </button>
         </div>
       </div>
 
-      {/* Content */}
-      <div className="flex-1 overflow-y-auto">
-        {loading ? (
-          <div className="px-6 py-8 space-y-3">
-            {[...Array(4)].map((_, i) => (
-              <div key={i} className="flex items-center gap-4 p-4 rounded-lg bg-white/5 animate-pulse">
-                <div className="w-10 h-10 rounded-full bg-white/10" />
-                <div className="flex-1 space-y-2">
-                  <div className="h-4 w-32 bg-white/10 rounded" />
-                  <div className="h-3 w-48 bg-white/5 rounded" />
-                </div>
-              </div>
-            ))}
+      {/* Card */}
+      <div className="flex-1 mx-8 mb-8 bg-white rounded-2xl shadow-2xl flex flex-col overflow-hidden">
+        {/* Filter bar */}
+        <div className="flex items-center gap-6 px-6 py-4 border-b border-gray-100">
+          <div className="flex items-center gap-2 text-sm text-gray-700 font-semibold">
+            <Filter size={15} /> Filter by
           </div>
-        ) : filteredLeads.length === 0 ? (
-          <div className="flex flex-col items-center justify-center h-full text-gray-500 px-6">
-            <Users size={48} className="mb-3 text-gray-600" />
-            <p className="text-sm font-medium text-gray-400">
-              {search ? 'No leads match your search' : 'No leads yet'}
-            </p>
-            <p className="text-xs mt-1 text-gray-600">
-              {search ? 'Try a different search term' : 'Mark conversations as leads from the Smart Inbox'}
-            </p>
-          </div>
-        ) : (
-          filteredLeads.map((conv) => {
-            const lastMessage = conv.messages?.[0];
-            const preview = lastMessage?.content
-              ? lastMessage.content.replace(/<[^>]+>/g, '').replace(/\n+/g, ' ').slice(0, 100)
-              : 'No messages';
-            const contactName = conv.contact?.name || conv.contact?.username || 'Unknown';
-            const platform = conv.connectedAccount?.platform;
+          <Dropdown label="Date" value={filters.date} options={['Today', 'Last 7 days', 'Last 30 days']} onChange={(v) => setFilters((f) => ({ ...f, date: v }))} />
+          <Dropdown label="Platform" value={filters.platform} options={PLATFORM_OPTIONS} onChange={(v) => setFilters((f) => ({ ...f, platform: v }))} />
+          <Dropdown label="Last Action" value={filters.lastAction} options={ACTION_OPTIONS} onChange={(v) => setFilters((f) => ({ ...f, lastAction: v }))} />
+          <Dropdown label="Status" value={filters.status} options={STATUS_OPTIONS} onChange={(v) => setFilters((f) => ({ ...f, status: v }))} />
+          <button
+            onClick={resetFilters}
+            className="ml-auto flex items-center gap-1.5 text-sm text-red-500 hover:text-red-600 font-semibold"
+          >
+            <RotateCcw size={14} /> Reset Filter
+          </button>
+        </div>
 
-            return (
-              <button
-                key={conv.id}
-                onClick={() => navigate(`/inbox/${conv.id}`)}
-                className="w-full px-6 py-4 flex items-center gap-4 border-b border-white/5 hover:bg-white/5 transition text-left group"
-              >
-                {/* Avatar */}
-                <div className="w-10 h-10 rounded-full bg-primary-500/20 flex items-center justify-center text-primary-400 font-semibold text-sm flex-shrink-0">
-                  {contactName[0]?.toUpperCase() || '?'}
-                </div>
-
-                {/* Info */}
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2">
-                    <span className="font-semibold text-white text-sm truncate">{contactName}</span>
-                    <PlatformBadge platform={platform} size="xs" />
-                  </div>
-                  <p className="text-xs text-gray-500 truncate mt-0.5">{preview}</p>
-                </div>
-
-                {/* Actions */}
-                <div className="flex items-center gap-2 flex-shrink-0">
-                  <span className="text-xs text-gray-500">{formatTimeShort(conv.lastMessageAt)}</span>
-                  <button
-                    onClick={(e) => toggleLead(conv.id, e)}
-                    className="p-1.5 text-primary-400 hover:text-red-400 hover:bg-white/10 rounded-lg transition opacity-0 group-hover:opacity-100"
-                    title="Remove from Leads"
-                  >
-                    <Trash2 size={14} />
-                  </button>
-                </div>
-              </button>
-            );
-          })
-        )}
+        {/* Table */}
+        <div className="flex-1 overflow-y-auto">
+          <table className="w-full">
+            <thead>
+              <tr className="text-xs font-semibold text-gray-500 uppercase tracking-wider">
+                <th className="text-left px-6 py-3">ID</th>
+                <th className="text-left px-6 py-3">Name</th>
+                <th className="text-left px-6 py-3">Platform</th>
+                <th className="text-left px-6 py-3">Last Contact</th>
+                <th className="text-left px-6 py-3">Last Action</th>
+                <th className="text-left px-6 py-3">Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {loading ? (
+                [...Array(6)].map((_, i) => (
+                  <tr key={i} className="border-t border-gray-100">
+                    {[...Array(6)].map((_, j) => (
+                      <td key={j} className="px-6 py-5"><div className="h-3 bg-gray-100 rounded animate-pulse" /></td>
+                    ))}
+                  </tr>
+                ))
+              ) : filtered.length === 0 ? (
+                <tr>
+                  <td colSpan={6} className="px-6 py-20 text-center text-gray-400">
+                    <div className="flex flex-col items-center gap-2">
+                      <UserPlus size={36} className="text-gray-300" />
+                      <p className="text-sm font-medium">No leads yet</p>
+                      <button onClick={() => setShowAdd(true)} className="text-sm text-blue-500 hover:underline font-semibold mt-1">+ Add your first lead</button>
+                    </div>
+                  </td>
+                </tr>
+              ) : (
+                filtered.map((lead, idx) => {
+                  const shortId = String(idx + 1).padStart(4, '0');
+                  const isHovered = hoveredId === lead.id;
+                  return (
+                    <tr
+                      key={lead.id}
+                      onMouseEnter={() => setHoveredId(lead.id)}
+                      onMouseLeave={() => setHoveredId(null)}
+                      className={`border-t border-gray-100 transition ${isHovered ? 'bg-blue-50/50' : ''}`}
+                    >
+                      <td className="px-6 py-5 text-sm text-gray-600 font-medium">{shortId}</td>
+                      <td className="px-6 py-5 text-sm text-gray-900 font-semibold">{lead.name}</td>
+                      <td className="px-6 py-5 text-sm text-gray-600">{lead.platform || '—'}</td>
+                      <td className="px-6 py-5 text-sm text-gray-600">{formatDate(lead.lastContactedAt)}</td>
+                      <td className="px-6 py-5 text-sm text-gray-600">
+                        <div className="flex items-center justify-between gap-4">
+                          <span>{lead.lastAction || '—'}</span>
+                          {isHovered && (
+                            <div className="flex items-center gap-2">
+                              {lead.conversationId && (
+                                <button
+                                  onClick={() => navigate(`/inbox/${lead.conversationId}`)}
+                                  className="flex items-center gap-1.5 px-3 py-1.5 bg-white border border-gray-200 rounded-md text-xs font-semibold text-gray-700 hover:bg-gray-50 shadow-sm"
+                                >
+                                  <MessageSquare size={12} /> OPEN CHAT
+                                </button>
+                              )}
+                              {lead.invoices?.[0] ? (
+                                <button
+                                  onClick={() => navigate(`/invoices/${lead.invoices[0].id}`)}
+                                  className="flex items-center gap-1.5 px-3 py-1.5 bg-white border border-gray-200 rounded-md text-xs font-semibold text-gray-700 hover:bg-gray-50 shadow-sm"
+                                >
+                                  <FileText size={12} /> SHOW INVOICE
+                                </button>
+                              ) : (
+                                <button
+                                  onClick={() => navigate(`/invoices/new?leadId=${lead.id}`)}
+                                  className="flex items-center gap-1.5 px-3 py-1.5 bg-white border border-gray-200 rounded-md text-xs font-semibold text-gray-700 hover:bg-gray-50 shadow-sm"
+                                >
+                                  <Plus size={12} /> CREATE INVOICE
+                                </button>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      </td>
+                      <td className="px-6 py-5">
+                        <StatusBadge value={lead.status} onChange={(s) => handleStatusChange(lead, s)} />
+                      </td>
+                    </tr>
+                  );
+                })
+              )}
+            </tbody>
+          </table>
+        </div>
       </div>
+
+      {showAdd && <AddLeadModal onClose={() => setShowAdd(false)} onCreated={handleAdded} />}
     </div>
   );
 }

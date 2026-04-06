@@ -14,6 +14,8 @@ import messageRoutes from './routes/messages.js';
 import accountRoutes from './routes/accounts.js';
 import subscriptionRoutes from './routes/subscription.js';
 import onboardingRoutes from './routes/onboarding.js';
+import leadRoutes from './routes/leads.js';
+import invoiceRoutes from './routes/invoices.js';
 import metaWebhook from './webhooks/meta.js';
 import gmailWebhook from './webhooks/gmail.js';
 import { renewExpiringWatches, reRegisterAllWatches } from './services/gmail.js';
@@ -96,6 +98,8 @@ app.use('/api/messages', messageRoutes);
 app.use('/api/accounts', accountRoutes);
 app.use('/api/subscription', subscriptionRoutes);
 app.use('/api/onboarding', onboardingRoutes);
+app.use('/api/leads', leadRoutes);
+app.use('/api/invoices', invoiceRoutes);
 
 // Webhook routes
 app.use('/webhooks/meta', metaWebhook);
