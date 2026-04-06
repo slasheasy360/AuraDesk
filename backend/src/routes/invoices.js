@@ -3,6 +3,10 @@ import crypto from 'crypto';
 import { authenticate } from '../middleware/auth.js';
 import prisma from '../utils/prisma.js';
 import { emitToUser } from '../utils/socket.js';
+import * as facebookService from '../services/facebook.js';
+import * as instagramService from '../services/instagram.js';
+import * as whatsappService from '../services/whatsapp.js';
+import * as gmailService from '../services/gmail.js';
 
 const router = Router();
 
@@ -19,6 +23,62 @@ async function nextInvoiceNumber(userId) {
     where: { userId, createdAt: { gte: new Date(`${year}-01-01`) } },
   });
   return `INV-${year}-${String(count + 1).padStart(4, '0')}`;
+}
+
+// ── Send a plain-text message via the conversation's platform ───────────────
+async function sendOnPlatform(conversation, content) {
+  const { platform } = conversation.connectedAccount;
+  switch (platform) {
+    case 'facebook': {
+      const r = await facebookService.sendMessage(
+        conversation.connectedAccountId,
+        conversation.platformConversationId,
+        content
+      );
+      return { platformMessageId: r?.message_id || null, subject: null };
+    }
+    case 'instagram': {
+      const recipientId = conversation.contact?.platformUserId || conversation.platformConversationId;
+      const r = await instagramService.sendMessage(
+        conversation.connectedAccountId,
+        recipientId,
+        content
+      );
+      return { platformMessageId: r?.message_id || null, subject: null };
+    }
+    case 'whatsapp': {
+      const r = await whatsappService.sendMessage(
+        conversation.connectedAccountId,
+        conversation.platformConversationId,
+        content
+      );
+      return { platformMessageId: r?.messages?.[0]?.id || null, subject: null };
+    }
+    case 'gmail': {
+      const recipientEmail = conversation.contact?.platformUserId;
+      if (!recipientEmail) throw new Error('No recipient email on conversation');
+      // Reply to the latest thread subject so it threads correctly
+      const lastMsg = await prisma.message.findFirst({
+        where: { conversationId: conversation.id },
+        orderBy: { sentAt: 'desc' },
+        select: { subject: true },
+      });
+      const subject = lastMsg?.subject
+        ? (lastMsg.subject.startsWith('Re:') ? lastMsg.subject : `Re: ${lastMsg.subject}`)
+        : 'Your invoice';
+      const r = await gmailService.sendEmail(
+        conversation.connectedAccountId,
+        recipientEmail,
+        subject,
+        content,
+        conversation.platformConversationId,
+        []
+      );
+      return { platformMessageId: r?.id || null, subject };
+    }
+    default:
+      throw new Error(`Unsupported platform: ${platform}`);
+  }
 }
 
 function calcTotals(items, taxRate) {
@@ -212,35 +272,56 @@ router.post('/', authenticate, async (req, res) => {
       include: { items: true, payments: true },
     });
 
-    // ── Auto-send to chat if lead has conversation ──
+    // ── Auto-send to chat if lead has conversation: real platform delivery ──
     if (lead?.conversationId) {
       try {
         const frontendBase = (process.env.FRONTEND_URL || 'http://localhost:5173').split(',')[0].trim();
         const link = `${frontendBase}/i/${publicSlug}`;
         const content = `Your invoice is ready: ${link}`;
 
-        const message = await prisma.message.create({
-          data: {
-            conversationId: lead.conversationId,
-            direction: 'outbound',
-            content,
-            contentType: 'text',
-            status: 'sent',
+        const conversation = await prisma.conversation.findUnique({
+          where: { id: lead.conversationId },
+          include: {
+            connectedAccount: true,
+            contact: true,
           },
         });
 
-        // Bump conversation lastMessageAt so it sorts to top of inbox
+        if (!conversation) {
+          throw new Error('Linked conversation not found');
+        }
+
+        // Actually send via the platform (Gmail / WhatsApp / IG / FB)
+        const { platformMessageId, subject } = await sendOnPlatform(conversation, content);
+
+        // Persist the outbound message in our DB
+        const platform = conversation.connectedAccount.platform;
+        const message = await prisma.message.create({
+          data: {
+            conversationId: lead.conversationId,
+            platformMessageId,
+            direction: 'outbound',
+            sender: req.user.name || req.user.email,
+            subject,
+            content,
+            contentType: platform === 'gmail' ? 'email' : 'text',
+            status: 'sent',
+            sentAt: new Date(),
+          },
+        });
+
+        // Bump conversation lastMessageAt
         const updatedConv = await prisma.conversation.update({
           where: { id: lead.conversationId },
           data: { lastMessageAt: message.sentAt },
-          include: { connectedAccount: { select: { platform: true } } },
         });
 
-        // Emit the same events the inbox already listens to
+        // Emit the same events the inbox listens to
         emitToUser(req.user.id, 'new_message', {
           conversationId: lead.conversationId,
           message,
-          platform: updatedConv.connectedAccount?.platform,
+          platform,
+          _fromSender: true,
         });
         emitToUser(req.user.id, 'conversation_update', {
           conversationId: lead.conversationId,
@@ -248,7 +329,8 @@ router.post('/', authenticate, async (req, res) => {
           unreadCount: updatedConv.unreadCount,
         });
       } catch (e) {
-        console.warn('Auto-send invoice message failed:', e.message);
+        // Don't fail invoice creation if delivery fails — just log + surface a flag
+        console.error('[Invoice] Auto-send to platform failed:', e?.response?.data || e?.message || e);
       }
     }
 
