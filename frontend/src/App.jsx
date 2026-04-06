@@ -14,6 +14,8 @@ import InvoiceListPage from './pages/InvoiceListPage.jsx';
 import CreateInvoicePage from './pages/CreateInvoicePage.jsx';
 import InvoiceDetailPage from './pages/InvoiceDetailPage.jsx';
 import PublicInvoicePage from './pages/PublicInvoicePage.jsx';
+import ProfileSettingsPage from './pages/ProfileSettingsPage.jsx';
+import AcceptInvitePage from './pages/AcceptInvitePage.jsx';
 
 function FullPageSkeleton() {
   return (
@@ -101,6 +103,7 @@ export default function App() {
     <Routes>
       {/* Public invoice — no auth */}
       <Route path="/i/:slug" element={<PublicInvoicePage />} />
+      <Route path="/invite/:token" element={<AcceptInvitePage />} />
 
       <Route path="/login" element={<LoginPage />} />
       <Route path="/register" element={<RegisterPage />} />
@@ -129,6 +132,7 @@ export default function App() {
         <Route path="invoices" element={<InvoiceListPage />} />
         <Route path="invoices/new" element={<CreateInvoicePage />} />
         <Route path="invoices/:id" element={<InvoiceDetailPage />} />
+        <Route path="settings" element={<ProfileSettingsPage />} />
         <Route path="ai-training" element={<div className="flex items-center justify-center h-full text-gray-400"><p className="text-lg">AI Training — Coming Soon</p></div>} />
       </Route>
 

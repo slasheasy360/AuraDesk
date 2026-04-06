@@ -97,8 +97,13 @@ export default function DashboardLayout() {
 
         {/* Company section */}
         <div className="px-4 py-4 border-t border-white/10">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3 min-w-0">
+          <div className="flex items-center justify-between gap-2">
+            <button
+              type="button"
+              onClick={() => navigate('/settings?tab=Personal')}
+              className="flex items-center gap-3 min-w-0 flex-1 text-left hover:opacity-90 transition"
+              title="Profile Settings"
+            >
               {companyLogo ? (
                 <img src={companyLogo} alt={companyName} className="w-9 h-9 rounded-full object-cover flex-shrink-0" />
               ) : (
@@ -112,11 +117,18 @@ export default function DashboardLayout() {
                   {planLabel}
                 </span>
               </div>
-            </div>
+            </button>
             <button
               onClick={handleLogout}
-              className="text-gray-400 hover:text-white transition flex-shrink-0"
+              className="text-gray-400 hover:text-white hover:bg-white/10 p-1.5 rounded transition flex-shrink-0"
               title="Logout"
+            >
+              <LogOut size={16} />
+            </button>
+            <button
+              onClick={() => navigate('/settings?tab=Personal')}
+              className="text-gray-400 hover:text-white transition flex-shrink-0"
+              title="Open settings"
             >
               <ChevronRight size={18} />
             </button>

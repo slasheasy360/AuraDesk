@@ -89,6 +89,7 @@ router.post('/login', async (req, res) => {
         plan: user.plan, subscriptionStatus: user.subscriptionStatus,
         trialEndsAt: user.trialEndsAt, onboardingStep: user.onboardingStep,
         companyName: user.companyName, firstName: user.firstName, lastName: user.lastName,
+        role: user.role, inviterUserId: user.inviterUserId,
       },
       token,
     });
@@ -122,6 +123,7 @@ router.get('/me', authenticate, async (req, res) => {
       brandColor: user.brandColor, firstName: user.firstName,
       lastName: user.lastName, cannedResponse: user.cannedResponse,
       currentPeriodEnd: user.currentPeriodEnd, billingCycle: user.billingCycle,
+      role: user.role, inviterUserId: user.inviterUserId,
     },
   });
 });
