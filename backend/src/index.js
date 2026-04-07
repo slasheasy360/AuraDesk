@@ -109,7 +109,13 @@ app.use('/webhooks/gmail', gmailWebhook);
 app.get('/health', async (req, res) => {
   try {
     await prisma.$queryRaw`SELECT 1`;
-    res.json({ status: 'ok', db: 'ok', timestamp: new Date().toISOString() });
+    res.json({
+      status: 'ok',
+      db: 'ok',
+      version: 'cicd-test-1',
+      deployedFrom: 'kundan_dev',
+      timestamp: new Date().toISOString(),
+    });
   } catch (err) {
     res.status(503).json({ status: 'degraded', db: 'error', timestamp: new Date().toISOString() });
   }
