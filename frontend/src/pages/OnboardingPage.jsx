@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext.jsx';
 import api from '../services/api.js';
-import { Check, ChevronRight, RefreshCw, Plus } from 'lucide-react';
+import { Check, ChevronRight, RefreshCw } from 'lucide-react';
 import logoUrl from '../assets/logo.svg';
 
 /* ─────────────── BRAND ICONS ─────────────── */
@@ -365,9 +365,8 @@ function PlatformStep({ onNext, successPlatform, errorInfo }) {
 
 /* ─────────────── STEP 2: BRANDING ─────────────── */
 function BrandingStep({ onNext, savedData, onSaveData }) {
-  const [form, setForm] = useState(savedData || { firstName: '', lastName: '', companyName: '', brandColor: '' });
+  const [form, setForm] = useState(savedData || { firstName: '', lastName: '', companyName: '' });
   const [logoPreview, setLogoPreview] = useState(savedData?.companyLogo || null);
-  const [palette, setPalette] = useState([]);
   const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
   const fileInputRef = useRef(null);
@@ -381,7 +380,6 @@ function BrandingStep({ onNext, savedData, onSaveData }) {
             firstName: d.firstName || '',
             lastName: d.lastName || '',
             companyName: d.companyName || '',
-            brandColor: d.brandColor || '',
             companyLogo: d.companyLogo || null,
           });
           if (d.companyLogo) setLogoPreview(d.companyLogo);
@@ -412,12 +410,6 @@ function BrandingStep({ onNext, savedData, onSaveData }) {
     } finally {
       setUploading(false);
     }
-  };
-
-  const addColor = () => {
-    if (!form.brandColor) return;
-    if (palette.includes(form.brandColor)) return;
-    setPalette([...palette, form.brandColor].slice(0, 3));
   };
 
   const handleSubmit = async () => {
@@ -473,56 +465,26 @@ function BrandingStep({ onNext, savedData, onSaveData }) {
           />
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-[auto_1fr] gap-6 items-start pt-2">
-          <div>
-            <label className="block text-[11px] font-semibold text-gray-500 tracking-wider mb-1.5 text-left">COMPANY LOGO</label>
-            <input type="file" ref={fileInputRef} className="hidden" accept="image/*" onChange={handleLogoSelect} />
-            <button
-              type="button"
-              onClick={() => fileInputRef.current?.click()}
-              disabled={uploading}
-              className="w-20 h-20 border-2 border-blue-300 rounded-full flex items-center justify-center text-blue-400 cursor-pointer hover:bg-blue-50 overflow-hidden"
-            >
-              {logoPreview ? (
-                <img src={logoPreview} alt="Logo" className="w-full h-full object-cover rounded-full" />
-              ) : uploading ? (
-                <RefreshCw size={20} className="animate-spin" />
-              ) : (
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="w-7 h-7">
-                  <path d="M3 7h4l2-2h6l2 2h4v12H3z" />
-                  <circle cx="12" cy="13" r="3" />
-                </svg>
-              )}
-            </button>
-          </div>
-          <div className="text-left">
-            <label className="block text-[11px] font-semibold text-gray-500 tracking-wider mb-1.5">BRAND COLORS</label>
-            <div className="flex items-center gap-2">
-              <input
-                type="text"
-                placeholder="#HEX"
-                value={form.brandColor}
-                onChange={(e) => setForm({ ...form, brandColor: e.target.value })}
-                className={`${inputCls} flex-1`}
-              />
-              <button
-                type="button"
-                onClick={addColor}
-                className="w-11 h-11 rounded-lg bg-[#EAF2FF] border border-blue-200 flex items-center justify-center text-blue-500 hover:bg-blue-100"
-              >
-                <Plus size={18} />
-              </button>
-            </div>
-            <div className="flex gap-2 mt-2">
-              {[0, 1, 2].map((i) => (
-                <div
-                  key={i}
-                  className="w-9 h-9 rounded border border-gray-200"
-                  style={{ background: palette[i] || '#EAF2FF' }}
-                />
-              ))}
-            </div>
-          </div>
+        <div className="pt-2 flex flex-col items-center">
+          <label className="block text-[11px] font-semibold text-gray-500 tracking-wider mb-1.5">COMPANY LOGO</label>
+          <input type="file" ref={fileInputRef} className="hidden" accept="image/*" onChange={handleLogoSelect} />
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={uploading}
+            className="w-20 h-20 border-2 border-blue-300 rounded-full flex items-center justify-center text-blue-400 cursor-pointer hover:bg-blue-50 overflow-hidden"
+          >
+            {logoPreview ? (
+              <img src={logoPreview} alt="Logo" className="w-full h-full object-cover rounded-full" />
+            ) : uploading ? (
+              <RefreshCw size={20} className="animate-spin" />
+            ) : (
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="w-7 h-7">
+                <path d="M3 7h4l2-2h6l2 2h4v12H3z" />
+                <circle cx="12" cy="13" r="3" />
+              </svg>
+            )}
+          </button>
         </div>
       </div>
 
