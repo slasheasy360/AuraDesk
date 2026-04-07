@@ -21,10 +21,9 @@ router.post('/register', async (req, res) => {
 
     const passwordHash = await bcrypt.hash(password, 12);
 
-    // Auto-assign 14-day free trial on registration
-    const trialEndsAt = new Date();
-    trialEndsAt.setDate(trialEndsAt.getDate() + 14);
-
+    // Trial is NOT auto-activated. The user lands on /pricing after register
+    // and either clicks "TRY NOW" (→ POST /api/subscription/start-trial) to
+    // activate the 14-day trial, or picks a paid plan via Stripe.
     const user = await prisma.user.create({
       data: {
         email,
@@ -32,7 +31,7 @@ router.post('/register', async (req, res) => {
         passwordHash,
         plan: 'trial',
         subscriptionStatus: 'trialing',
-        trialEndsAt,
+        trialEndsAt: null,
         onboardingStep: 0,
       },
     });

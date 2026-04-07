@@ -42,7 +42,10 @@ export default function RegisterPage() {
     setLoading(true);
     try {
       await register(email, email.split('@')[0], password);
-      navigate('/inbox');
+      // After registration the user always lands on the pricing page —
+      // they must either start the free trial or pick a paid plan before
+      // they can access the dashboard.
+      navigate('/pricing', { replace: true });
     } catch (err) {
       setError(err.response?.data?.error || 'Registration failed');
     } finally {

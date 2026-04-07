@@ -35,8 +35,18 @@ export default function LoginPage() {
     setError('');
     setLoading(true);
     try {
-      await login(email, password);
-      navigate('/inbox');
+      const u = await login(email, password);
+      // Route the user based on their subscription / onboarding state.
+      const hasActivePlan =
+        (u?.plan === 'trial' && u?.trialEndsAt && new Date(u.trialEndsAt) > new Date()) ||
+        ['starter', 'pro', 'elite'].includes(u?.plan);
+      if (!hasActivePlan) {
+        navigate('/pricing', { replace: true });
+      } else if ((u?.onboardingStep ?? 0) < 4) {
+        navigate('/onboarding', { replace: true });
+      } else {
+        navigate('/inbox', { replace: true });
+      }
     } catch (err) {
       setError(err.response?.data?.error || 'Login failed');
     } finally {

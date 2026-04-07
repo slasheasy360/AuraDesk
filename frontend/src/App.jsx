@@ -99,6 +99,18 @@ function RequireAuth({ children }) {
   return children;
 }
 
+/** Onboarding can only be entered with an active plan/trial. Otherwise → /pricing */
+function RequireActivePlan({ children }) {
+  const { user, loading } = useAuth();
+  if (loading) return <FullPageLoader />;
+  if (!user) return <Navigate to="/welcome" />;
+  const hasActivePlan =
+    (user.plan === 'trial' && user.trialEndsAt && new Date(user.trialEndsAt) > new Date()) ||
+    ['starter', 'pro', 'elite'].includes(user.plan);
+  if (!hasActivePlan) return <Navigate to="/pricing" replace />;
+  return children;
+}
+
 export default function App() {
   return (
     <Routes>
@@ -114,8 +126,15 @@ export default function App() {
       {/* Pricing — accessible when logged in (trial expired or choosing plan) */}
       <Route path="/pricing" element={<RequireAuth><PricingPage /></RequireAuth>} />
 
-      {/* Onboarding — renders immediately; auth checked via its own API calls */}
-      <Route path="/onboarding" element={<OnboardingPage />} />
+      {/* Onboarding — must have an active plan/trial to enter */}
+      <Route
+        path="/onboarding"
+        element={
+          <RequireActivePlan>
+            <OnboardingPage />
+          </RequireActivePlan>
+        }
+      />
 
       {/* Main app — requires auth + active plan + completed onboarding */}
       <Route
