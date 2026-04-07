@@ -181,11 +181,94 @@ function PlatformStep({ onNext, successPlatform, errorInfo }) {
     }
   }, [successMsg]);
 
+  const launchWhatsAppSignup = () => {
+    if (typeof window.FB === 'undefined') {
+      setErrMsg({ platform: 'whatsapp', reason: 'Facebook SDK not loaded. Please refresh and try again.' });
+      return;
+    }
+    window.__WA_EMBEDDED_DATA__ = null;
+
+    const sessionInfoListener = (event) => {
+      if (!event.origin.includes('facebook.com') && !event.origin.includes('fbcdn.net') && !event.origin.includes('meta.com')) return;
+      let data;
+      try { data = typeof event.data === 'string' ? JSON.parse(event.data) : event.data; } catch { return; }
+      if (data.type === 'WA_EMBEDDED_SIGNUP') {
+        if (data.event === 'FINISH' || data.event === 'FINISH_ONLY_WABA') {
+          const sd = data.data || {};
+          const authResp = data.authResponse || {};
+          window.__WA_EMBEDDED_DATA__ = {
+            code: authResp.code,
+            waba_id: sd.waba_id || data.waba_id,
+            phone_number_id: sd.phone_number_id || data.phone_number_id,
+          };
+        } else if (data.event === 'CANCEL') {
+          setErrMsg({ platform: 'whatsapp', reason: 'WhatsApp signup was cancelled.' });
+        }
+      }
+    };
+    window.addEventListener('message', sessionInfoListener);
+
+    window.FB.login(
+      (response) => {
+        window.removeEventListener('message', sessionInfoListener);
+        if (!response.authResponse) {
+          if (!window.__WA_EMBEDDED_DATA__) {
+            setErrMsg({ platform: 'whatsapp', reason: 'WhatsApp signup was cancelled or failed.' });
+          }
+          return;
+        }
+        const code = response.authResponse.code;
+        const embedded = window.__WA_EMBEDDED_DATA__ || {};
+        if (code) {
+          api.post('/auth/whatsapp/exchange', {
+            code,
+            waba_id: embedded.waba_id || null,
+            phone_number_id: embedded.phone_number_id || null,
+          })
+            .then(() => {
+              setConnected((prev) => ({ ...prev, whatsapp: true }));
+              fetchAccounts();
+            })
+            .catch((err) => {
+              console.error('WhatsApp exchange failed:', err);
+              setErrMsg({ platform: 'whatsapp', reason: err.response?.data?.error || 'Failed to connect WhatsApp.' });
+            });
+          return;
+        }
+        const accessToken = response.authResponse.accessToken;
+        if (accessToken) {
+          const payload = { accessToken };
+          if (embedded.waba_id) payload.wabaId = embedded.waba_id;
+          if (embedded.phone_number_id) payload.phoneNumberId = embedded.phone_number_id;
+          api.post('/auth/whatsapp/connect-with-token', payload)
+            .then(() => {
+              setConnected((prev) => ({ ...prev, whatsapp: true }));
+              fetchAccounts();
+            })
+            .catch((err) => {
+              console.error('WhatsApp connect failed:', err);
+              setErrMsg({ platform: 'whatsapp', reason: err.response?.data?.error || 'Failed to connect WhatsApp.' });
+            });
+        }
+      },
+      {
+        config_id: import.meta.env.VITE_WA_CONFIG_ID,
+        response_type: 'code',
+        override_default_response_type: true,
+        scope: 'whatsapp_business_messaging,business_management,whatsapp_business_management',
+        extras: {
+          feature: 'whatsapp_embedded_signup',
+          version: 4,
+          featureType: 'whatsapp_business_app_onboarding',
+          setup: {},
+        },
+      }
+    );
+  };
+
   const handleConnect = async (platformId) => {
     if (platformId === 'whatsapp') {
-      const base = import.meta.env.VITE_API_URL || 'http://localhost:3001';
-      const token = localStorage.getItem('token');
-      window.location.href = `${base}/auth/whatsapp/exchange?token=${token}`;
+      launchWhatsAppSignup();
       return;
     }
     const endpoints = {
@@ -198,6 +281,7 @@ function PlatformStep({ onNext, successPlatform, errorInfo }) {
       if (res.data.url) window.location.href = res.data.url;
     } catch (err) {
       console.error(`Connect ${platformId} failed:`, err);
+      setErrMsg({ platform: platformId, reason: 'Failed to start authentication.' });
     }
   };
 
