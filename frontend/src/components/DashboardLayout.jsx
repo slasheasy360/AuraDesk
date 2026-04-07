@@ -40,7 +40,7 @@ export default function DashboardLayout() {
   const planLabel = user?.plan === 'pro' ? 'PRO' : user?.plan === 'elite' ? 'ELITE' : user?.plan === 'starter' ? 'STARTER' : user?.plan === 'trial' ? 'TRIAL' : 'FREE';
 
   return (
-    <div className="flex h-screen bg-gray-100">
+    <div className="flex h-screen bg-[#0B1628]">
       {/* Mobile overlay */}
       {sidebarOpen && (
         <div
@@ -52,7 +52,7 @@ export default function DashboardLayout() {
       {/* Sidebar */}
       <aside
         className={`
-          fixed inset-y-0 left-0 z-50 w-64 bg-sidebar text-white flex flex-col
+          fixed inset-y-0 left-0 z-50 w-64 bg-[#0B1628] text-white flex flex-col
           transform transition-transform duration-300 ease-out
           lg:relative lg:translate-x-0
           ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'}
@@ -61,8 +61,8 @@ export default function DashboardLayout() {
         {/* Logo + close button */}
         <div className="px-5 py-5 border-b border-white/10 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="w-9 h-9 bg-primary-500 rounded-lg flex items-center justify-center text-lg font-bold">
-              A
+            <div className="w-9 h-9 flex items-center justify-center">
+              <div className="w-0 h-0 border-l-[10px] border-l-transparent border-r-[10px] border-r-transparent border-b-[16px] border-b-[#1787FE]" />
             </div>
             <span className="text-xl font-bold">AuraDesk</span>
           </div>
@@ -82,10 +82,10 @@ export default function DashboardLayout() {
               to={to}
               end={to === '/'}
               className={({ isActive }) =>
-                `flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-medium transition ${
+                `flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium transition ${
                   isActive || (to === '/inbox' && location.pathname.startsWith('/inbox'))
-                    ? 'bg-primary-600 text-white'
-                    : 'text-gray-300 hover:bg-white/10 hover:text-white'
+                    ? 'bg-[#1787FE] text-white shadow-lg shadow-[#1787FE]/20'
+                    : 'text-gray-300 hover:bg-white/5 hover:text-white'
                 }`
               }
             >
@@ -113,7 +113,7 @@ export default function DashboardLayout() {
               )}
               <div className="min-w-0">
                 <p className="text-sm font-medium truncate">{companyName}</p>
-                <span className="inline-block px-2 py-0.5 text-[10px] font-bold bg-primary-500 rounded text-white mt-0.5">
+                <span className="inline-block px-2 py-0.5 text-[10px] font-bold bg-green-500 rounded text-white mt-0.5">
                   {planLabel}
                 </span>
               </div>
@@ -139,18 +139,16 @@ export default function DashboardLayout() {
       {/* Main content */}
       <div className="flex-1 flex flex-col overflow-hidden">
         {/* Mobile top bar */}
-        <div className="lg:hidden bg-white border-b border-gray-200 px-4 py-3 flex items-center gap-3">
+        <div className="lg:hidden bg-[#0B1628] border-b border-white/5 px-4 py-3 flex items-center gap-3">
           <button
             onClick={() => setSidebarOpen(true)}
-            className="text-gray-600 hover:text-gray-900 transition"
+            className="text-gray-300 hover:text-white transition"
           >
             <Menu size={24} />
           </button>
           <div className="flex items-center gap-2">
-            <div className="w-7 h-7 bg-primary-500 rounded-md flex items-center justify-center text-sm font-bold text-white">
-              A
-            </div>
-            <span className="font-semibold text-gray-900">AuraDesk</span>
+            <div className="w-0 h-0 border-l-[8px] border-l-transparent border-r-[8px] border-r-transparent border-b-[13px] border-b-[#1787FE]" />
+            <span className="font-semibold text-white">AuraDesk</span>
           </div>
         </div>
 

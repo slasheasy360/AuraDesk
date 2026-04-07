@@ -1000,9 +1000,10 @@ export default function InboxPage() {
 
   if (conversationId) {
     return (
-      <div className="flex h-full bg-[#0c1a2e]">
+      <div className="flex h-full bg-[#0B1628] p-3 sm:p-5 gap-4">
+        <div className="flex flex-1 min-h-0 bg-[#0F1D33] rounded-2xl border border-white/5 overflow-hidden">
         {/* Filter panel — hidden on mobile when viewing conversation */}
-        <div className="hidden lg:flex w-64 flex-shrink-0 flex-col bg-[#0f1d33] border-r border-white/5">
+        <div className="hidden lg:flex w-[260px] flex-shrink-0 flex-col border-r border-white/5">
           <FilterPanel
             activeFilter={activeFilter}
             setActiveFilter={setActiveFilter}
@@ -1016,7 +1017,7 @@ export default function InboxPage() {
 
         {/* Conversation area */}
         <div
-          className="flex-1 flex flex-col bg-[#0f1d33] rounded-tl-2xl"
+          className="flex-1 flex flex-col min-w-0"
           onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
           onDragLeave={() => setDragOver(false)}
           onDrop={handleDrop}
@@ -1247,6 +1248,7 @@ export default function InboxPage() {
             </>
           ) : null}
         </div>
+        </div>
       </div>
     );
   }
@@ -1256,9 +1258,35 @@ export default function InboxPage() {
   // ═══════════════════════════════════════════════════════════════════
 
   return (
-    <div className="flex h-full bg-[#0c1a2e]">
+    <div className="flex flex-col h-full bg-[#0B1628] p-3 sm:p-5 gap-4 overflow-hidden">
+      {/* Page header */}
+      <div className="flex items-center justify-between gap-3 flex-shrink-0">
+        <h1 className="text-2xl sm:text-3xl font-bold text-white">Smart Inbox</h1>
+        <div className="flex items-center gap-3 flex-1 sm:flex-none justify-end">
+          <div className="relative flex-1 sm:w-72">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-white/40" size={16} />
+            <input
+              type="text"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search inbox"
+              className="w-full pl-9 pr-4 py-2.5 bg-[#0F1D33] border border-white/5 rounded-full text-sm text-white placeholder-white/40 focus:border-[#1787FE] focus:ring-1 focus:ring-[#1787FE] outline-none transition"
+            />
+          </div>
+          <button
+            onClick={() => navigate('/connections')}
+            className="flex items-center gap-2 px-4 py-2.5 bg-[#1787FE] hover:bg-[#1377e0] text-white text-sm font-semibold rounded-full transition whitespace-nowrap shadow-lg shadow-[#1787FE]/20"
+          >
+            <Link2 size={16} />
+            <span className="hidden sm:inline">LINK ACCOUNT</span>
+          </button>
+        </div>
+      </div>
+
+      {/* Inbox card */}
+      <div className="flex flex-1 min-h-0 bg-[#0F1D33] rounded-2xl border border-white/5 overflow-hidden">
       {/* Filter Panel */}
-      <div className="hidden md:flex w-64 flex-shrink-0 flex-col bg-[#0f1d33] border-r border-white/5">
+      <div className="hidden md:flex w-[260px] flex-shrink-0 flex-col border-r border-white/5">
         <FilterPanel
           activeFilter={activeFilter}
           setActiveFilter={setActiveFilter}
@@ -1271,44 +1299,20 @@ export default function InboxPage() {
       </div>
 
       {/* Main content */}
-      <div className="flex-1 flex flex-col min-w-0 bg-[#0f1d33] rounded-tl-2xl">
-        {/* Top bar */}
-        <div className="flex items-center justify-between px-4 sm:px-6 py-4 border-b border-white/10">
-          <h1 className="text-xl font-bold text-white hidden sm:block">Smart Inbox</h1>
-          <div className="flex items-center gap-3 flex-1 sm:flex-none sm:ml-4">
-            <div className="relative flex-1 sm:w-72">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" size={16} />
-              <input
-                type="text"
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                placeholder="Search inbox"
-                className="w-full pl-9 pr-4 py-2.5 bg-white/5 border border-white/10 rounded-xl text-sm text-white placeholder-gray-500 focus:bg-white/10 focus:border-primary-400 focus:ring-1 focus:ring-primary-400 outline-none transition"
-              />
-            </div>
-            <button
-              onClick={() => navigate('/connections')}
-              className="flex items-center gap-2 px-4 py-2.5 bg-primary-500 hover:bg-primary-600 text-white text-sm font-semibold rounded-xl transition whitespace-nowrap"
-            >
-              <Link2 size={16} />
-              LINK ACCOUNT
-            </button>
-          </div>
-        </div>
-
+      <div className="flex-1 flex flex-col min-w-0">
         {/* Toolbar row */}
-        <div className="flex items-center gap-3 px-4 sm:px-6 py-2.5 border-b border-white/5">
+        <div className="flex items-center gap-3 px-4 sm:px-6 py-3 border-b border-white/5">
           <input
             type="checkbox"
             checked={selectedMessages.size > 0 && selectedMessages.size === paginatedConversations.length}
             onChange={toggleSelectAll}
             className="w-4 h-4 rounded border-gray-600 bg-transparent text-primary-500 focus:ring-primary-500 focus:ring-offset-0 cursor-pointer"
           />
-          <button className="p-1.5 text-gray-500 hover:text-gray-300 transition rounded" title="Refresh">
-            <RotateCw size={16} onClick={() => fetchConversations()} />
+          <button onClick={() => fetchConversations()} className="p-1.5 text-white/50 hover:text-white transition rounded" title="Refresh">
+            <RotateCw size={16} />
           </button>
-          <button className="p-1.5 text-gray-500 hover:text-gray-300 transition rounded" title="More actions">
-            <MoreHorizontal size={16} />
+          <button className="p-1.5 text-[#1787FE] hover:text-white transition rounded" title="AI">
+            <Sparkles size={16} />
           </button>
         </div>
 
@@ -1323,7 +1327,7 @@ export default function InboxPage() {
               <p className="text-xs mt-1 text-gray-600">Connect an account or adjust your filters</p>
             </div>
           ) : (
-            paginatedConversations.map((conv) => {
+            paginatedConversations.map((conv, rowIdx) => {
               const lastMessage = conv.messages?.[0];
               const preview = lastMessage?.content
                 ? lastMessage.content.replace(/<[^>]+>/g, '').replace(/\n+/g, ' ').slice(0, 80)
@@ -1338,9 +1342,9 @@ export default function InboxPage() {
                 <button
                   key={conv.id}
                   onClick={() => handleSelectConversation(conv.id)}
-                  className={`w-full px-4 sm:px-6 py-3.5 flex items-center gap-3 border-b border-white/5 transition text-left group hover:bg-white/5 ${
-                    isUnread ? 'bg-white/[0.02]' : ''
-                  }`}
+                  className={`w-full px-4 sm:px-6 py-3.5 flex items-center gap-3 border-b border-white/[0.03] transition text-left group hover:bg-white/[0.04] ${
+                    rowIdx % 2 === 0 ? 'bg-[#0F1D33]' : 'bg-[#13233E]'
+                  } ${isUnread ? 'font-medium' : ''}`}
                 >
                   {/* Checkbox */}
                   <input
@@ -1451,6 +1455,7 @@ export default function InboxPage() {
           </div>
         )}
       </div>
+      </div>
     </div>
   );
 }
@@ -1471,19 +1476,19 @@ function FilterPanel({ activeFilter, setActiveFilter, filterCounts, sourceFilter
             <button
               key={key}
               onClick={() => setActiveFilter(key)}
-              className={`w-full flex items-center justify-between px-3 py-2.5 rounded-lg text-sm transition ${
+              className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-sm transition ${
                 isActive
-                  ? 'bg-primary-600/20 text-primary-400'
-                  : 'text-gray-400 hover:bg-white/5 hover:text-gray-200'
+                  ? 'bg-[#1787FE] text-white shadow-lg shadow-[#1787FE]/20'
+                  : 'text-white/60 hover:bg-white/5 hover:text-white'
               }`}
             >
               <div className="flex items-center gap-3">
-                <Icon size={18} className={isActive ? 'text-primary-400' : 'text-gray-500'} />
-                <span className={isActive ? 'font-medium' : ''}>{label}</span>
+                <Icon size={18} className={isActive ? 'text-white' : 'text-white/50'} />
+                <span className={isActive ? 'font-semibold' : ''}>{label}</span>
               </div>
               {count > 0 && (
                 <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${
-                  isActive ? 'bg-primary-500/20 text-primary-300' : 'text-gray-500'
+                  isActive ? 'bg-white/20 text-white' : 'text-white/50'
                 }`}>
                   {count}
                 </span>
@@ -1507,17 +1512,20 @@ function FilterPanel({ activeFilter, setActiveFilter, filterCounts, sourceFilter
                   onClick={() => toggleSourceFilter(key)}
                   className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-sm transition ${
                     isActive
-                      ? 'bg-primary-600/20 text-primary-400'
-                      : 'text-gray-400 hover:bg-white/5 hover:text-gray-200'
+                      ? 'bg-white/5 text-white'
+                      : 'text-white/60 hover:bg-white/5 hover:text-white'
                   }`}
                 >
                   <div className="flex items-center gap-3">
-                    <span className={`w-2 h-2 rounded-full flex-shrink-0 ${
-                      key === 'instagram' ? 'bg-pink-500' :
+                    <span className={`w-4 h-4 rounded flex-shrink-0 flex items-center justify-center ${
+                      key === 'instagram' ? 'bg-orange-500' :
                       key === 'facebook' ? 'bg-blue-500' :
                       key === 'whatsapp' ? 'bg-green-500' :
-                      key === 'gmail' ? 'bg-red-500' : 'bg-gray-500'
-                    }`} />
+                      key === 'gmail' ? 'bg-red-500' :
+                      key === 'linkedin' ? 'bg-sky-500' : 'bg-gray-500'
+                    }`}>
+                      {isActive && <span className="text-white text-[10px] leading-none">✓</span>}
+                    </span>
                     <span className={isActive ? 'font-medium' : ''}>{label}</span>
                   </div>
                   {count > 0 && (
@@ -2200,12 +2208,12 @@ function getPlatformTheme(platform) {
 
 function getPlatformBadgeStyle(platform) {
   switch (platform) {
-    case 'instagram': return 'bg-pink-500/20 text-pink-400';
-    case 'facebook': return 'bg-blue-500/20 text-blue-400';
-    case 'gmail': return 'bg-red-500/20 text-red-400';
-    case 'whatsapp': return 'bg-green-500/20 text-green-400';
-    case 'linkedin': return 'bg-sky-500/20 text-sky-400';
-    default: return 'bg-gray-500/20 text-gray-400';
+    case 'instagram': return 'bg-orange-400/15 text-orange-300 border border-orange-400/30';
+    case 'facebook': return 'bg-blue-400/15 text-blue-300 border border-blue-400/30';
+    case 'gmail': return 'bg-pink-400/15 text-pink-300 border border-pink-400/30';
+    case 'whatsapp': return 'bg-green-400/15 text-green-300 border border-green-400/30';
+    case 'linkedin': return 'bg-pink-400/15 text-pink-300 border border-pink-400/30';
+    default: return 'bg-white/10 text-white/60 border border-white/10';
   }
 }
 
