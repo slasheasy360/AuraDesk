@@ -62,6 +62,15 @@ body {
   animation: fadeIn 0.25s ease-out both;
 }
 
+/* ─── Bottom-sheet slide up ─── */
+@keyframes slideUp {
+  from { transform: translateY(100%); }
+  to   { transform: translateY(0); }
+}
+.animate-slide-up {
+  animation: slideUp 0.28s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
 /* Skeleton shimmer — more polished than plain pulse */
 @keyframes shimmer {
   0%   { background-position: -200% 0; }

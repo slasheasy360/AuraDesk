@@ -4,6 +4,7 @@ import { useAuth } from '../context/AuthContext.jsx';
 import { connectSocket, disconnectSocket } from '../services/socket.js';
 import { LayoutDashboard, Inbox, Users, FileText, Brain, LogOut, Menu, X, ChevronRight } from 'lucide-react';
 import logoUrl from '../assets/logo.svg';
+import MobileBottomNav from './MobileBottomNav.jsx';
 
 export default function DashboardLayout() {
   const { user, logout } = useAuth();
@@ -22,6 +23,13 @@ export default function DashboardLayout() {
   useEffect(() => {
     setSidebarOpen(false);
   }, [location.pathname]);
+
+  // Allow nested pages (e.g. InboxPage) to toggle the mobile sidebar via custom event
+  useEffect(() => {
+    const handleToggle = () => setSidebarOpen((prev) => !prev);
+    window.addEventListener('toggle-mobile-sidebar', handleToggle);
+    return () => window.removeEventListener('toggle-mobile-sidebar', handleToggle);
+  }, []);
 
   const handleLogout = () => {
     logout();
@@ -137,23 +145,48 @@ export default function DashboardLayout() {
 
       {/* Main content */}
       <div className="flex-1 flex flex-col overflow-hidden">
-        {/* Mobile top bar */}
-        <div className="lg:hidden bg-[#0B1628] border-b border-white/5 px-4 py-3 flex items-center gap-3">
+        {/* Mobile top bar — logo + wordmark on left, hamburger + company avatar on right */}
+        <div className="lg:hidden bg-[#0B1628] border-b border-white/5 px-4 py-3 flex items-center justify-between gap-3">
           <button
-            onClick={() => setSidebarOpen(true)}
-            className="text-gray-300 hover:text-white transition"
+            type="button"
+            onClick={() => navigate('/')}
+            className="flex items-center gap-2 min-w-0"
+            aria-label="AuraDesk home"
           >
-            <Menu size={24} />
+            <img src={logoUrl} alt="AuraDesk" className="h-7 w-auto" />
+            <span className="font-bold text-white text-[17px] tracking-tight">AuraDesk</span>
           </button>
           <div className="flex items-center gap-2">
-            <img src={logoUrl} alt="AuraDesk" className="h-6 w-auto" />
-            <span className="font-semibold text-white">AuraDesk</span>
+            <button
+              onClick={() => setSidebarOpen(true)}
+              className="text-gray-300 hover:text-white transition p-1.5"
+              aria-label="Open menu"
+            >
+              <Menu size={22} />
+            </button>
+            <button
+              type="button"
+              onClick={() => navigate('/settings?tab=Personal')}
+              className="flex-shrink-0"
+              title={companyName}
+              aria-label="Profile"
+            >
+              {companyLogo ? (
+                <img src={companyLogo} alt={companyName} className="w-9 h-9 rounded-full object-cover border border-white/10" />
+              ) : (
+                <div className="w-9 h-9 bg-[#1787FE] rounded-full flex items-center justify-center text-sm font-bold text-white border border-white/10">
+                  {companyName?.[0]?.toUpperCase()}
+                </div>
+              )}
+            </button>
           </div>
         </div>
 
-        <main className="flex-1 overflow-hidden">
+        <main className="flex-1 overflow-hidden pb-16 lg:pb-0">
           <Outlet />
         </main>
+
+        <MobileBottomNav />
       </div>
     </div>
   );

@@ -8,9 +8,10 @@ import {
   Smile, X, FileText, Image as ImageIcon, Reply, ChevronDown,
   ChevronUp, Download, UploadCloud, Play, Music, File as FileIcon, AlertCircle, RefreshCw,
   Star, Inbox, Clock, Sparkles, FileEdit, Trash2, ChevronLeft, ChevronRight,
-  RotateCw, Archive, MoreHorizontal, Bot, Link2, Users, Undo2,
+  RotateCw, Archive, MoreHorizontal, MoreVertical, Bot, Link2, Users, Undo2, Menu, Camera, Mic,
 } from 'lucide-react';
 import PlatformBadge, { PlatformIcon } from '../components/PlatformBadge.jsx';
+import LinkAccountsSheet from '../components/LinkAccountsSheet.jsx';
 
 // ═══════════════════════════════════════════════════════════════════
 // DEFERRED LOADING HOOK — avoids skeleton flash for fast loads
@@ -108,6 +109,9 @@ export default function InboxPage() {
   const [selectedMessages, setSelectedMessages] = useState(new Set());
   const [currentPage, setCurrentPage] = useState(1);
   const [connectedPlatforms, setConnectedPlatforms] = useState(new Set());
+  // ── Mobile UI state ──
+  const [linkSheetOpen, setLinkSheetOpen] = useState(false);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const draftTimerRef = useRef(null);
   const lastSavedDraftRef = useRef('');
 
@@ -1000,9 +1004,9 @@ export default function InboxPage() {
 
   if (conversationId) {
     return (
-      <div className="flex flex-col h-full bg-[#0B1628] p-3 sm:p-5 gap-4 overflow-hidden">
-        {/* Page header */}
-        <div className="flex items-center justify-between gap-3 flex-shrink-0">
+      <div className="flex flex-col h-full bg-[#0B1628] p-0 lg:p-5 gap-0 lg:gap-4 overflow-hidden">
+        {/* Page header — desktop only on conversation view (mobile uses chat header) */}
+        <div className="hidden lg:flex items-center justify-between gap-3 flex-shrink-0">
           <h1 className="text-2xl sm:text-3xl font-bold text-white">Smart Inbox</h1>
           <div className="flex items-center gap-3 flex-1 sm:flex-none justify-end">
             <div className="relative flex-1 sm:w-72">
@@ -1025,7 +1029,7 @@ export default function InboxPage() {
           </div>
         </div>
 
-        <div className="flex flex-1 min-h-0 bg-white rounded-2xl border border-gray-200 overflow-hidden shadow-xl">
+        <div className="flex flex-1 min-h-0 bg-white lg:rounded-2xl border-0 lg:border lg:border-gray-200 overflow-hidden lg:shadow-xl">
         {/* Filter panel — hidden on mobile when viewing conversation */}
         <div className="hidden lg:flex w-[260px] flex-shrink-0 flex-col border-r border-gray-100">
           <FilterPanel
@@ -1094,8 +1098,74 @@ export default function InboxPage() {
             </>
           ) : conversationId && activeConversation ? (
             <>
-              {/* Chat header */}
-              <div className="border-b border-gray-100 px-4 sm:px-6 py-3 flex items-center justify-between bg-white">
+              {/* MOBILE Chat header — dark navy */}
+              <div className="lg:hidden bg-[#0B1628] px-3 py-3 flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2 min-w-0">
+                  <button
+                    onClick={handleBackToList}
+                    className="w-9 h-9 rounded-lg bg-white/10 text-white flex items-center justify-center flex-shrink-0"
+                    aria-label="Back"
+                  >
+                    <ArrowLeft size={18} />
+                  </button>
+                  <h2 className="font-semibold text-white truncate text-sm">
+                    {getContactDisplayName(activeConversation.contact, platform)}
+                  </h2>
+                  <span className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold flex-shrink-0 ${getPlatformBadgeStyle(platform)}`}>
+                    {getPlatformLabel(platform)}
+                  </span>
+                </div>
+                <div className="relative flex-shrink-0">
+                  <button
+                    onClick={() => setMobileMenuOpen((v) => !v)}
+                    className="w-9 h-9 rounded-lg text-white flex items-center justify-center hover:bg-white/10"
+                    aria-label="More options"
+                  >
+                    <MoreVertical size={18} />
+                  </button>
+                  {mobileMenuOpen && (
+                    <>
+                      <div className="fixed inset-0 z-30" onClick={() => setMobileMenuOpen(false)} />
+                      <div className="absolute right-0 top-full mt-1 w-48 bg-white rounded-xl shadow-2xl border border-gray-200 z-40 overflow-hidden">
+                        <button
+                          onClick={() => { toggleLead(conversationId); setMobileMenuOpen(false); }}
+                          className="w-full flex items-center gap-3 px-4 py-3 text-sm text-gray-700 hover:bg-gray-50 transition text-left"
+                        >
+                          <Users size={16} className={activeConversation?.isLead ? 'text-[#1787FE]' : 'text-gray-400'} />
+                          {activeConversation?.isLead ? 'Remove from Leads' : 'Mark as Lead'}
+                        </button>
+                        <button
+                          onClick={() => { toggleStar(conversationId); setMobileMenuOpen(false); }}
+                          className="w-full flex items-center gap-3 px-4 py-3 text-sm text-gray-700 hover:bg-gray-50 transition text-left"
+                        >
+                          <Star size={16} className={activeConversation?.isStarred ? 'text-yellow-500' : 'text-gray-400'} fill={activeConversation?.isStarred ? 'currentColor' : 'none'} />
+                          {activeConversation?.isStarred ? 'Unstar' : 'Star'}
+                        </button>
+                        {activeConversation?.isDeleted ? (
+                          <button
+                            onClick={() => { restoreConversation(conversationId); setMobileMenuOpen(false); }}
+                            className="w-full flex items-center gap-3 px-4 py-3 text-sm text-gray-700 hover:bg-gray-50 transition text-left"
+                          >
+                            <Undo2 size={16} className="text-gray-400" />
+                            Restore
+                          </button>
+                        ) : (
+                          <button
+                            onClick={() => { deleteConversation(conversationId); setMobileMenuOpen(false); }}
+                            className="w-full flex items-center gap-3 px-4 py-3 text-sm text-red-600 hover:bg-red-50 transition text-left"
+                          >
+                            <Trash2 size={16} />
+                            Move to Bin
+                          </button>
+                        )}
+                      </div>
+                    </>
+                  )}
+                </div>
+              </div>
+
+              {/* DESKTOP Chat header */}
+              <div className="hidden lg:flex border-b border-gray-100 px-4 sm:px-6 py-3 items-center justify-between bg-white">
                 <div className="flex items-center gap-3">
                   <button onClick={handleBackToList} className="text-gray-500 hover:text-gray-800 transition flex-shrink-0">
                     <ArrowLeft size={20} />
@@ -1240,20 +1310,40 @@ export default function InboxPage() {
               {attachments.length > 0 && (
                 <AttachmentPreview attachments={attachments} onRemove={removeAttachment} uploadProgress={uploadProgress} />
               )}
-              <ChatComposer
-                newMessage={newMessage}
-                setNewMessage={handleNewMessageChange}
-                handleSend={(e) => {
-                  if (isEmailPlatform && !replyingTo) {
-                    const lastMsg = messages[messages.length - 1];
-                    openReplyBox(lastMsg || { subject: emailSubject });
-                  }
-                  handleSend(e);
-                }}
-                sending={sending}
-                attachments={attachments}
-                onAttachClick={() => fileInputRef.current?.click()}
-              />
+              {/* Desktop composer */}
+              <div className="hidden lg:block">
+                <ChatComposer
+                  newMessage={newMessage}
+                  setNewMessage={handleNewMessageChange}
+                  handleSend={(e) => {
+                    if (isEmailPlatform && !replyingTo) {
+                      const lastMsg = messages[messages.length - 1];
+                      openReplyBox(lastMsg || { subject: emailSubject });
+                    }
+                    handleSend(e);
+                  }}
+                  sending={sending}
+                  attachments={attachments}
+                  onAttachClick={() => fileInputRef.current?.click()}
+                />
+              </div>
+              {/* Mobile composer — dark navy with pill input */}
+              <div className="lg:hidden">
+                <MobileChatComposer
+                  newMessage={newMessage}
+                  setNewMessage={handleNewMessageChange}
+                  handleSend={(e) => {
+                    if (isEmailPlatform && !replyingTo) {
+                      const lastMsg = messages[messages.length - 1];
+                      openReplyBox(lastMsg || { subject: emailSubject });
+                    }
+                    handleSend(e);
+                  }}
+                  sending={sending}
+                  attachments={attachments}
+                  onAttachClick={() => fileInputRef.current?.click()}
+                />
+              </div>
             </>
           ) : null}
         </div>
@@ -1267,27 +1357,47 @@ export default function InboxPage() {
   // ═══════════════════════════════════════════════════════════════════
 
   return (
-    <div className="flex flex-col h-full bg-[#0B1628] p-3 sm:p-5 gap-4 overflow-hidden">
+    <div className="flex flex-col h-full bg-[#0B1628] p-3 sm:p-5 gap-3 lg:gap-4 overflow-hidden">
       {/* Page header */}
-      <div className="flex items-center justify-between gap-3 flex-shrink-0">
-        <h1 className="text-2xl sm:text-3xl font-bold text-white">Smart Inbox</h1>
-        <div className="flex items-center gap-3 flex-1 sm:flex-none justify-end">
-          <div className="relative flex-1 sm:w-72">
+      <div className="flex items-center justify-between gap-2 lg:gap-3 flex-shrink-0">
+        <div className="flex items-center gap-2 min-w-0">
+          {/* Hamburger — mobile only — toggles DashboardLayout sidebar via custom event */}
+          <button
+            type="button"
+            onClick={() => window.dispatchEvent(new CustomEvent('toggle-mobile-sidebar'))}
+            className="lg:hidden text-white p-1.5 flex-shrink-0"
+            aria-label="Open menu"
+          >
+            <Menu size={22} />
+          </button>
+          <h1 className="text-xl sm:text-2xl lg:text-3xl font-bold text-white truncate">Smart Inbox</h1>
+        </div>
+        <div className="flex items-center gap-2 lg:gap-3 flex-1 lg:flex-none justify-end min-w-0">
+          <div className="relative flex-1 lg:w-72 min-w-0">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-white/40" size={16} />
             <input
               type="text"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search inbox"
-              className="w-full pl-9 pr-4 py-2.5 bg-[#0F1D33] border border-white/5 rounded-full text-sm text-white placeholder-white/40 focus:border-[#1787FE] focus:ring-1 focus:ring-[#1787FE] outline-none transition"
+              placeholder="Search"
+              className="w-full pl-9 pr-3 py-2 lg:py-2.5 bg-[#0F1D33] border border-white/5 rounded-full text-sm text-white placeholder-white/40 focus:border-[#1787FE] focus:ring-1 focus:ring-[#1787FE] outline-none transition"
             />
           </div>
+          {/* Mobile: round icon-only Link button */}
+          <button
+            onClick={() => setLinkSheetOpen(true)}
+            className="lg:hidden w-10 h-10 rounded-full bg-[#1787FE] hover:bg-[#1377e0] text-white flex items-center justify-center flex-shrink-0 shadow-lg shadow-[#1787FE]/30"
+            aria-label="Link account"
+          >
+            <Link2 size={18} />
+          </button>
+          {/* Desktop: pill with label */}
           <button
             onClick={() => navigate('/connections')}
-            className="flex items-center gap-2 px-4 py-2.5 bg-[#1787FE] hover:bg-[#1377e0] text-white text-sm font-semibold rounded-full transition whitespace-nowrap shadow-lg shadow-[#1787FE]/20"
+            className="hidden lg:flex items-center gap-2 px-4 py-2.5 bg-[#1787FE] hover:bg-[#1377e0] text-white text-sm font-semibold rounded-full transition whitespace-nowrap shadow-lg shadow-[#1787FE]/20"
           >
             <Link2 size={16} />
-            <span className="hidden sm:inline">LINK ACCOUNT</span>
+            <span>LINK ACCOUNT</span>
           </button>
         </div>
       </div>
@@ -1295,7 +1405,7 @@ export default function InboxPage() {
       {/* Inbox card */}
       <div className="flex flex-1 min-h-0 bg-white rounded-2xl border border-gray-200 overflow-hidden shadow-xl">
       {/* Filter Panel */}
-      <div className="hidden md:flex w-[260px] flex-shrink-0 flex-col border-r border-gray-100">
+      <div className="hidden lg:flex w-[260px] flex-shrink-0 flex-col border-r border-gray-100">
         <FilterPanel
           activeFilter={activeFilter}
           setActiveFilter={setActiveFilter}
@@ -1465,6 +1575,9 @@ export default function InboxPage() {
         )}
       </div>
       </div>
+
+      {/* Mobile Link Accounts bottom sheet */}
+      <LinkAccountsSheet open={linkSheetOpen} onClose={() => setLinkSheetOpen(false)} />
     </div>
   );
 }
@@ -1620,6 +1733,70 @@ function ChatComposer({ newMessage, setNewMessage, handleSend, sending, attachme
         >
           Send
           <Send size={14} />
+        </button>
+      </form>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// MOBILE CHAT COMPOSER — dark navy bottom bar matching mockup
+// ═══════════════════════════════════════════════════════════════════
+
+function MobileChatComposer({ newMessage, setNewMessage, handleSend, sending, attachments, onAttachClick }) {
+  const hasContent = newMessage.trim() || attachments.length > 0;
+
+  return (
+    <div className="bg-[#0B1628] px-3 py-3 border-t border-white/5">
+      <form onSubmit={handleSend} className="flex items-center gap-2">
+        {/* Attach */}
+        <button
+          type="button"
+          onClick={onAttachClick}
+          className="text-[#1787FE] p-1.5 flex-shrink-0"
+          aria-label="Attach file"
+        >
+          <Paperclip size={20} />
+        </button>
+
+        {/* Pill input */}
+        <div className="flex-1 relative">
+          <input
+            type="text"
+            value={newMessage}
+            onChange={(e) => setNewMessage(e.target.value)}
+            placeholder="Write message"
+            className="w-full px-4 py-2.5 bg-[#0F1D33] border border-white/5 rounded-full text-sm text-white placeholder-white/40 focus:border-[#1787FE] outline-none transition"
+          />
+        </div>
+
+        {/* AI Send button — white circle */}
+        <button
+          type="submit"
+          disabled={!hasContent || sending}
+          className="w-10 h-10 rounded-full bg-white flex items-center justify-center flex-shrink-0 disabled:opacity-50 transition"
+          aria-label="Send"
+        >
+          <Sparkles size={18} className="text-[#1787FE]" />
+        </button>
+
+        {/* Camera */}
+        <button
+          type="button"
+          onClick={onAttachClick}
+          className="text-white/70 p-1.5 flex-shrink-0"
+          aria-label="Camera"
+        >
+          <Camera size={20} />
+        </button>
+
+        {/* Mic */}
+        <button
+          type="button"
+          className="text-white/70 p-1.5 flex-shrink-0"
+          aria-label="Voice message"
+        >
+          <Mic size={20} />
         </button>
       </form>
     </div>
