@@ -1000,10 +1000,34 @@ export default function InboxPage() {
 
   if (conversationId) {
     return (
-      <div className="flex h-full bg-[#0B1628] p-3 sm:p-5 gap-4">
-        <div className="flex flex-1 min-h-0 bg-[#0F1D33] rounded-2xl border border-white/5 overflow-hidden">
+      <div className="flex flex-col h-full bg-[#0B1628] p-3 sm:p-5 gap-4 overflow-hidden">
+        {/* Page header */}
+        <div className="flex items-center justify-between gap-3 flex-shrink-0">
+          <h1 className="text-2xl sm:text-3xl font-bold text-white">Smart Inbox</h1>
+          <div className="flex items-center gap-3 flex-1 sm:flex-none justify-end">
+            <div className="relative flex-1 sm:w-72">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-white/40" size={16} />
+              <input
+                type="text"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search inbox"
+                className="w-full pl-9 pr-4 py-2.5 bg-[#0F1D33] border border-white/5 rounded-full text-sm text-white placeholder-white/40 focus:border-[#1787FE] focus:ring-1 focus:ring-[#1787FE] outline-none transition"
+              />
+            </div>
+            <button
+              onClick={() => navigate('/connections')}
+              className="flex items-center gap-2 px-4 py-2.5 bg-[#1787FE] hover:bg-[#1377e0] text-white text-sm font-semibold rounded-full transition whitespace-nowrap shadow-lg shadow-[#1787FE]/20"
+            >
+              <Link2 size={16} />
+              <span className="hidden sm:inline">LINK ACCOUNT</span>
+            </button>
+          </div>
+        </div>
+
+        <div className="flex flex-1 min-h-0 bg-white rounded-2xl border border-gray-200 overflow-hidden shadow-xl">
         {/* Filter panel — hidden on mobile when viewing conversation */}
-        <div className="hidden lg:flex w-[260px] flex-shrink-0 flex-col border-r border-white/5">
+        <div className="hidden lg:flex w-[260px] flex-shrink-0 flex-col border-r border-gray-100">
           <FilterPanel
             activeFilter={activeFilter}
             setActiveFilter={setActiveFilter}
@@ -1035,18 +1059,18 @@ export default function InboxPage() {
           {conversationId && !activeConversation && messagesError ? (
             /* Error state — all retries exhausted */
             <>
-              <div className="border-b border-white/10 px-4 sm:px-6 py-3 flex items-center gap-3 bg-[#0f1d33]">
-                <button onClick={handleBackToList} className="text-gray-400 hover:text-white transition flex-shrink-0">
+              <div className="border-b border-gray-100 px-4 sm:px-6 py-3 flex items-center gap-3 bg-white">
+                <button onClick={handleBackToList} className="text-gray-500 hover:text-gray-800 transition flex-shrink-0">
                   <ArrowLeft size={20} />
                 </button>
-                <span className="text-sm text-gray-400">Conversation</span>
+                <span className="text-sm text-gray-500">Conversation</span>
               </div>
               <div className="flex-1 flex flex-col items-center justify-center text-center px-6">
-                <AlertCircle size={40} className="text-red-400 mb-3" />
-                <p className="text-sm font-medium text-gray-300 mb-1">{messagesError}</p>
+                <AlertCircle size={40} className="text-red-500 mb-3" />
+                <p className="text-sm font-medium text-gray-700 mb-1">{messagesError}</p>
                 <button
                   onClick={() => fetchMessages(conversationId, true)}
-                  className="mt-3 px-4 py-2 bg-primary-500 hover:bg-primary-600 text-white text-sm rounded-lg transition flex items-center gap-2"
+                  className="mt-3 px-4 py-2 bg-[#1787FE] hover:bg-[#1377e0] text-white text-sm rounded-lg transition flex items-center gap-2"
                 >
                   <RefreshCw size={14} />
                   Retry
@@ -1056,50 +1080,52 @@ export default function InboxPage() {
           ) : conversationId && !activeConversation ? (
             /* Loading skeleton */
             <>
-              <div className="border-b border-white/10 px-4 sm:px-6 py-3 flex items-center gap-3 bg-[#0f1d33]">
-                <button onClick={handleBackToList} className="text-gray-400 hover:text-white transition flex-shrink-0">
+              <div className="border-b border-gray-100 px-4 sm:px-6 py-3 flex items-center gap-3 bg-white">
+                <button onClick={handleBackToList} className="text-gray-500 hover:text-gray-800 transition flex-shrink-0">
                   <ArrowLeft size={20} />
                 </button>
-                <div className="w-10 h-10 rounded-full bg-white/10 animate-pulse flex-shrink-0" />
+                <div className="w-10 h-10 rounded-full bg-gray-200 animate-pulse flex-shrink-0" />
                 <div className="flex-1 min-w-0 space-y-2">
-                  <div className="h-4 w-32 bg-white/10 rounded animate-pulse" />
-                  <div className="h-3 w-20 bg-white/5 rounded animate-pulse" />
+                  <div className="h-4 w-32 bg-gray-200 rounded animate-pulse" />
+                  <div className="h-3 w-20 bg-gray-100 rounded animate-pulse" />
                 </div>
               </div>
-              <MessagesSkeleton dark />
+              <MessagesSkeleton />
             </>
           ) : conversationId && activeConversation ? (
             <>
               {/* Chat header */}
-              <div className="border-b border-white/10 px-4 sm:px-6 py-3 flex items-center justify-between bg-[#0f1d33]">
+              <div className="border-b border-gray-100 px-4 sm:px-6 py-3 flex items-center justify-between bg-white">
                 <div className="flex items-center gap-3">
-                  <button onClick={handleBackToList} className="text-gray-400 hover:text-white transition flex-shrink-0">
+                  <button onClick={handleBackToList} className="text-gray-500 hover:text-gray-800 transition flex-shrink-0">
                     <ArrowLeft size={20} />
                   </button>
-                  <h2 className="font-semibold text-white truncate text-sm sm:text-base">
+                  <h2 className="font-semibold text-gray-900 truncate text-sm sm:text-base">
                     {getContactDisplayName(activeConversation.contact, platform)}
                   </h2>
-                  <PlatformBadge platform={platform} size="xs" />
+                  <span className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold ${getPlatformBadgeStyle(platform)}`}>
+                    {getPlatformLabel(platform)}
+                  </span>
                 </div>
                 <div className="flex items-center gap-1">
                   <button
-                    onClick={() => toggleStar(conversationId)}
-                    className={`p-2 rounded-lg transition ${activeConversation?.isStarred ? 'text-yellow-400 hover:bg-yellow-500/10' : 'text-gray-400 hover:text-yellow-400 hover:bg-white/10'}`}
-                    title={activeConversation?.isStarred ? 'Unstar' : 'Star'}
-                  >
-                    <Star size={18} fill={activeConversation?.isStarred ? 'currentColor' : 'none'} />
-                  </button>
-                  <button
                     onClick={() => toggleLead(conversationId)}
-                    className={`p-2 rounded-lg transition ${activeConversation?.isLead ? 'text-primary-400 hover:bg-primary-500/10' : 'text-gray-400 hover:text-primary-400 hover:bg-white/10'}`}
+                    className={`p-2 rounded-lg transition ${activeConversation?.isLead ? 'text-[#1787FE] hover:bg-blue-50' : 'text-gray-400 hover:text-[#1787FE] hover:bg-gray-100'}`}
                     title={activeConversation?.isLead ? 'Remove from Leads' : 'Mark as Lead'}
                   >
                     <Users size={18} />
                   </button>
+                  <button
+                    onClick={() => toggleStar(conversationId)}
+                    className={`p-2 rounded-lg transition ${activeConversation?.isStarred ? 'text-yellow-500 hover:bg-yellow-50' : 'text-gray-400 hover:text-yellow-500 hover:bg-gray-100'}`}
+                    title={activeConversation?.isStarred ? 'Unstar' : 'Star'}
+                  >
+                    <Star size={18} fill={activeConversation?.isStarred ? 'currentColor' : 'none'} />
+                  </button>
                   {activeConversation?.isDeleted ? (
                     <button
                       onClick={() => restoreConversation(conversationId)}
-                      className="p-2 text-gray-400 hover:text-green-400 hover:bg-white/10 rounded-lg transition"
+                      className="p-2 text-gray-400 hover:text-green-600 hover:bg-gray-100 rounded-lg transition"
                       title="Restore from Bin"
                     >
                       <Undo2 size={18} />
@@ -1107,7 +1133,7 @@ export default function InboxPage() {
                   ) : (
                     <button
                       onClick={() => deleteConversation(conversationId)}
-                      className="p-2 text-gray-400 hover:text-red-400 hover:bg-white/10 rounded-lg transition"
+                      className="p-2 text-gray-400 hover:text-red-500 hover:bg-gray-100 rounded-lg transition"
                       title="Move to Bin"
                     >
                       <Trash2 size={18} />
@@ -1118,11 +1144,11 @@ export default function InboxPage() {
 
               {/* Messages area */}
               {(loadingMessages || showMessageSkeleton) && messages.length === 0 ? (
-                <MessagesSkeleton dark />
+                <MessagesSkeleton />
               ) : !loadingMessages && messages.length === 0 ? (
-                <div className="flex-1 flex flex-col items-center justify-center text-gray-500 px-6">
-                  <MessageSquare size={40} className="mb-3 text-gray-600" />
-                  <p className="text-sm text-gray-400">No messages yet</p>
+                <div className="flex-1 flex flex-col items-center justify-center text-gray-500 px-6 bg-white">
+                  <MessageSquare size={40} className="mb-3 text-gray-300" />
+                  <p className="text-sm text-gray-500">No messages yet</p>
                 </div>
               ) : isEmailPlatform ? (
                 <EmailThreadView
@@ -1134,7 +1160,7 @@ export default function InboxPage() {
                   messagesEndRef={messagesEndRef}
                 />
               ) : (
-                <div className="flex-1 overflow-y-auto px-3 sm:px-6 py-4 space-y-3 animate-fade-in bg-[#0c1a2e]">
+                <div className="flex-1 overflow-y-auto px-3 sm:px-6 py-4 space-y-3 animate-fade-in bg-white">
                   {messages.map((msg, idx) => {
                     const isOutbound = msg.direction === 'outbound';
                     const prevMsg = idx > 0 ? messages[idx - 1] : null;
@@ -1143,7 +1169,7 @@ export default function InboxPage() {
                       <div key={msg.id || `msg-${idx}`}>
                         {showDate && (
                           <div className="flex items-center justify-center my-4">
-                            <span className="text-xs px-3 py-1 rounded-full bg-white/10 text-gray-400">
+                            <span className="text-xs px-3 py-1 rounded-full bg-gray-100 text-gray-500">
                               {formatDate(msg.sentAt)}
                             </span>
                           </div>
@@ -1175,8 +1201,8 @@ export default function InboxPage() {
 
               {/* Send error */}
               {sendError && (
-                <div className="px-4 sm:px-6 py-2 bg-red-500/10 border-t border-red-500/20">
-                  <p className="text-xs text-red-400">{sendError}</p>
+                <div className="px-4 sm:px-6 py-2 bg-red-50 border-t border-red-100">
+                  <p className="text-xs text-red-600">{sendError}</p>
                 </div>
               )}
 
@@ -1563,14 +1589,14 @@ function ChatComposer({ newMessage, setNewMessage, handleSend, sending, attachme
   const hasContent = newMessage.trim() || attachments.length > 0;
 
   return (
-    <div className="border-t border-white/10 bg-[#0f1d33] px-4 sm:px-6 py-3">
+    <div className="border-t border-gray-100 bg-white px-4 sm:px-6 py-3">
       <form onSubmit={handleSend} className="flex items-center gap-3">
-        {/* AI Respond button */}
+        {/* AI Respond pill */}
         <button
           type="button"
-          className="flex items-center gap-2 px-3 py-2 text-sm text-primary-400 hover:text-primary-300 hover:bg-primary-500/10 rounded-lg transition whitespace-nowrap"
+          className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-[#1787FE] bg-blue-50 hover:bg-blue-100 rounded-full transition whitespace-nowrap"
         >
-          <Bot size={16} />
+          <Sparkles size={14} />
           AI Respond
         </button>
 
@@ -1581,7 +1607,7 @@ function ChatComposer({ newMessage, setNewMessage, handleSend, sending, attachme
             value={newMessage}
             onChange={(e) => setNewMessage(e.target.value)}
             placeholder="Write message"
-            className="w-full px-4 py-2.5 bg-white/5 border border-white/10 rounded-xl text-sm text-white placeholder-gray-500 focus:bg-white/10 focus:border-primary-400 outline-none transition"
+            className="w-full px-4 py-2.5 bg-white border border-transparent rounded-xl text-sm text-gray-900 placeholder-gray-400 focus:border-[#1787FE] focus:ring-1 focus:ring-[#1787FE] outline-none transition"
           />
         </div>
 
@@ -1589,7 +1615,7 @@ function ChatComposer({ newMessage, setNewMessage, handleSend, sending, attachme
         <button
           type="button"
           onClick={onAttachClick}
-          className="p-2 text-gray-500 hover:text-gray-300 transition"
+          className="p-2 text-gray-400 hover:text-gray-700 transition"
           title="Attach file"
         >
           <Paperclip size={18} />
@@ -1598,7 +1624,7 @@ function ChatComposer({ newMessage, setNewMessage, handleSend, sending, attachme
         {/* Emoji */}
         <button
           type="button"
-          className="p-2 text-gray-500 hover:text-gray-300 transition hidden sm:block"
+          className="p-2 text-gray-400 hover:text-gray-700 transition hidden sm:block"
         >
           <Smile size={18} />
         </button>
@@ -1607,7 +1633,7 @@ function ChatComposer({ newMessage, setNewMessage, handleSend, sending, attachme
         <button
           type="submit"
           disabled={!hasContent || sending}
-          className="flex items-center gap-2 px-4 py-2.5 bg-primary-500 hover:bg-primary-600 text-white text-sm font-medium rounded-xl transition disabled:opacity-40 disabled:cursor-not-allowed"
+          className="flex items-center gap-2 px-5 py-2.5 bg-[#1787FE] hover:bg-[#1377e0] text-white text-sm font-semibold rounded-xl transition disabled:opacity-40 disabled:cursor-not-allowed"
         >
           Send
           <Send size={14} />
@@ -1629,15 +1655,18 @@ function renderChatBubble(msg, isOutbound) {
   if (!textContent && !hasAttachments && !isSending) return null;
 
   return (
-    <div className={`flex ${isOutbound ? 'justify-end' : 'justify-start'}`}>
+    <div className={`flex items-end gap-2 ${isOutbound ? 'justify-end' : 'justify-start'}`}>
+      {!isOutbound && (
+        <div className="w-8 h-8 rounded-full bg-gray-200 flex-shrink-0" />
+      )}
       <div className={`max-w-[80%] sm:max-w-[65%] px-4 py-3 rounded-2xl text-sm ${
         isOutbound
-          ? 'bg-primary-500 text-white rounded-br-md'
-          : 'bg-white/10 text-gray-200 rounded-bl-md'
+          ? 'bg-[#1787FE] text-white rounded-br-md'
+          : 'bg-gray-100 text-gray-800 rounded-bl-md'
       } ${isSending ? 'opacity-70' : ''}`}>
         {textContent && <p className="whitespace-pre-wrap break-words leading-relaxed">{textContent}</p>}
         <MessageAttachments attachments={msg.attachments} messageId={msg.id} isOutbound={isOutbound} />
-        <p className={`text-[10px] mt-1.5 text-right ${isOutbound ? 'text-primary-200' : 'text-gray-500'}`}>
+        <p className={`text-[10px] mt-1.5 text-right ${isOutbound ? 'text-blue-100' : 'text-gray-500'}`}>
           {isSending ? 'Sending...' : formatTime(msg.sentAt)}
         </p>
       </div>
