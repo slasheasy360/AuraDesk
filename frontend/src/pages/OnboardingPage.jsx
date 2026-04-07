@@ -2,30 +2,75 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext.jsx';
 import api from '../services/api.js';
-import { Check, Upload, ArrowRight, ArrowLeft, X, RefreshCw } from 'lucide-react';
+import { Check, Upload, ChevronRight, X, RefreshCw, Plus } from 'lucide-react';
+import logoUrl from '../assets/logo.svg';
 
-const STEPS = ['Connect Platform', 'Set up Branding', 'Try replying to your first lead'];
+/* ─────────────── BRAND ICONS ─────────────── */
+const InstagramIcon = () => (
+  <svg viewBox="0 0 24 24" className="w-5 h-5">
+    <defs>
+      <radialGradient id="igGrad" cx="30%" cy="107%" r="150%">
+        <stop offset="0%" stopColor="#fdf497" />
+        <stop offset="5%" stopColor="#fdf497" />
+        <stop offset="45%" stopColor="#fd5949" />
+        <stop offset="60%" stopColor="#d6249f" />
+        <stop offset="90%" stopColor="#285AEB" />
+      </radialGradient>
+    </defs>
+    <rect x="2" y="2" width="20" height="20" rx="6" fill="url(#igGrad)" />
+    <circle cx="12" cy="12" r="4" fill="none" stroke="#fff" strokeWidth="1.8" />
+    <circle cx="17.5" cy="6.5" r="1.2" fill="#fff" />
+  </svg>
+);
+const FacebookIcon = () => (
+  <svg viewBox="0 0 24 24" className="w-5 h-5">
+    <circle cx="12" cy="12" r="11" fill="#1877F2" />
+    <path d="M14.5 12.5h-2V20h-3v-7.5H8V10h1.5V8.5C9.5 6.8 10.3 6 12 6h2.5v2.5h-1.5c-.6 0-.5.3-.5.7V10h2l-.5 2.5z" fill="#fff" />
+  </svg>
+);
+const WhatsAppIcon = () => (
+  <svg viewBox="0 0 24 24" className="w-5 h-5">
+    <circle cx="12" cy="12" r="11" fill="#25D366" />
+    <path d="M16.6 13.9c-.2-.1-1.4-.7-1.6-.8-.2-.1-.4-.1-.5.1-.2.2-.6.8-.7.9-.1.2-.3.2-.5.1-.7-.4-1.4-.8-2-1.5-.4-.5-.8-1.1-.9-1.3-.1-.2 0-.3.1-.4.1-.1.2-.2.3-.4.1-.1.1-.2.2-.4 0-.2 0-.3 0-.4 0-.1-.5-1.3-.7-1.7-.2-.4-.4-.4-.5-.4h-.4c-.2 0-.4 0-.6.3-.2.2-.8.8-.8 1.9 0 1.1.8 2.2 1 2.3.1.2 1.6 2.5 4 3.5 1.4.6 1.9.6 2.6.5.4-.1 1.4-.6 1.6-1.1.2-.5.2-1 .1-1.1 0-.1-.2-.2-.4-.3z" fill="#fff" />
+  </svg>
+);
+const GmailIcon = () => (
+  <svg viewBox="0 0 24 24" className="w-5 h-5">
+    <circle cx="12" cy="12" r="11" fill="#fff" stroke="#e5e7eb" strokeWidth="0.5" />
+    <path d="M21 8.5c0-.5-.4-.9-.9-.9-.2 0-.4.1-.5.2L12 12.6 4.4 7.8c-.2-.1-.3-.2-.5-.2-.5 0-.9.4-.9.9v7c0 .5.4.9.9.9h2.4V11l5.7 3.6L17.7 11v5.4h2.4c.5 0 .9-.4.9-.9v-7z" fill="#EA4335" />
+  </svg>
+);
 
-function StepIndicator({ current, onStepClick }) {
+const ICONS = {
+  instagram: <InstagramIcon />,
+  facebook: <FacebookIcon />,
+  whatsapp: <WhatsAppIcon />,
+  gmail: <GmailIcon />,
+};
+
+/* ─────────────── STEP INDICATOR ─────────────── */
+function StepIndicator({ current, onStepClick, maxStep }) {
+  const dots = [0, 1, 2];
   return (
-    <div className="flex items-center justify-center gap-0 mb-8">
-      {STEPS.map((_, i) => (
+    <div className="flex items-center justify-center mb-8">
+      {dots.map((i) => (
         <div key={i} className="flex items-center">
           <button
+            type="button"
             onClick={() => onStepClick(i)}
-            disabled={i > current}
-            className={`w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold border-2 transition cursor-pointer disabled:cursor-not-allowed ${
+            disabled={i > maxStep}
+            className={`w-9 h-9 rounded-full flex items-center justify-center text-sm font-semibold border-2 transition disabled:cursor-not-allowed ${
               i < current
-                ? 'bg-blue-500 border-blue-500 text-white hover:bg-blue-600'
-                : i === current
                 ? 'bg-blue-500 border-blue-500 text-white'
-                : 'bg-white border-gray-300 text-gray-400'
+                : i === current
+                ? 'bg-blue-500 border-blue-500 text-white shadow-[0_0_0_4px_rgba(59,130,246,0.15)]'
+                : 'bg-white border-blue-200 text-blue-300'
             }`}
           >
-            {i < current ? <Check size={18} /> : i + 1}
+            {i < current ? <Check size={16} /> : i + 1}
           </button>
-          {i < STEPS.length - 1 && (
-            <div className={`w-16 h-0.5 ${i < current ? 'bg-blue-500' : 'bg-gray-300'}`} />
+          {i < dots.length - 1 && (
+            <div className={`w-12 h-[2px] ${i < current ? 'bg-blue-500' : 'bg-blue-200'}`} />
           )}
         </div>
       ))}
@@ -33,18 +78,30 @@ function StepIndicator({ current, onStepClick }) {
   );
 }
 
-// ── Step 1: Connect Platform ──
-function PlatformStep({ onNext, onBack, successPlatform }) {
+/* ─────────────── PRIMARY BUTTON ─────────────── */
+function PrimaryButton({ children, ...props }) {
+  return (
+    <button
+      {...props}
+      className="w-full sm:w-auto sm:min-w-[260px] bg-[#0B1E3F] hover:bg-[#13294d] text-white px-8 py-3.5 rounded-lg font-semibold text-sm tracking-wider transition disabled:opacity-50 flex items-center justify-center gap-2"
+    >
+      {children} <ChevronRight size={16} />
+    </button>
+  );
+}
+
+/* ─────────────── STEP 1: CONNECT PLATFORM ─────────────── */
+function PlatformStep({ onNext, successPlatform }) {
   const [accounts, setAccounts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [successMsg, setSuccessMsg] = useState(successPlatform || null);
   const pollRef = useRef(null);
 
   const platforms = [
-    { id: 'instagram', name: 'Instagram', icon: '📷' },
-    { id: 'facebook', name: 'Facebook', icon: '📘' },
-    { id: 'whatsapp', name: 'WhatsApp', icon: '💬' },
-    { id: 'gmail', name: 'Email (Gmail)', icon: '📧' },
+    { id: 'instagram', name: 'Instagram' },
+    { id: 'facebook', name: 'Facebook' },
+    { id: 'whatsapp', name: 'Whatsapp' },
+    { id: 'gmail', name: 'Email' },
   ];
 
   const fetchAccounts = useCallback(() => {
@@ -52,62 +109,47 @@ function PlatformStep({ onNext, onBack, successPlatform }) {
     return api.get('/api/accounts').then((res) => {
       setAccounts(res.data.accounts || []);
       return res.data.accounts || [];
-    }).catch((err) => {
-      console.error('Failed to fetch accounts:', err);
-      return [];
-    }).finally(() => setLoading(false));
+    }).catch(() => []).finally(() => setLoading(false));
   }, []);
 
   useEffect(() => { fetchAccounts(); }, [fetchAccounts]);
 
-  // When returning from OAuth, poll until the connected platform appears
   useEffect(() => {
     if (!successPlatform) return;
-
     let attempts = 0;
-    const maxAttempts = 8;
-
     const poll = async () => {
       attempts++;
       const accts = await fetchAccounts();
       const found = accts.some((a) => a.platform === successPlatform && a.status === 'active');
-      if (found || attempts >= maxAttempts) {
+      if (found || attempts >= 8) {
         clearInterval(pollRef.current);
         pollRef.current = null;
       }
     };
-
-    // First check after a short delay to let DB propagate
-    const initialTimer = setTimeout(() => {
+    const t = setTimeout(() => {
       poll();
-      // Then poll every 2 seconds if not found yet
       pollRef.current = setInterval(poll, 2000);
     }, 500);
-
     return () => {
-      clearTimeout(initialTimer);
+      clearTimeout(t);
       if (pollRef.current) clearInterval(pollRef.current);
     };
   }, [successPlatform, fetchAccounts]);
 
-  // Clear success message after 4 seconds
   useEffect(() => {
     if (successMsg) {
-      const timer = setTimeout(() => setSuccessMsg(null), 4000);
-      return () => clearTimeout(timer);
+      const t = setTimeout(() => setSuccessMsg(null), 4000);
+      return () => clearTimeout(t);
     }
   }, [successMsg]);
 
   const handleConnect = async (platformId) => {
-    // WhatsApp uses a different flow (embedded signup) — redirect directly with token
     if (platformId === 'whatsapp') {
       const base = import.meta.env.VITE_API_URL || 'http://localhost:3001';
       const token = localStorage.getItem('token');
       window.location.href = `${base}/auth/whatsapp/exchange?token=${token}`;
       return;
     }
-
-    // Other platforms: call /start API to get OAuth URL, then redirect
     const endpoints = {
       instagram: '/auth/instagram/start',
       facebook: '/auth/facebook/start',
@@ -115,31 +157,27 @@ function PlatformStep({ onNext, onBack, successPlatform }) {
     };
     try {
       const res = await api.get(endpoints[platformId]);
-      if (res.data.url) {
-        window.location.href = res.data.url;
-      }
+      if (res.data.url) window.location.href = res.data.url;
     } catch (err) {
       console.error(`Connect ${platformId} failed:`, err);
     }
   };
 
-  const handleDisconnect = async (accountId) => {
+  const handleDisconnect = async (id) => {
     try {
-      await api.delete(`/api/accounts/${accountId}`);
+      await api.delete(`/api/accounts/${id}`);
       fetchAccounts();
     } catch (err) {
       console.error('Disconnect failed:', err);
     }
   };
 
-  const getAccountForPlatform = (platformId) => {
-    return accounts.find((a) => a.platform === platformId && a.status === 'active');
-  };
+  const accountFor = (id) => accounts.find((a) => a.platform === id && a.status === 'active');
 
   return (
     <div className="text-center">
-      <h2 className="text-2xl font-bold mb-1">Connect Platform</h2>
-      <p className="text-gray-400 text-sm mb-8">SETUP YOUR ORGANISATION</p>
+      <h2 className="text-[26px] sm:text-[28px] font-bold text-gray-800 mb-1">Connect Platform</h2>
+      <p className="text-gray-400 text-[11px] tracking-[0.18em] font-semibold mb-7">SETUP YOUR ORGANISATION</p>
 
       {successMsg && (
         <div className="mb-4 max-w-md mx-auto bg-green-50 border border-green-200 text-green-700 px-4 py-2 rounded-lg text-sm">
@@ -149,85 +187,90 @@ function PlatformStep({ onNext, onBack, successPlatform }) {
 
       <div className="space-y-3 max-w-md mx-auto">
         {platforms.map((p) => {
-          const account = getAccountForPlatform(p.id);
-          return (
-            <div key={p.id} className="flex items-center justify-between border rounded-lg px-4 py-3">
-              <div className="flex items-center gap-3">
-                <span className="text-xl">{p.icon}</span>
-                <div className="text-left">
-                  <span className="font-medium block">{p.name}</span>
-                  {account && (
-                    <span className="text-xs text-gray-400">{account.displayName || account.platformAccountId}</span>
-                  )}
+          const account = accountFor(p.id);
+          if (account) {
+            return (
+              <div key={p.id} className="flex items-center gap-3">
+                <div className="flex-1 flex items-center justify-between bg-[#EAF2FF] rounded-full px-5 py-3">
+                  <div className="flex items-center gap-3">
+                    {ICONS[p.id]}
+                    <span className="font-medium text-sm text-gray-800">{p.name}</span>
+                  </div>
+                  <Check size={18} className="text-green-500" />
+                </div>
+                <div className="flex-1 flex items-center justify-between bg-[#EAF2FF] rounded-full px-3 py-2">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <div className="w-7 h-7 rounded-full bg-gradient-to-br from-orange-300 to-pink-400 flex-shrink-0 overflow-hidden">
+                      {account.avatarUrl && <img src={account.avatarUrl} alt="" className="w-full h-full object-cover" />}
+                    </div>
+                    <div className="text-left min-w-0">
+                      <div className="text-[13px] font-medium text-gray-800 truncate">{account.displayName || account.platformAccountId || 'account'}</div>
+                      <button
+                        onClick={() => handleDisconnect(account.id)}
+                        className="text-[11px] text-red-500 hover:text-red-600 leading-none"
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  </div>
                 </div>
               </div>
-              {account ? (
-                <div className="flex items-center gap-2">
-                  <Check size={16} className="text-green-500" />
-                  <span className="text-sm text-green-600">Connected</span>
-                  <button
-                    onClick={() => handleDisconnect(account.id)}
-                    className="ml-1 text-red-400 hover:text-red-600 text-xs"
-                    title="Remove"
-                  >
-                    <X size={14} />
-                  </button>
-                </div>
-              ) : (
-                <button
-                  onClick={() => handleConnect(p.id)}
-                  className="text-blue-500 hover:text-blue-700 text-sm font-medium flex items-center gap-1"
-                >
-                  Connect <ArrowRight size={16} />
-                </button>
-              )}
-            </div>
+            );
+          }
+          return (
+            <button
+              key={p.id}
+              onClick={() => handleConnect(p.id)}
+              className="w-full flex items-center justify-between bg-[#EAF2FF] hover:bg-[#dbe8ff] rounded-full px-5 py-3 transition"
+            >
+              <div className="flex items-center gap-3">
+                {ICONS[p.id]}
+                <span className="font-medium text-sm text-gray-800">Connect {p.name}</span>
+              </div>
+              <ChevronRight size={18} className="text-gray-400" />
+            </button>
           );
         })}
       </div>
 
-      <div className="flex items-center justify-center gap-3 mt-8">
+      <div className="flex items-center justify-center gap-3 mt-6">
         <button
-          onClick={() => fetchAccounts()}
-          className="text-gray-400 hover:text-gray-600 text-sm flex items-center gap-1"
+          onClick={fetchAccounts}
           disabled={loading}
+          className="text-gray-400 hover:text-gray-600 text-xs flex items-center gap-1"
         >
-          <RefreshCw size={14} className={loading ? 'animate-spin' : ''} /> Refresh status
+          <RefreshCw size={12} className={loading ? 'animate-spin' : ''} /> Refresh status
         </button>
       </div>
 
-      <button
-        onClick={onNext}
-        className="mt-4 bg-[#1a2341] text-white px-8 py-3 rounded-lg font-semibold hover:bg-[#2a3555] transition"
-      >
-        CONTINUE <ArrowRight size={16} className="inline ml-1" />
-      </button>
+      <div className="mt-6 flex justify-center">
+        <PrimaryButton onClick={onNext}>CONTINUE</PrimaryButton>
+      </div>
     </div>
   );
 }
 
-// ── Step 2: Branding ──
-function BrandingStep({ onNext, onBack, savedData, onSaveData }) {
+/* ─────────────── STEP 2: BRANDING ─────────────── */
+function BrandingStep({ onNext, savedData, onSaveData }) {
   const [form, setForm] = useState(savedData || { firstName: '', lastName: '', companyName: '', brandColor: '' });
   const [logoPreview, setLogoPreview] = useState(savedData?.companyLogo || null);
+  const [palette, setPalette] = useState([]);
   const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
   const fileInputRef = useRef(null);
 
-  // Restore saved data from server on mount
   useEffect(() => {
     if (!savedData?.firstName) {
       api.get('/api/onboarding/status').then((res) => {
         const d = res.data;
         if (d.firstName || d.companyName) {
-          const restored = {
+          setForm({
             firstName: d.firstName || '',
             lastName: d.lastName || '',
             companyName: d.companyName || '',
             brandColor: d.brandColor || '',
             companyLogo: d.companyLogo || null,
-          };
-          setForm(restored);
+          });
           if (d.companyLogo) setLogoPreview(d.companyLogo);
         }
       }).catch(() => {});
@@ -237,18 +280,14 @@ function BrandingStep({ onNext, onBack, savedData, onSaveData }) {
   const handleLogoSelect = async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
-
-    // Instant preview
     const reader = new FileReader();
     reader.onload = (ev) => setLogoPreview(ev.target.result);
     reader.readAsDataURL(file);
-
-    // Upload to server
     setUploading(true);
     try {
-      const formData = new FormData();
-      formData.append('logo', file);
-      const res = await api.post('/api/onboarding/upload-logo', formData, {
+      const fd = new FormData();
+      fd.append('logo', file);
+      const res = await api.post('/api/onboarding/upload-logo', fd, {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
       if (res.data.url) {
@@ -260,6 +299,12 @@ function BrandingStep({ onNext, onBack, savedData, onSaveData }) {
     } finally {
       setUploading(false);
     }
+  };
+
+  const addColor = () => {
+    if (!form.brandColor) return;
+    if (palette.includes(form.brandColor)) return;
+    setPalette([...palette, form.brandColor].slice(0, 3));
   };
 
   const handleSubmit = async () => {
@@ -276,196 +321,170 @@ function BrandingStep({ onNext, onBack, savedData, onSaveData }) {
     }
   };
 
+  const inputCls = 'w-full bg-[#EAF2FF] border border-transparent rounded-lg px-3 py-2.5 text-sm focus:bg-white focus:border-blue-400 focus:ring-2 focus:ring-blue-100 outline-none';
+
   return (
     <div className="text-center">
-      <h2 className="text-2xl font-bold mb-1">Set up Branding</h2>
-      <p className="text-gray-400 text-sm mb-8">SETUP YOUR ORGANISATION</p>
+      <h2 className="text-[26px] sm:text-[28px] font-bold text-gray-800 mb-1">Set up Branding</h2>
+      <p className="text-gray-400 text-[11px] tracking-[0.18em] font-semibold mb-7">SETUP YOUR ORGANISATION</p>
 
       <div className="max-w-md mx-auto space-y-4">
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div>
-            <label className="block text-xs font-semibold text-gray-500 mb-1 text-left">FIRST NAME *</label>
+            <label className="block text-[11px] font-semibold text-gray-500 tracking-wider mb-1.5 text-left">FIRST NAME *</label>
             <input
               type="text"
               value={form.firstName}
               onChange={(e) => setForm({ ...form, firstName: e.target.value })}
-              className="w-full border rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
+              className={inputCls}
             />
           </div>
           <div>
-            <label className="block text-xs font-semibold text-gray-500 mb-1 text-left">LAST NAME</label>
+            <label className="block text-[11px] font-semibold text-gray-500 tracking-wider mb-1.5 text-left">LAST NAME</label>
             <input
               type="text"
               value={form.lastName}
               onChange={(e) => setForm({ ...form, lastName: e.target.value })}
-              className="w-full border rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
+              className={inputCls}
             />
           </div>
         </div>
 
         <div>
-          <label className="block text-xs font-semibold text-gray-500 mb-1 text-left">COMPANY NAME *</label>
+          <label className="block text-[11px] font-semibold text-gray-500 tracking-wider mb-1.5 text-left">COMPANY NAME *</label>
           <input
             type="text"
             value={form.companyName}
             onChange={(e) => setForm({ ...form, companyName: e.target.value })}
-            className="w-full border rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
+            className={inputCls}
           />
         </div>
 
-        <div className="flex gap-6 items-start">
+        <div className="grid grid-cols-1 sm:grid-cols-[auto_1fr] gap-6 items-start pt-2">
           <div>
-            <label className="block text-xs font-semibold text-gray-500 mb-1 text-left">COMPANY LOGO</label>
+            <label className="block text-[11px] font-semibold text-gray-500 tracking-wider mb-1.5 text-left">COMPANY LOGO</label>
             <input type="file" ref={fileInputRef} className="hidden" accept="image/*" onChange={handleLogoSelect} />
             <button
+              type="button"
               onClick={() => fileInputRef.current?.click()}
               disabled={uploading}
-              className="w-20 h-20 border-2 border-dashed border-blue-300 rounded-full flex items-center justify-center text-blue-400 cursor-pointer hover:bg-blue-50 overflow-hidden relative"
+              className="w-20 h-20 border-2 border-blue-300 rounded-full flex items-center justify-center text-blue-400 cursor-pointer hover:bg-blue-50 overflow-hidden"
             >
               {logoPreview ? (
                 <img src={logoPreview} alt="Logo" className="w-full h-full object-cover rounded-full" />
               ) : uploading ? (
                 <RefreshCw size={20} className="animate-spin" />
               ) : (
-                <Upload size={24} />
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="w-7 h-7">
+                  <path d="M3 7h4l2-2h6l2 2h4v12H3z" />
+                  <circle cx="12" cy="13" r="3" />
+                </svg>
               )}
             </button>
           </div>
-          <div className="flex-1">
-            <label className="block text-xs font-semibold text-gray-500 mb-1 text-left">BRAND COLORS</label>
+          <div className="text-left">
+            <label className="block text-[11px] font-semibold text-gray-500 tracking-wider mb-1.5">BRAND COLORS</label>
             <div className="flex items-center gap-2">
               <input
                 type="text"
                 placeholder="#HEX"
                 value={form.brandColor}
                 onChange={(e) => setForm({ ...form, brandColor: e.target.value })}
-                className="flex-1 border rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
+                className={`${inputCls} flex-1`}
               />
-              <input
-                type="color"
-                value={form.brandColor || '#3b82f6'}
-                onChange={(e) => setForm({ ...form, brandColor: e.target.value })}
-                className="w-10 h-10 border-2 border-gray-200 rounded-lg cursor-pointer p-0.5"
-              />
+              <button
+                type="button"
+                onClick={addColor}
+                className="w-11 h-11 rounded-lg bg-[#EAF2FF] border border-blue-200 flex items-center justify-center text-blue-500 hover:bg-blue-100"
+              >
+                <Plus size={18} />
+              </button>
+            </div>
+            <div className="flex gap-2 mt-2">
+              {[0, 1, 2].map((i) => (
+                <div
+                  key={i}
+                  className="w-9 h-9 rounded border border-gray-200"
+                  style={{ background: palette[i] || '#EAF2FF' }}
+                />
+              ))}
             </div>
           </div>
         </div>
       </div>
 
-      <div className="flex items-center justify-center gap-4 mt-8">
-        <button
-          onClick={onBack}
-          className="px-6 py-3 rounded-lg font-semibold text-gray-500 hover:bg-gray-100 transition flex items-center gap-1"
-        >
-          <ArrowLeft size={16} /> BACK
-        </button>
-        <button
+      <div className="mt-7 flex justify-center">
+        <PrimaryButton
           onClick={handleSubmit}
           disabled={!form.firstName || !form.companyName || saving}
-          className="bg-[#1a2341] text-white px-8 py-3 rounded-lg font-semibold hover:bg-[#2a3555] transition disabled:opacity-50"
         >
-          {saving ? 'Saving...' : 'CONTINUE'} <ArrowRight size={16} className="inline ml-1" />
-        </button>
+          {saving ? 'SAVING…' : 'CONTINUE'}
+        </PrimaryButton>
       </div>
     </div>
   );
 }
 
-// ── Step 3: First Message ──
-function FirstMessageStep({ onNext, onBack, savedMessage, onSaveMessage }) {
-  const [message, setMessage] = useState(savedMessage || '');
-  const [saving, setSaving] = useState(false);
-
-  // Restore from server if no local data
-  useEffect(() => {
-    if (!savedMessage) {
-      api.get('/api/onboarding/status').then((res) => {
-        if (res.data.cannedResponse) setMessage(res.data.cannedResponse);
-      }).catch(() => {});
-    }
-  }, [savedMessage]);
-
-  const handleSubmit = async () => {
-    setSaving(true);
-    try {
-      await api.post('/api/onboarding/first-message', { cannedResponse: message });
-      onSaveMessage(message);
-      onNext();
-    } catch (err) {
-      console.error('Save failed:', err);
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  return (
-    <div className="text-center">
-      <h2 className="text-2xl font-bold mb-1">Try replying to your first lead</h2>
-      <p className="text-gray-400 text-sm mb-8">SETUP YOUR ORGANISATION</p>
-
-      <div className="max-w-md mx-auto">
-        <label className="block text-xs font-semibold text-gray-500 mb-1 text-left">CANNED RESPONSE</label>
-        <textarea
-          value={message}
-          onChange={(e) => setMessage(e.target.value)}
-          placeholder="Type canned response on lead enquiry"
-          rows={4}
-          className="w-full border rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none resize-none"
-        />
-      </div>
-
-      <div className="flex items-center justify-center gap-4 mt-8">
-        <button
-          onClick={onBack}
-          className="px-6 py-3 rounded-lg font-semibold text-gray-500 hover:bg-gray-100 transition flex items-center gap-1"
-        >
-          <ArrowLeft size={16} /> BACK
-        </button>
-        <button
-          onClick={handleSubmit}
-          disabled={saving}
-          className="bg-[#1a2341] text-white px-8 py-3 rounded-lg font-semibold hover:bg-[#2a3555] transition disabled:opacity-50"
-        >
-          {saving ? 'Saving...' : 'CONTINUE'} <ArrowRight size={16} className="inline ml-1" />
-        </button>
-      </div>
-    </div>
-  );
-}
-
-// ── Success Screen ──
+/* ─────────────── SUCCESS SCREEN ─────────────── */
 function SuccessScreen({ onFinish }) {
   return (
-    <div className="text-center py-12">
-      <div className="w-24 h-24 mx-auto mb-6 bg-blue-100 rounded-full flex items-center justify-center">
-        <div className="w-16 h-16 bg-blue-500 rounded-full flex items-center justify-center">
-          <Check size={32} className="text-white" />
-        </div>
+    <div className="text-center py-6 sm:py-10">
+      <div className="relative w-32 h-32 mx-auto mb-7">
+        {/* Scalloped seal */}
+        <svg viewBox="0 0 120 120" className="w-full h-full">
+          <defs>
+            <radialGradient id="sealGrad" cx="50%" cy="50%" r="50%">
+              <stop offset="0%" stopColor="#3B82F6" />
+              <stop offset="100%" stopColor="#1D4ED8" />
+            </radialGradient>
+          </defs>
+          <g fill="url(#sealGrad)">
+            {Array.from({ length: 16 }).map((_, i) => {
+              const angle = (i * 360) / 16;
+              return (
+                <circle
+                  key={i}
+                  cx={60 + 48 * Math.cos((angle * Math.PI) / 180)}
+                  cy={60 + 48 * Math.sin((angle * Math.PI) / 180)}
+                  r="11"
+                />
+              );
+            })}
+          </g>
+          <circle cx="60" cy="60" r="46" fill="url(#sealGrad)" />
+          <circle cx="60" cy="60" r="36" fill="#fff" />
+          <path
+            d="M44 60 L55 71 L78 48"
+            fill="none"
+            stroke="#3B82F6"
+            strokeWidth="6"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        </svg>
       </div>
-      <h2 className="text-2xl font-bold mb-2">Organisation Setup Successful</h2>
-      <p className="text-gray-400 text-sm mb-8">WELCOME ABOARD! START YOUR JOURNEY WITH AURADESK.</p>
-      <button
-        onClick={onFinish}
-        className="bg-[#1a2341] text-white px-8 py-3 rounded-lg font-semibold hover:bg-[#2a3555] transition"
-      >
-        LET'S START <ArrowRight size={16} className="inline ml-1" />
-      </button>
+      <h2 className="text-[26px] sm:text-[30px] font-bold text-gray-800 leading-tight mb-2">
+        Organisation Setup<br />Successful
+      </h2>
+      <p className="text-gray-400 text-[11px] tracking-[0.18em] font-semibold mb-7">
+        WELCOME ABOARD! START YOUR JOURNEY WITH AURADESK.
+      </p>
+      <div className="flex justify-center">
+        <PrimaryButton onClick={onFinish}>LET'S START</PrimaryButton>
+      </div>
     </div>
   );
 }
 
-// ── Main Onboarding Page ──
+/* ─────────────── MAIN ─────────────── */
 export default function OnboardingPage() {
-  const [step, setStep] = useState(0);
-  const [maxStep, setMaxStep] = useState(0); // highest step reached
-  const [showSuccess, setShowSuccess] = useState(false);
+  const [step, setStep] = useState(0); // 0=platform, 1=branding, 2=success
+  const [maxStep, setMaxStep] = useState(0);
   const [brandingData, setBrandingData] = useState(null);
-  const [cannedMessage, setCannedMessage] = useState('');
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const { refreshUser } = useAuth();
 
-  // Extract ?success= param from OAuth redirect and persist it before cleaning URL
   const successPlatformRef = useRef(searchParams.get('success'));
   const successPlatform = successPlatformRef.current;
   useEffect(() => {
@@ -477,7 +496,6 @@ export default function OnboardingPage() {
   }, [searchParams, setSearchParams]);
 
   useEffect(() => {
-    // If no token, redirect to login immediately
     if (!localStorage.getItem('token')) {
       navigate('/login');
       return;
@@ -487,11 +505,9 @@ export default function OnboardingPage() {
       if (s >= 4) {
         navigate('/');
       } else if (s > 0 && !successPlatform) {
-        // Only advance step if not returning from OAuth (user should stay on connect-platform)
-        const displayStep = Math.min(s, 2);
-        setStep(displayStep);
-        setMaxStep(displayStep);
-        // Restore saved data
+        const display = Math.min(s, 1);
+        setStep(display);
+        setMaxStep(display);
         if (res.data.firstName || res.data.companyName) {
           setBrandingData({
             firstName: res.data.firstName || '',
@@ -501,32 +517,15 @@ export default function OnboardingPage() {
             companyLogo: res.data.companyLogo || null,
           });
         }
-        if (res.data.cannedResponse) setCannedMessage(res.data.cannedResponse);
       }
     }).catch((err) => {
-      // Auth failed (401) — redirect to login
-      if (err.response?.status === 401) {
-        navigate('/login');
-      }
+      if (err.response?.status === 401) navigate('/login');
     });
-  }, [navigate]);
+  }, [navigate, successPlatform]);
 
-  const handleNext = () => {
-    if (step < 2) {
-      const next = step + 1;
-      setStep(next);
-      setMaxStep((prev) => Math.max(prev, next));
-    } else {
-      setShowSuccess(true);
-    }
-  };
-
-  const handleBack = () => {
-    if (step > 0) setStep(step - 1);
-  };
-
-  const handleStepClick = (targetStep) => {
-    if (targetStep <= maxStep) setStep(targetStep);
+  const goTo = (n) => {
+    setStep(n);
+    setMaxStep((m) => Math.max(m, n));
   };
 
   const handleFinish = async () => {
@@ -540,42 +539,31 @@ export default function OnboardingPage() {
   };
 
   return (
-    <div className="min-h-screen bg-[#f0f4ff] flex flex-col items-center justify-center px-4">
-      <div className="mb-8 flex items-center gap-2">
-        <div className="w-8 h-8 bg-blue-500 rounded-lg flex items-center justify-center text-white font-bold text-sm">A</div>
-        <span className="text-xl font-bold text-gray-800">AuraDesk</span>
+    <div className="min-h-screen bg-[#f4f7fb] flex flex-col items-center justify-center px-4 py-8">
+      <div className="mb-6 flex items-center gap-2">
+        <img src={logoUrl} alt="AuraDesk" className="h-7 w-auto" />
+        <span className="text-[18px] font-bold text-gray-800">AuraDesk</span>
       </div>
 
-      <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-8 md:p-12 w-full max-w-xl">
-        {showSuccess ? (
-          <SuccessScreen onFinish={handleFinish} />
-        ) : (
-          <>
-            <StepIndicator current={step} onStepClick={handleStepClick} />
-            {step === 0 && <PlatformStep onNext={handleNext} onBack={null} successPlatform={successPlatform} />}
-            {step === 1 && (
-              <BrandingStep
-                onNext={handleNext}
-                onBack={handleBack}
-                savedData={brandingData}
-                onSaveData={setBrandingData}
-              />
-            )}
-            {step === 2 && (
-              <FirstMessageStep
-                onNext={handleNext}
-                onBack={handleBack}
-                savedMessage={cannedMessage}
-                onSaveMessage={setCannedMessage}
-              />
-            )}
-          </>
+      <div className="bg-white rounded-2xl shadow-[0_2px_24px_rgba(15,42,99,0.06)] border border-blue-100/60 p-6 sm:p-10 md:p-12 w-full max-w-2xl">
+        {step < 2 && <StepIndicator current={step} maxStep={maxStep} onStepClick={goTo} />}
+        {step === 0 && <PlatformStep onNext={() => goTo(1)} successPlatform={successPlatform} />}
+        {step === 1 && (
+          <BrandingStep
+            onNext={() => goTo(2)}
+            savedData={brandingData}
+            onSaveData={setBrandingData}
+          />
         )}
+        {step === 2 && <SuccessScreen onFinish={handleFinish} />}
       </div>
 
-      <footer className="mt-8 text-center text-xs text-gray-400">
-        Copyright 2021 - 2025 AuraDesk Inc. All Rights Reserved.
-        <span className="ml-8 cursor-pointer hover:text-gray-600">Need help?</span>
+      <footer className="mt-6 w-full max-w-2xl flex items-center justify-between text-[11px] text-gray-400 px-2">
+        <span>Copyright 2021 - 2025 AuraDesk Inc. All Rights Reserved.</span>
+        <span className="cursor-pointer hover:text-gray-600 flex items-center gap-1">
+          <span className="w-4 h-4 rounded-full border border-gray-300 inline-flex items-center justify-center text-[9px]">i</span>
+          Need help?
+        </span>
       </footer>
     </div>
   );
