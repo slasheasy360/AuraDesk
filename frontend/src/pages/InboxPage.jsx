@@ -1682,12 +1682,12 @@ function EmailThreadView({ messages, emailSubject, collapsedMessages, toggleColl
   const autoCollapsed = messages.length > 3;
 
   return (
-    <div className="flex-1 overflow-y-auto bg-[#0c1a2e]">
+    <div className="flex-1 overflow-y-auto bg-white">
       <div className="max-w-3xl mx-auto px-4 sm:px-6 py-6">
         <div className="mb-6">
-          <h1 className="text-xl sm:text-2xl font-semibold text-white leading-tight">{emailSubject}</h1>
+          <h1 className="text-xl sm:text-2xl font-semibold text-gray-900 leading-tight">{emailSubject}</h1>
           <div className="flex items-center gap-2 mt-2">
-            <span className="text-xs bg-white/10 text-gray-400 px-2 py-0.5 rounded">Inbox</span>
+            <span className="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded">Inbox</span>
             <span className="text-xs text-gray-500">{messages.length} message{messages.length !== 1 ? 's' : ''}</span>
           </div>
         </div>
@@ -1744,19 +1744,19 @@ function EmailMessageCard({ msg, isOutbound, isLast, isCollapsed, onToggleCollap
   const hasAttachments = msg.attachments && Array.isArray(msg.attachments) && msg.attachments.length > 0;
 
   return (
-    <div className={`border border-white/10 bg-white/5 ${isLast ? 'rounded-xl' : 'rounded-t-xl border-b-0'} overflow-hidden`}>
+    <div className={`border border-gray-200 bg-white ${isLast ? 'rounded-xl' : 'rounded-t-xl border-b-0'} overflow-hidden`}>
       <div
-        className="flex items-center gap-3 px-4 sm:px-5 py-3 cursor-pointer hover:bg-white/5 transition-colors"
+        className="flex items-center gap-3 px-4 sm:px-5 py-3 cursor-pointer hover:bg-gray-50 transition-colors"
         onClick={onToggleCollapse}
       >
         <div className={`w-9 h-9 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0 ${
-          isOutbound ? 'bg-blue-500/20 text-blue-400' : 'bg-red-500/20 text-red-400'
+          isOutbound ? 'bg-blue-100 text-blue-600' : 'bg-rose-100 text-rose-600'
         }`}>
           {senderInitial}
         </div>
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
-            <span className="text-sm font-semibold text-white">{senderName}</span>
+            <span className="text-sm font-semibold text-gray-900">{senderName}</span>
             {isCollapsed && (
               <span className="text-xs text-gray-500 truncate hidden sm:inline">
                 &mdash; {msg.content?.replace(/<[^>]+>/g, '').replace(/\n+/g, ' ').slice(0, 60) || '(empty)'}
@@ -1769,7 +1769,7 @@ function EmailMessageCard({ msg, isOutbound, isLast, isCollapsed, onToggleCollap
         </div>
         <div className="flex items-center gap-2 flex-shrink-0">
           <span className="text-xs text-gray-500 hidden sm:inline">{timestamp}</span>
-          {isCollapsed ? <ChevronDown size={16} className="text-gray-500" /> : <ChevronUp size={16} className="text-gray-500" />}
+          {isCollapsed ? <ChevronDown size={16} className="text-gray-400" /> : <ChevronUp size={16} className="text-gray-400" />}
         </div>
       </div>
 
@@ -1786,7 +1786,7 @@ function EmailMessageCard({ msg, isOutbound, isLast, isCollapsed, onToggleCollap
           <div className="px-4 sm:px-5 pb-2 sm:hidden">
             <span className="text-xs text-gray-500">{timestamp}</span>
           </div>
-          <div className="px-4 sm:px-5 py-4 border-t border-white/5">
+          <div className="px-4 sm:px-5 py-4 border-t border-gray-100">
             {sanitizedHtml ? (
               <div className="bg-white rounded-lg p-4 sm:p-5">
                 <div
@@ -1796,23 +1796,23 @@ function EmailMessageCard({ msg, isOutbound, isLast, isCollapsed, onToggleCollap
                 />
               </div>
             ) : msg.content ? (
-              <div className="bg-white rounded-lg p-4 sm:p-5">
+              <div className="bg-gray-50 rounded-lg p-4 sm:p-5">
                 <div className="text-sm text-gray-900 whitespace-pre-wrap break-words leading-relaxed">
                   {msg.content}
                 </div>
               </div>
             ) : (
-              <div className="text-sm text-gray-500 italic py-2">(No content)</div>
+              <div className="text-sm text-gray-400 italic py-2">(No content)</div>
             )}
           </div>
           {hasAttachments && (
             <EmailAttachments attachments={msg.attachments} messageId={msg.id} />
           )}
           {isLast && (
-            <div className="px-4 sm:px-5 py-3 border-t border-white/5 flex items-center gap-2">
+            <div className="px-4 sm:px-5 py-3 border-t border-gray-100 flex items-center gap-2">
               <button
                 onClick={(e) => { e.stopPropagation(); onReply(); }}
-                className="flex items-center gap-1.5 px-4 py-2 text-sm text-gray-300 bg-white/5 border border-white/10 rounded-full hover:bg-white/10 hover:border-white/20 transition"
+                className="flex items-center gap-1.5 px-4 py-2 text-sm text-[#1787FE] bg-blue-50 border border-blue-100 rounded-full hover:bg-blue-100 transition"
               >
                 <Reply size={14} />
                 Reply
@@ -1855,7 +1855,7 @@ function EmailAttachments({ attachments, messageId }) {
   };
 
   return (
-    <div className="px-4 sm:px-5 py-3 border-t border-white/5 bg-white/[0.02]">
+    <div className="px-4 sm:px-5 py-3 border-t border-gray-100 bg-gray-50">
       <p className="text-[10px] uppercase tracking-wider text-gray-500 font-medium mb-2">
         {attachments.length} Attachment{attachments.length !== 1 ? 's' : ''}
       </p>
@@ -1864,14 +1864,14 @@ function EmailAttachments({ attachments, messageId }) {
           {attachments.map((att, i) => {
             if (!att.mimeType?.startsWith('image/') || !(att.attachmentId || att.fileUrl || att.mediaId || att.localPath)) return null;
             return (
-              <div key={i} className="relative bg-white/5 animate-pulse rounded-lg min-h-[80px] min-w-[80px]">
+              <div key={i} className="relative bg-gray-100 animate-pulse rounded-lg min-h-[80px] min-w-[80px]">
                 <img
                   src={getPreviewUrl(i)}
                   alt={att.filename}
-                  className="max-h-[200px] rounded-lg cursor-pointer border border-white/10 relative z-[1]"
+                  className="max-h-[200px] rounded-lg cursor-pointer border border-gray-200 relative z-[1]"
                   onClick={() => window.open(getPreviewUrl(i), '_blank')}
                   loading="lazy"
-                  onLoad={(e) => { e.target.parentElement.classList.remove('animate-pulse', 'bg-white/5'); e.target.parentElement.style.minHeight = ''; e.target.parentElement.style.minWidth = ''; }}
+                  onLoad={(e) => { e.target.parentElement.classList.remove('animate-pulse', 'bg-gray-100'); e.target.parentElement.style.minHeight = ''; e.target.parentElement.style.minWidth = ''; }}
                 />
               </div>
             );
@@ -1883,24 +1883,24 @@ function EmailAttachments({ attachments, messageId }) {
           <div
             key={i}
             onClick={() => handleDownload(att, i)}
-            className="flex items-center gap-2 px-3 py-2 bg-white/5 rounded-lg border border-white/10 hover:border-primary-400/50 hover:bg-white/10 transition-all cursor-pointer group"
+            className="flex items-center gap-2 px-3 py-2 bg-white rounded-lg border border-gray-200 hover:border-[#1787FE] hover:bg-blue-50 transition-all cursor-pointer group"
           >
             <div className={`w-8 h-8 rounded flex items-center justify-center ${
-              att.mimeType?.startsWith('image/') ? 'bg-blue-500/10'
-              : att.mimeType?.includes('pdf') ? 'bg-red-500/10'
-              : 'bg-white/5'
+              att.mimeType?.startsWith('image/') ? 'bg-blue-100'
+              : att.mimeType?.includes('pdf') ? 'bg-red-100'
+              : 'bg-gray-100'
             }`}>
-              {att.mimeType?.startsWith('image/') ? <ImageIcon size={16} className="text-blue-400" />
-              : att.mimeType?.includes('pdf') ? <FileText size={16} className="text-red-400" />
-              : att.mimeType?.startsWith('audio/') ? <Music size={16} className="text-purple-400" />
-              : att.mimeType?.startsWith('video/') ? <Play size={16} className="text-orange-400" />
+              {att.mimeType?.startsWith('image/') ? <ImageIcon size={16} className="text-blue-600" />
+              : att.mimeType?.includes('pdf') ? <FileText size={16} className="text-red-600" />
+              : att.mimeType?.startsWith('audio/') ? <Music size={16} className="text-purple-600" />
+              : att.mimeType?.startsWith('video/') ? <Play size={16} className="text-orange-600" />
               : <FileText size={16} className="text-gray-500" />}
             </div>
             <div className="min-w-0">
-              <p className="text-xs font-medium text-gray-300 truncate max-w-[140px]">{att.filename}</p>
+              <p className="text-xs font-medium text-gray-700 truncate max-w-[140px]">{att.filename}</p>
               {formatFileSize(att.size) && <p className="text-[10px] text-gray-500">{formatFileSize(att.size)}</p>}
             </div>
-            <Download size={14} className="text-gray-600 group-hover:text-primary-400 ml-1 transition-colors" />
+            <Download size={14} className="text-gray-400 group-hover:text-[#1787FE] ml-1 transition-colors" />
           </div>
         ))}
       </div>
@@ -1920,11 +1920,11 @@ const EmailReplyBox = forwardRef(function EmailReplyBox(
 
   if (!showReplyBox) {
     return (
-      <div className="border-t border-white/10 bg-[#0f1d33] px-4 sm:px-6 py-3">
+      <div className="border-t border-gray-100 bg-white px-4 sm:px-6 py-3">
         <div className="max-w-3xl mx-auto">
           <button
             onClick={onOpenReply}
-            className="flex items-center gap-2 px-4 py-2.5 text-sm text-gray-500 bg-white/5 border border-white/10 rounded-xl hover:bg-white/10 hover:text-gray-300 transition w-full"
+            className="flex items-center gap-2 px-4 py-2.5 text-sm text-gray-500 bg-gray-50 border border-gray-200 rounded-xl hover:bg-gray-100 hover:text-gray-700 transition w-full"
           >
             <Reply size={16} />
             Click here to reply...
@@ -1935,16 +1935,16 @@ const EmailReplyBox = forwardRef(function EmailReplyBox(
   }
 
   return (
-    <div ref={ref} className="border-t border-white/10 bg-[#0f1d33] px-4 sm:px-6 py-4">
+    <div ref={ref} className="border-t border-gray-100 bg-white px-4 sm:px-6 py-4">
       <div className="max-w-3xl mx-auto">
         <form onSubmit={handleSend}>
-          <div className="border border-white/10 rounded-xl overflow-hidden shadow-sm focus-within:border-primary-400 focus-within:ring-1 focus-within:ring-primary-400 transition">
-            <div className="flex items-center justify-between px-4 py-2 bg-white/5 border-b border-white/5">
+          <div className="border border-gray-200 rounded-xl overflow-hidden shadow-sm focus-within:border-[#1787FE] focus-within:ring-1 focus-within:ring-[#1787FE] transition bg-white">
+            <div className="flex items-center justify-between px-4 py-2 bg-gray-50 border-b border-gray-100">
               <div className="flex items-center gap-2 text-xs text-gray-500">
                 <Reply size={13} />
                 <span>Replying to {replyingTo?.sender || 'Unknown'}</span>
               </div>
-              <button type="button" onClick={onClose} className="text-gray-500 hover:text-gray-300 transition"><X size={16} /></button>
+              <button type="button" onClick={onClose} className="text-gray-400 hover:text-gray-700 transition"><X size={16} /></button>
             </div>
             <textarea
               value={newMessage}
@@ -1954,43 +1954,43 @@ const EmailReplyBox = forwardRef(function EmailReplyBox(
               }}
               placeholder="Write your reply..."
               rows={4}
-              className="w-full px-4 py-3 text-sm outline-none resize-none bg-transparent text-white placeholder-gray-500"
+              className="w-full px-4 py-3 text-sm outline-none resize-none bg-white text-gray-900 placeholder-gray-400"
               autoFocus
             />
             {attachments.length > 0 && (
-              <div className="px-4 py-2 border-t border-white/5 bg-white/[0.02]">
+              <div className="px-4 py-2 border-t border-gray-100 bg-gray-50">
                 <div className="flex gap-2 flex-wrap">
                   {attachments.map((att) => (
-                    <div key={att.id} className="relative group flex items-center gap-2 px-2.5 py-1.5 bg-white/5 rounded-lg border border-white/10 text-xs">
+                    <div key={att.id} className="relative group flex items-center gap-2 px-2.5 py-1.5 bg-white rounded-lg border border-gray-200 text-xs">
                       {att.preview ? (
                         <img src={att.preview} alt={att.name} className="w-8 h-8 rounded object-cover" />
                       ) : (
-                        <FileText size={16} className="text-gray-500" />
+                        <FileText size={16} className="text-gray-400" />
                       )}
                       <div className="min-w-0">
-                        <p className="truncate max-w-[100px] font-medium text-gray-300">{att.name}</p>
+                        <p className="truncate max-w-[100px] font-medium text-gray-700">{att.name}</p>
                         {formatFileSize(att.size) && <p className="text-[10px] text-gray-500">{formatFileSize(att.size)}</p>}
                       </div>
-                      <button type="button" onClick={() => removeAttachment(att.id)} className="text-gray-600 hover:text-red-400 transition ml-1"><X size={14} /></button>
+                      <button type="button" onClick={() => removeAttachment(att.id)} className="text-gray-400 hover:text-red-500 transition ml-1"><X size={14} /></button>
                     </div>
                   ))}
                 </div>
                 {uploadProgress !== null && uploadProgress < 100 && (
                   <div className="mt-2">
-                    <div className="h-1 bg-white/10 rounded-full overflow-hidden">
-                      <div className="h-full bg-primary-500 transition-all" style={{ width: `${uploadProgress}%` }} />
+                    <div className="h-1 bg-gray-200 rounded-full overflow-hidden">
+                      <div className="h-full bg-[#1787FE] transition-all" style={{ width: `${uploadProgress}%` }} />
                     </div>
                     <p className="text-[10px] text-gray-500 mt-0.5">{uploadProgress}% uploaded</p>
                   </div>
                 )}
               </div>
             )}
-            <div className="flex items-center justify-between px-4 py-2 bg-white/5 border-t border-white/5">
-              <button type="button" onClick={onAttachClick} className="p-1.5 text-gray-500 hover:text-gray-300 hover:bg-white/10 rounded transition" title="Attach files"><Paperclip size={16} /></button>
+            <div className="flex items-center justify-between px-4 py-2 bg-gray-50 border-t border-gray-100">
+              <button type="button" onClick={onAttachClick} className="p-1.5 text-gray-400 hover:text-gray-700 hover:bg-gray-100 rounded transition" title="Attach files"><Paperclip size={16} /></button>
               <button
                 type="submit"
                 disabled={!hasContent || sending}
-                className="bg-primary-500 hover:bg-primary-600 text-white px-5 py-1.5 rounded-lg text-sm font-medium transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                className="bg-[#1787FE] hover:bg-[#1377e0] text-white px-5 py-1.5 rounded-lg text-sm font-medium transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
               >
                 {sending ? (
                   <><span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />Sending...</>
@@ -2012,17 +2012,17 @@ const EmailReplyBox = forwardRef(function EmailReplyBox(
 
 function AttachmentPreview({ attachments, onRemove, uploadProgress }) {
   return (
-    <div className="px-4 sm:px-6 py-2 bg-[#0f1d33] border-t border-white/10">
+    <div className="px-4 sm:px-6 py-2 bg-white border-t border-gray-100">
       <div className="flex gap-2 overflow-x-auto pb-1">
         {attachments.map((att) => (
           <div key={att.id} className="relative flex-shrink-0 group">
             {att.preview ? (
-              <div className="w-16 h-16 rounded-lg overflow-hidden border border-white/10">
+              <div className="w-16 h-16 rounded-lg overflow-hidden border border-gray-200">
                 <img src={att.preview} alt={att.name} className="w-full h-full object-cover" />
               </div>
             ) : (
-              <div className="w-16 h-16 rounded-lg border border-white/10 bg-white/5 flex flex-col items-center justify-center px-1">
-                <FileText size={18} className="text-gray-500 mb-0.5" />
+              <div className="w-16 h-16 rounded-lg border border-gray-200 bg-gray-50 flex flex-col items-center justify-center px-1">
+                <FileText size={18} className="text-gray-400 mb-0.5" />
                 <span className="text-[9px] text-gray-500 truncate w-full text-center">{att.name.split('.').pop()}</span>
               </div>
             )}
@@ -2038,8 +2038,8 @@ function AttachmentPreview({ attachments, onRemove, uploadProgress }) {
       </div>
       {uploadProgress !== null && uploadProgress < 100 && (
         <div className="mt-1">
-          <div className="h-1 bg-white/10 rounded-full overflow-hidden">
-            <div className="h-full bg-primary-500 transition-all" style={{ width: `${uploadProgress}%` }} />
+          <div className="h-1 bg-gray-200 rounded-full overflow-hidden">
+            <div className="h-full bg-[#1787FE] transition-all" style={{ width: `${uploadProgress}%` }} />
           </div>
         </div>
       )}
