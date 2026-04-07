@@ -1236,41 +1236,24 @@ export default function InboxPage() {
                 }}
               />
 
-              {/* Composer */}
-              {isEmailPlatform ? (
-                <EmailReplyBox
-                  ref={replyBoxRef}
-                  showReplyBox={showReplyBox}
-                  replyingTo={replyingTo}
-                  newMessage={newMessage}
-                  setNewMessage={handleNewMessageChange}
-                  handleSend={handleSend}
-                  sending={sending}
-                  attachments={attachments}
-                  onAttachClick={() => fileInputRef.current?.click()}
-                  removeAttachment={removeAttachment}
-                  uploadProgress={uploadProgress}
-                  onOpenReply={() => {
+              {/* Composer — same chat-style composer for all platforms */}
+              {attachments.length > 0 && (
+                <AttachmentPreview attachments={attachments} onRemove={removeAttachment} uploadProgress={uploadProgress} />
+              )}
+              <ChatComposer
+                newMessage={newMessage}
+                setNewMessage={handleNewMessageChange}
+                handleSend={(e) => {
+                  if (isEmailPlatform && !replyingTo) {
                     const lastMsg = messages[messages.length - 1];
                     openReplyBox(lastMsg || { subject: emailSubject });
-                  }}
-                  onClose={() => { setShowReplyBox(false); setReplyingTo(null); setAttachments([]); }}
-                />
-              ) : (
-                <>
-                  {attachments.length > 0 && (
-                    <AttachmentPreview attachments={attachments} onRemove={removeAttachment} uploadProgress={uploadProgress} />
-                  )}
-                  <ChatComposer
-                    newMessage={newMessage}
-                    setNewMessage={handleNewMessageChange}
-                    handleSend={handleSend}
-                    sending={sending}
-                    attachments={attachments}
-                    onAttachClick={() => fileInputRef.current?.click()}
-                  />
-                </>
-              )}
+                  }
+                  handleSend(e);
+                }}
+                sending={sending}
+                attachments={attachments}
+                onAttachClick={() => fileInputRef.current?.click()}
+              />
             </>
           ) : null}
         </div>
@@ -1678,49 +1661,36 @@ function renderChatBubble(msg, isOutbound) {
 // EMAIL THREAD VIEW
 // ═══════════════════════════════════════════════════════════════════
 
-function EmailThreadView({ messages, emailSubject, collapsedMessages, toggleCollapsed, onReply, messagesEndRef }) {
-  const autoCollapsed = messages.length > 3;
-
+function EmailThreadView({ messages, emailSubject, collapsedMessages, toggleCollapsed, messagesEndRef }) {
   return (
     <div className="flex-1 overflow-y-auto bg-white">
-      <div className="max-w-3xl mx-auto px-4 sm:px-6 py-6">
-        <div className="mb-6">
-          <h1 className="text-xl sm:text-2xl font-semibold text-gray-900 leading-tight">{emailSubject}</h1>
-          <div className="flex items-center gap-2 mt-2">
-            <span className="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded">Inbox</span>
-            <span className="text-xs text-gray-500">{messages.length} message{messages.length !== 1 ? 's' : ''}</span>
-          </div>
-        </div>
+      <div className="divide-y divide-gray-100">
+        {messages.map((msg, idx) => {
+          const isOutbound = msg.direction === 'outbound';
+          const isLast = idx === messages.length - 1;
+          // Auto-expand only the last message; allow user toggle for the rest
+          const isCollapsed = isLast
+            ? collapsedMessages.has(msg.id)
+            : !collapsedMessages.has(msg.id);
 
-        <div className="space-y-0">
-          {messages.map((msg, idx) => {
-            const isOutbound = msg.direction === 'outbound';
-            const isLast = idx === messages.length - 1;
-            const isSecondLast = idx === messages.length - 2;
-            const isCollapsed = autoCollapsed && !isLast && !isSecondLast
-              ? !collapsedMessages.has(msg.id)
-              : collapsedMessages.has(msg.id);
-
-            return (
-              <EmailMessageCard
-                key={msg.id || `msg-${idx}`}
-                msg={msg}
-                isOutbound={isOutbound}
-                isLast={isLast}
-                isCollapsed={isCollapsed}
-                onToggleCollapse={() => toggleCollapsed(msg.id)}
-                onReply={() => onReply(msg)}
-              />
-            );
-          })}
-        </div>
-        <div ref={messagesEndRef} />
+          return (
+            <EmailMessageCard
+              key={msg.id || `msg-${idx}`}
+              msg={msg}
+              emailSubject={emailSubject}
+              isOutbound={isOutbound}
+              isCollapsed={isCollapsed}
+              onToggleCollapse={() => toggleCollapsed(msg.id)}
+            />
+          );
+        })}
       </div>
+      <div ref={messagesEndRef} />
     </div>
   );
 }
 
-function EmailMessageCard({ msg, isOutbound, isLast, isCollapsed, onToggleCollapse, onReply }) {
+function EmailMessageCard({ msg, emailSubject, isOutbound, isCollapsed, onToggleCollapse }) {
   const hasHtml = msg.htmlContent && msg.htmlContent.trim().length > 0;
   const sanitizedHtml = hasHtml
     ? DOMPurify.sanitize(msg.htmlContent, {
@@ -1735,94 +1705,81 @@ function EmailMessageCard({ msg, isOutbound, isLast, isCollapsed, onToggleCollap
       })
     : null;
 
-  const senderInitial = (msg.sender || (isOutbound ? 'Y' : '?'))[0]?.toUpperCase();
   const senderName = isOutbound ? 'You' : (msg.sender || 'Unknown');
-  const timestamp = msg.sentAt
-    ? new Date(msg.sentAt).toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
-    : '';
+  const senderEmail = msg.senderEmail || msg.fromEmail || (isOutbound ? null : msg.sender);
+  const isEmailLikeAddress = senderEmail && /@/.test(senderEmail);
+  const subjectText = msg.subject || emailSubject || '';
+  const timestamp = msg.sentAt ? formatRelative(msg.sentAt) : '';
 
   const hasAttachments = msg.attachments && Array.isArray(msg.attachments) && msg.attachments.length > 0;
 
   return (
-    <div className={`border border-gray-200 bg-white ${isLast ? 'rounded-xl' : 'rounded-t-xl border-b-0'} overflow-hidden`}>
+    <div className="px-4 sm:px-6 py-4">
       <div
-        className="flex items-center gap-3 px-4 sm:px-5 py-3 cursor-pointer hover:bg-gray-50 transition-colors"
+        className="flex items-start gap-3 cursor-pointer"
         onClick={onToggleCollapse}
       >
-        <div className={`w-9 h-9 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0 ${
-          isOutbound ? 'bg-blue-100 text-blue-600' : 'bg-rose-100 text-rose-600'
-        }`}>
-          {senderInitial}
-        </div>
+        {/* Avatar */}
+        <div className="w-10 h-10 rounded-full bg-gray-200 flex-shrink-0" />
+
+        {/* Sender + subject/preview */}
         <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2">
-            <span className="text-sm font-semibold text-gray-900">{senderName}</span>
-            {isCollapsed && (
-              <span className="text-xs text-gray-500 truncate hidden sm:inline">
-                &mdash; {msg.content?.replace(/<[^>]+>/g, '').replace(/\n+/g, ' ').slice(0, 60) || '(empty)'}
-              </span>
-            )}
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-sm font-semibold text-gray-900 truncate">{senderName}</span>
+            <span className="text-xs text-gray-500 flex-shrink-0">{timestamp}</span>
           </div>
-          {!isCollapsed && (
-            <p className="text-xs text-gray-500 truncate">to {isOutbound ? (msg.sender || 'recipient') : 'me'}</p>
+          {isCollapsed ? (
+            <p className="text-xs text-gray-500 truncate mt-0.5">{subjectText || '(no subject)'}</p>
+          ) : (
+            isEmailLikeAddress && (
+              <p className="text-xs text-gray-500 truncate mt-0.5">&lt;{senderEmail}&gt;</p>
+            )
           )}
-        </div>
-        <div className="flex items-center gap-2 flex-shrink-0">
-          <span className="text-xs text-gray-500 hidden sm:inline">{timestamp}</span>
-          {isCollapsed ? <ChevronDown size={16} className="text-gray-400" /> : <ChevronUp size={16} className="text-gray-400" />}
         </div>
       </div>
 
       {!isCollapsed && (
-        <>
-          {msg.subject && (
-            <div className="px-4 sm:px-5 pb-1">
-              <div className="flex items-center gap-1.5 text-xs text-gray-500">
-                <Mail size={12} />
-                <span className="truncate">{msg.subject}</span>
-              </div>
-            </div>
+        <div className="pl-13 sm:pl-[52px] mt-3">
+          {subjectText && (
+            <h3 className="text-sm font-semibold text-gray-900 mb-2">{subjectText}</h3>
           )}
-          <div className="px-4 sm:px-5 pb-2 sm:hidden">
-            <span className="text-xs text-gray-500">{timestamp}</span>
-          </div>
-          <div className="px-4 sm:px-5 py-4 border-t border-gray-100">
-            {sanitizedHtml ? (
-              <div className="bg-white rounded-lg p-4 sm:p-5">
-                <div
-                  className="email-html-content text-sm text-gray-900 leading-relaxed"
-                  style={{ color: '#1a1a1a' }}
-                  dangerouslySetInnerHTML={{ __html: sanitizedHtml }}
-                />
-              </div>
-            ) : msg.content ? (
-              <div className="bg-gray-50 rounded-lg p-4 sm:p-5">
-                <div className="text-sm text-gray-900 whitespace-pre-wrap break-words leading-relaxed">
-                  {msg.content}
-                </div>
-              </div>
-            ) : (
-              <div className="text-sm text-gray-400 italic py-2">(No content)</div>
-            )}
-          </div>
+          {sanitizedHtml ? (
+            <div
+              className="email-html-content text-sm text-gray-700 leading-relaxed"
+              style={{ color: '#374151' }}
+              dangerouslySetInnerHTML={{ __html: sanitizedHtml }}
+            />
+          ) : msg.content ? (
+            <div className="text-sm text-gray-700 whitespace-pre-wrap break-words leading-relaxed">
+              {msg.content}
+            </div>
+          ) : (
+            <div className="text-sm text-gray-400 italic">(No content)</div>
+          )}
           {hasAttachments && (
-            <EmailAttachments attachments={msg.attachments} messageId={msg.id} />
-          )}
-          {isLast && (
-            <div className="px-4 sm:px-5 py-3 border-t border-gray-100 flex items-center gap-2">
-              <button
-                onClick={(e) => { e.stopPropagation(); onReply(); }}
-                className="flex items-center gap-1.5 px-4 py-2 text-sm text-[#1787FE] bg-blue-50 border border-blue-100 rounded-full hover:bg-blue-100 transition"
-              >
-                <Reply size={14} />
-                Reply
-              </button>
+            <div className="mt-3">
+              <EmailAttachments attachments={msg.attachments} messageId={msg.id} />
             </div>
           )}
-        </>
+        </div>
       )}
     </div>
   );
+}
+
+function formatRelative(date) {
+  const then = new Date(date).getTime();
+  const now = Date.now();
+  const diff = Math.max(0, now - then);
+  const sec = Math.floor(diff / 1000);
+  if (sec < 60) return 'just now';
+  const min = Math.floor(sec / 60);
+  if (min < 60) return `${min}m ago`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return `${hr}h ago`;
+  const days = Math.floor(hr / 24);
+  if (days < 30) return `${days} day${days !== 1 ? 's' : ''} ago`;
+  return new Date(date).toLocaleDateString();
 }
 
 // ═══════════════════════════════════════════════════════════════════
