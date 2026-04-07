@@ -41,13 +41,14 @@ router.get('/start', authenticate, (req, res) => {
 
 // Instagram OAuth callback
 router.get('/callback', async (req, res) => {
+  let userId = null;
   try {
     const { code, state } = req.query;
     if (!code || !state) {
       return res.status(400).send('Missing code or state');
     }
 
-    const { userId } = JSON.parse(Buffer.from(state, 'base64url').toString());
+    ({ userId } = JSON.parse(Buffer.from(state, 'base64url').toString()));
     await instagramService.handleCallback(code, userId);
 
     // Initial sync — pull existing Instagram DM conversations
@@ -65,7 +66,15 @@ router.get('/callback', async (req, res) => {
   } catch (err) {
     console.error('Instagram callback error:', err);
     const reason = err.code === 'DUPLICATE_ACCOUNT' ? err.message : 'Connection failed. Please try again.';
-    res.redirect(`${getFrontendUrl()}/connections?error=instagram&reason=${encodeURIComponent(reason)}`);
+    const frontendUrl = getFrontendUrl();
+    let target = '/connections';
+    if (userId) {
+      try {
+        const user = await prisma.user.findUnique({ where: { id: userId }, select: { onboardingStep: true } });
+        if (user && user.onboardingStep < 4) target = '/onboarding';
+      } catch {}
+    }
+    res.redirect(`${frontendUrl}${target}?error=instagram&reason=${encodeURIComponent(reason)}`);
   }
 });
 

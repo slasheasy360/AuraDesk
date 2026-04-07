@@ -53,9 +53,20 @@ router.get('/connect', (req, res) => {
 router.get('/callback', async (req, res) => {
   const frontendUrl = getFrontendUrl();
   let mode = 'login';
+  let connectUserId = null;
 
-  const redirectWithError = (errorCode) => {
-    const target = mode === 'connect' ? `${frontendUrl}/connections` : `${frontendUrl}/login`;
+  const resolveConnectTarget = async () => {
+    if (!connectUserId) return `${frontendUrl}/connections`;
+    try {
+      const u = await prisma.user.findUnique({ where: { id: connectUserId }, select: { onboardingStep: true } });
+      return u && u.onboardingStep < 4 ? `${frontendUrl}/onboarding` : `${frontendUrl}/connections`;
+    } catch {
+      return `${frontendUrl}/connections`;
+    }
+  };
+
+  const redirectWithError = async (errorCode) => {
+    const target = mode === 'connect' ? await resolveConnectTarget() : `${frontendUrl}/login`;
     return res.redirect(`${target}?error=${encodeURIComponent(errorCode)}`);
   };
 
@@ -105,6 +116,7 @@ router.get('/callback', async (req, res) => {
     } else {
       // === CHANNEL CONNECTION FLOW ===
       const { userId } = stateData;
+      connectUserId = userId;
       if (!userId) {
         return redirectWithError('missing_user_id');
       }
@@ -132,9 +144,10 @@ router.get('/callback', async (req, res) => {
   } catch (err) {
     console.error('Gmail callback error:', err);
     if (err.code === 'DUPLICATE_ACCOUNT') {
-      return res.redirect(`${frontendUrl}/connections?error=gmail&reason=${encodeURIComponent(err.message)}`);
+      const target = await resolveConnectTarget();
+      return res.redirect(`${target}?error=gmail&reason=${encodeURIComponent(err.message)}`);
     }
-    redirectWithError('google_auth_failed');
+    await redirectWithError('google_auth_failed');
   }
 });
 

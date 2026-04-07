@@ -103,7 +103,14 @@ function PrimaryButton({ children, ...props }) {
 }
 
 /* ─────────────── STEP 1: CONNECT PLATFORM ─────────────── */
-function PlatformStep({ onNext, successPlatform }) {
+function PlatformStep({ onNext, successPlatform, errorInfo }) {
+  const [errMsg, setErrMsg] = useState(errorInfo?.platform ? errorInfo : null);
+  useEffect(() => {
+    if (errMsg) {
+      const t = setTimeout(() => setErrMsg(null), 6000);
+      return () => clearTimeout(t);
+    }
+  }, [errMsg]);
   const [accounts, setAccounts] = useState([]);
   const [, setLoading] = useState(true);
   const [successMsg, setSuccessMsg] = useState(successPlatform || null);
@@ -220,6 +227,11 @@ function PlatformStep({ onNext, successPlatform }) {
       {successMsg && (
         <div className="mb-4 max-w-md mx-auto bg-green-50 border border-green-200 text-green-700 px-4 py-2 rounded-lg text-sm">
           ✓ {successMsg.charAt(0).toUpperCase() + successMsg.slice(1)} connected successfully!
+        </div>
+      )}
+      {errMsg && (
+        <div className="mb-4 max-w-md mx-auto bg-red-50 border border-red-200 text-red-700 px-4 py-2 rounded-lg text-sm">
+          ✕ {errMsg.platform.charAt(0).toUpperCase() + errMsg.platform.slice(1)} — {errMsg.reason || 'Connection failed.'}
         </div>
       )}
 
@@ -504,13 +516,18 @@ export default function OnboardingPage() {
 
   const successPlatformRef = useRef(searchParams.get('success'));
   const successPlatform = successPlatformRef.current;
+  const errorRef = useRef({
+    platform: searchParams.get('error'),
+    reason: searchParams.get('reason'),
+  });
   useEffect(() => {
     const sp = searchParams.get('success');
-    if (sp) {
-      successPlatformRef.current = sp;
-      setSearchParams({}, { replace: true });
-    }
+    const ep = searchParams.get('error');
+    if (sp) successPlatformRef.current = sp;
+    if (ep) errorRef.current = { platform: ep, reason: searchParams.get('reason') };
+    if (sp || ep) setSearchParams({}, { replace: true });
   }, [searchParams, setSearchParams]);
+  const errorInfo = errorRef.current;
 
   useEffect(() => {
     if (!localStorage.getItem('token')) {
@@ -564,7 +581,7 @@ export default function OnboardingPage() {
 
       <div className="bg-white rounded-2xl shadow-[0_2px_24px_rgba(15,42,99,0.06)] border border-blue-100/60 p-6 sm:p-10 md:p-12 w-full max-w-2xl">
         {step < 2 && <StepIndicator current={step} maxStep={maxStep} onStepClick={goTo} />}
-        {step === 0 && <PlatformStep onNext={() => goTo(1)} successPlatform={successPlatform} />}
+        {step === 0 && <PlatformStep onNext={() => goTo(1)} successPlatform={successPlatform} errorInfo={errorInfo} />}
         {step === 1 && (
           <BrandingStep
             onNext={() => goTo(2)}
