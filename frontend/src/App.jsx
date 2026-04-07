@@ -1,5 +1,6 @@
 import { Routes, Route, Navigate } from 'react-router-dom';
 import { useAuth } from './context/AuthContext.jsx';
+import WelcomePage from './pages/WelcomePage.jsx';
 import LoginPage from './pages/LoginPage.jsx';
 import RegisterPage from './pages/RegisterPage.jsx';
 import OAuthCallbackPage from './pages/OAuthCallbackPage.jsx';
@@ -66,7 +67,7 @@ function FullPageSkeleton() {
 function ProtectedRoute({ children }) {
   const { user, loading } = useAuth();
   if (loading) return <FullPageSkeleton />;
-  if (!user) return <Navigate to="/login" />;
+  if (!user) return <Navigate to="/welcome" />;
 
   const hasActivePlan =
     (user.plan === 'trial' && user.trialEndsAt && new Date(user.trialEndsAt) > new Date()) ||
@@ -94,7 +95,7 @@ function FullPageLoader() {
 function RequireAuth({ children }) {
   const { user, loading } = useAuth();
   if (loading) return <FullPageLoader />;
-  if (!user) return <Navigate to="/login" />;
+  if (!user) return <Navigate to="/welcome" />;
   return children;
 }
 
@@ -105,6 +106,7 @@ export default function App() {
       <Route path="/i/:slug" element={<PublicInvoicePage />} />
       <Route path="/invite/:token" element={<AcceptInvitePage />} />
 
+      <Route path="/welcome" element={<WelcomePage />} />
       <Route path="/login" element={<LoginPage />} />
       <Route path="/register" element={<RegisterPage />} />
       <Route path="/dashboard" element={<OAuthCallbackPage />} />
