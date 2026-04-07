@@ -112,8 +112,8 @@ app.get('/health', async (req, res) => {
     res.json({
       status: 'ok',
       db: 'ok',
-      version: 'cicd-test-1',
-      deployedFrom: 'kundan_dev',
+      version: 'cicd-test-2-https',
+      deployedFrom: 'kundan_dev-via-alb-cloudfront',
       timestamp: new Date().toISOString(),
     });
   } catch (err) {
