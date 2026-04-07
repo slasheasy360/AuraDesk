@@ -7,7 +7,7 @@ import logoUrl from '../assets/logo.svg';
 
 /* ─────────────── BRAND ICONS ─────────────── */
 const InstagramIcon = () => (
-  <svg viewBox="0 0 24 24" className="w-5 h-5">
+  <svg viewBox="0 0 32 32" className="w-7 h-7">
     <defs>
       <radialGradient id="igGrad" cx="30%" cy="107%" r="150%">
         <stop offset="0%" stopColor="#fdf497" />
@@ -17,27 +17,39 @@ const InstagramIcon = () => (
         <stop offset="90%" stopColor="#285AEB" />
       </radialGradient>
     </defs>
-    <rect x="2" y="2" width="20" height="20" rx="6" fill="url(#igGrad)" />
-    <circle cx="12" cy="12" r="4" fill="none" stroke="#fff" strokeWidth="1.8" />
-    <circle cx="17.5" cy="6.5" r="1.2" fill="#fff" />
+    <rect x="2" y="2" width="28" height="28" rx="8" fill="url(#igGrad)" />
+    <rect x="7" y="7" width="18" height="18" rx="5" fill="none" stroke="#fff" strokeWidth="2" />
+    <circle cx="16" cy="16" r="4.5" fill="none" stroke="#fff" strokeWidth="2" />
+    <circle cx="22.5" cy="9.5" r="1.3" fill="#fff" />
   </svg>
 );
 const FacebookIcon = () => (
-  <svg viewBox="0 0 24 24" className="w-5 h-5">
-    <circle cx="12" cy="12" r="11" fill="#1877F2" />
-    <path d="M14.5 12.5h-2V20h-3v-7.5H8V10h1.5V8.5C9.5 6.8 10.3 6 12 6h2.5v2.5h-1.5c-.6 0-.5.3-.5.7V10h2l-.5 2.5z" fill="#fff" />
+  <svg viewBox="0 0 32 32" className="w-7 h-7">
+    <circle cx="16" cy="16" r="15" fill="#1877F2" />
+    <path
+      d="M20 16.5h-3V25h-3.5v-8.5H11V13.5h2.5V11.4c0-2.4 1-3.9 3.9-3.9H20V10.5h-1.5c-1 0-1.1.4-1.1 1.1l0 1.9H20l-.5 3z"
+      fill="#fff"
+    />
   </svg>
 );
 const WhatsAppIcon = () => (
-  <svg viewBox="0 0 24 24" className="w-5 h-5">
-    <circle cx="12" cy="12" r="11" fill="#25D366" />
-    <path d="M16.6 13.9c-.2-.1-1.4-.7-1.6-.8-.2-.1-.4-.1-.5.1-.2.2-.6.8-.7.9-.1.2-.3.2-.5.1-.7-.4-1.4-.8-2-1.5-.4-.5-.8-1.1-.9-1.3-.1-.2 0-.3.1-.4.1-.1.2-.2.3-.4.1-.1.1-.2.2-.4 0-.2 0-.3 0-.4 0-.1-.5-1.3-.7-1.7-.2-.4-.4-.4-.5-.4h-.4c-.2 0-.4 0-.6.3-.2.2-.8.8-.8 1.9 0 1.1.8 2.2 1 2.3.1.2 1.6 2.5 4 3.5 1.4.6 1.9.6 2.6.5.4-.1 1.4-.6 1.6-1.1.2-.5.2-1 .1-1.1 0-.1-.2-.2-.4-.3z" fill="#fff" />
+  <svg viewBox="0 0 32 32" className="w-7 h-7">
+    <circle cx="16" cy="16" r="15" fill="#25D366" />
+    <path
+      d="M22.5 18.6c-.3-.2-1.9-.9-2.2-1-.3-.1-.5-.2-.7.2-.2.3-.8 1-1 1.2-.2.2-.4.2-.7 0-.3-.2-1.3-.5-2.5-1.5-.9-.8-1.5-1.8-1.7-2.1-.2-.3 0-.5.1-.7.1-.1.3-.4.5-.5.2-.2.2-.3.3-.5.1-.2 0-.4 0-.5-.1-.2-.7-1.7-1-2.3-.3-.6-.5-.5-.7-.5h-.6c-.2 0-.6.1-.9.4-.3.3-1.1 1.1-1.1 2.7 0 1.6 1.2 3.1 1.3 3.3.2.2 2.3 3.5 5.5 4.9 3.2 1.4 3.2.9 3.8.9.6-.1 1.9-.8 2.2-1.5.3-.7.3-1.4.2-1.5-.1-.1-.3-.2-.6-.4z"
+      fill="#fff"
+    />
   </svg>
 );
 const GmailIcon = () => (
-  <svg viewBox="0 0 24 24" className="w-5 h-5">
-    <circle cx="12" cy="12" r="11" fill="#fff" stroke="#e5e7eb" strokeWidth="0.5" />
-    <path d="M21 8.5c0-.5-.4-.9-.9-.9-.2 0-.4.1-.5.2L12 12.6 4.4 7.8c-.2-.1-.3-.2-.5-.2-.5 0-.9.4-.9.9v7c0 .5.4.9.9.9h2.4V11l5.7 3.6L17.7 11v5.4h2.4c.5 0 .9-.4.9-.9v-7z" fill="#EA4335" />
+  <svg viewBox="0 0 32 32" className="w-7 h-7">
+    <circle cx="16" cy="16" r="15" fill="#fff" stroke="#e5e7eb" strokeWidth="0.8" />
+    <g transform="translate(7 10)">
+      <path d="M0 1.2C0 .54.54 0 1.2 0H2v10H1.2C.54 10 0 9.46 0 8.8z" fill="#4285F4" />
+      <path d="M18 1.2C18 .54 17.46 0 16.8 0H16v10h.8c.66 0 1.2-.54 1.2-1.2z" fill="#34A853" />
+      <path d="M2 0v10h2V4l5 4 5-4v6h2V0L9 6z" fill="#EA4335" />
+      <path d="M2 0l7 6 7-6h-2L9 4 4 0z" fill="#FBBC04" />
+    </g>
   </svg>
 );
 
