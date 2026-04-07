@@ -190,29 +190,24 @@ function PlatformStep({ onNext, successPlatform }) {
           const account = accountFor(p.id);
           if (account) {
             return (
-              <div key={p.id} className="flex items-center gap-3">
-                <div className="flex-1 flex items-center justify-between bg-[#EAF2FF] rounded-full px-5 py-3">
-                  <div className="flex items-center gap-3">
-                    {ICONS[p.id]}
-                    <span className="font-medium text-sm text-gray-800">{p.name}</span>
-                  </div>
-                  <Check size={18} className="text-green-500" />
+              <div
+                key={p.id}
+                className="w-full flex items-center justify-between bg-green-50 border border-green-200 rounded-full px-5 py-3 transition-all duration-300"
+              >
+                <div className="flex items-center gap-3">
+                  {ICONS[p.id]}
+                  <span className="font-medium text-sm text-gray-800">{p.name}</span>
                 </div>
-                <div className="flex-1 flex items-center justify-between bg-[#EAF2FF] rounded-full px-3 py-2">
-                  <div className="flex items-center gap-2 min-w-0">
-                    <div className="w-7 h-7 rounded-full bg-gradient-to-br from-orange-300 to-pink-400 flex-shrink-0 overflow-hidden">
-                      {account.avatarUrl && <img src={account.avatarUrl} alt="" className="w-full h-full object-cover" />}
-                    </div>
-                    <div className="text-left min-w-0">
-                      <div className="text-[13px] font-medium text-gray-800 truncate">{account.displayName || account.platformAccountId || 'account'}</div>
-                      <button
-                        onClick={() => handleDisconnect(account.id)}
-                        className="text-[11px] text-red-500 hover:text-red-600 leading-none"
-                      >
-                        Remove
-                      </button>
-                    </div>
-                  </div>
+                <div className="flex items-center gap-3">
+                  <span className="flex items-center gap-1 text-green-600 text-xs font-semibold">
+                    <Check size={14} /> Connected
+                  </span>
+                  <button
+                    onClick={() => handleDisconnect(account.id)}
+                    className="text-xs font-semibold text-red-500 hover:text-red-600 transition"
+                  >
+                    Disconnect
+                  </button>
                 </div>
               </div>
             );
@@ -221,7 +216,7 @@ function PlatformStep({ onNext, successPlatform }) {
             <button
               key={p.id}
               onClick={() => handleConnect(p.id)}
-              className="w-full flex items-center justify-between bg-[#EAF2FF] hover:bg-[#dbe8ff] rounded-full px-5 py-3 transition"
+              className="w-full flex items-center justify-between bg-[#EAF2FF] hover:bg-[#dbe8ff] rounded-full px-5 py-3 transition-all duration-300"
             >
               <div className="flex items-center gap-3">
                 {ICONS[p.id]}
@@ -233,17 +228,7 @@ function PlatformStep({ onNext, successPlatform }) {
         })}
       </div>
 
-      <div className="flex items-center justify-center gap-3 mt-6">
-        <button
-          onClick={fetchAccounts}
-          disabled={loading}
-          className="text-gray-400 hover:text-gray-600 text-xs flex items-center gap-1"
-        >
-          <RefreshCw size={12} className={loading ? 'animate-spin' : ''} /> Refresh status
-        </button>
-      </div>
-
-      <div className="mt-6 flex justify-center">
+      <div className="mt-8 flex justify-center">
         <PrimaryButton onClick={onNext}>CONTINUE</PrimaryButton>
       </div>
     </div>
@@ -539,7 +524,7 @@ export default function OnboardingPage() {
   };
 
   return (
-    <div className="min-h-screen bg-[#f4f7fb] flex flex-col items-center justify-center px-4 py-8">
+    <div className="relative min-h-screen bg-[#f4f7fb] flex flex-col items-center justify-center px-4 py-8">
       <div className="mb-6 flex items-center gap-2">
         <img src={logoUrl} alt="AuraDesk" className="h-7 w-auto" />
         <span className="text-[18px] font-bold text-gray-800">AuraDesk</span>
@@ -558,12 +543,8 @@ export default function OnboardingPage() {
         {step === 2 && <SuccessScreen onFinish={handleFinish} />}
       </div>
 
-      <footer className="mt-6 w-full max-w-2xl flex items-center justify-between text-[11px] text-gray-400 px-2">
-        <span>Copyright 2021 - 2025 AuraDesk Inc. All Rights Reserved.</span>
-        <span className="cursor-pointer hover:text-gray-600 flex items-center gap-1">
-          <span className="w-4 h-4 rounded-full border border-gray-300 inline-flex items-center justify-center text-[9px]">i</span>
-          Need help?
-        </span>
+      <footer className="absolute left-6 bottom-4 text-[11px] text-gray-400">
+        Copyright 2021 - 2025 AuraDesk Inc. All Rights Reserved.
       </footer>
     </div>
   );
