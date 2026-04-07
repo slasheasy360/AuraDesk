@@ -3,6 +3,7 @@ import { Outlet, NavLink, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext.jsx';
 import { connectSocket, disconnectSocket } from '../services/socket.js';
 import { LayoutDashboard, Inbox, Users, FileText, Brain, LogOut, Menu, X, ChevronRight } from 'lucide-react';
+import logoUrl from '../assets/logo.svg';
 
 export default function DashboardLayout() {
   const { user, logout } = useAuth();
@@ -61,9 +62,7 @@ export default function DashboardLayout() {
         {/* Logo + close button */}
         <div className="px-5 py-5 border-b border-white/10 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="w-9 h-9 flex items-center justify-center">
-              <div className="w-0 h-0 border-l-[10px] border-l-transparent border-r-[10px] border-r-transparent border-b-[16px] border-b-[#1787FE]" />
-            </div>
+            <img src={logoUrl} alt="AuraDesk" className="h-8 w-auto" />
             <span className="text-xl font-bold">AuraDesk</span>
           </div>
           <button
@@ -147,7 +146,7 @@ export default function DashboardLayout() {
             <Menu size={24} />
           </button>
           <div className="flex items-center gap-2">
-            <div className="w-0 h-0 border-l-[8px] border-l-transparent border-r-[8px] border-r-transparent border-b-[13px] border-b-[#1787FE]" />
+            <img src={logoUrl} alt="AuraDesk" className="h-6 w-auto" />
             <span className="font-semibold text-white">AuraDesk</span>
           </div>
         </div>

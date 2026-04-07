@@ -1284,9 +1284,9 @@ export default function InboxPage() {
       </div>
 
       {/* Inbox card */}
-      <div className="flex flex-1 min-h-0 bg-[#0F1D33] rounded-2xl border border-white/5 overflow-hidden">
+      <div className="flex flex-1 min-h-0 bg-white rounded-2xl border border-gray-200 overflow-hidden shadow-xl">
       {/* Filter Panel */}
-      <div className="hidden md:flex w-[260px] flex-shrink-0 flex-col border-r border-white/5">
+      <div className="hidden md:flex w-[260px] flex-shrink-0 flex-col border-r border-gray-100">
         <FilterPanel
           activeFilter={activeFilter}
           setActiveFilter={setActiveFilter}
@@ -1301,17 +1301,17 @@ export default function InboxPage() {
       {/* Main content */}
       <div className="flex-1 flex flex-col min-w-0">
         {/* Toolbar row */}
-        <div className="flex items-center gap-3 px-4 sm:px-6 py-3 border-b border-white/5">
+        <div className="flex items-center gap-3 px-4 sm:px-6 py-3 border-b border-gray-100">
           <input
             type="checkbox"
             checked={selectedMessages.size > 0 && selectedMessages.size === paginatedConversations.length}
             onChange={toggleSelectAll}
-            className="w-4 h-4 rounded border-gray-600 bg-transparent text-primary-500 focus:ring-primary-500 focus:ring-offset-0 cursor-pointer"
+            className="w-4 h-4 rounded border-gray-300 bg-white text-[#1787FE] focus:ring-[#1787FE] focus:ring-offset-0 cursor-pointer"
           />
-          <button onClick={() => fetchConversations()} className="p-1.5 text-white/50 hover:text-white transition rounded" title="Refresh">
+          <button onClick={() => fetchConversations()} className="p-1.5 text-gray-500 hover:text-gray-700 transition rounded" title="Refresh">
             <RotateCw size={16} />
           </button>
-          <button className="p-1.5 text-[#1787FE] hover:text-white transition rounded" title="AI">
+          <button className="p-1.5 text-[#1787FE] hover:text-[#1377e0] transition rounded" title="AI">
             <Sparkles size={16} />
           </button>
         </div>
@@ -1322,9 +1322,9 @@ export default function InboxPage() {
             <InboxListSkeleton />
           ) : filteredConversations.length === 0 && !loadingConversations ? (
             <div className="flex flex-col items-center justify-center h-full text-gray-500 px-6">
-              <MessageSquare size={48} className="mb-3 text-gray-600" />
-              <p className="text-sm font-medium text-gray-400">No conversations found</p>
-              <p className="text-xs mt-1 text-gray-600">Connect an account or adjust your filters</p>
+              <MessageSquare size={48} className="mb-3 text-gray-300" />
+              <p className="text-sm font-medium text-gray-600">No conversations found</p>
+              <p className="text-xs mt-1 text-gray-400">Connect an account or adjust your filters</p>
             </div>
           ) : (
             paginatedConversations.map((conv, rowIdx) => {
@@ -1342,8 +1342,8 @@ export default function InboxPage() {
                 <button
                   key={conv.id}
                   onClick={() => handleSelectConversation(conv.id)}
-                  className={`w-full px-4 sm:px-6 py-3.5 flex items-center gap-3 border-b border-white/[0.03] transition text-left group hover:bg-white/[0.04] ${
-                    rowIdx % 2 === 0 ? 'bg-[#0F1D33]' : 'bg-[#13233E]'
+                  className={`w-full px-4 sm:px-6 py-3.5 flex items-center gap-3 border-b border-gray-100 transition text-left group hover:bg-blue-50 ${
+                    rowIdx % 2 === 0 ? 'bg-white' : 'bg-[#F5F8FF]'
                   } ${isUnread ? 'font-medium' : ''}`}
                 >
                   {/* Checkbox */}
@@ -1352,19 +1352,19 @@ export default function InboxPage() {
                     checked={isSelected}
                     onChange={(e) => toggleSelectMessage(conv.id, e)}
                     onClick={(e) => e.stopPropagation()}
-                    className="w-4 h-4 rounded border-gray-600 bg-transparent text-primary-500 focus:ring-primary-500 focus:ring-offset-0 cursor-pointer flex-shrink-0"
+                    className="w-4 h-4 rounded border-gray-300 bg-white text-[#1787FE] focus:ring-[#1787FE] focus:ring-offset-0 cursor-pointer flex-shrink-0"
                   />
 
                   {/* Star */}
                   <button
                     onClick={(e) => toggleStar(conv.id, e)}
-                    className={`flex-shrink-0 transition ${isStarred ? 'text-yellow-400' : 'text-gray-600 hover:text-yellow-400'}`}
+                    className={`flex-shrink-0 transition ${isStarred ? 'text-yellow-400' : 'text-gray-300 hover:text-yellow-400'}`}
                   >
                     <Star size={16} fill={isStarred ? 'currentColor' : 'none'} />
                   </button>
 
                   {/* Sender name */}
-                  <span className={`w-36 truncate text-sm flex-shrink-0 ${isUnread ? 'font-semibold text-white' : 'text-gray-300'}`}>
+                  <span className={`w-36 truncate text-sm flex-shrink-0 ${isUnread ? 'font-semibold text-gray-900' : 'text-gray-700'}`}>
                     {getContactDisplayName(conv.contact, convPlatform)}
                   </span>
 
@@ -1374,17 +1374,17 @@ export default function InboxPage() {
                   </span>
 
                   {/* Message preview */}
-                  <span className={`flex-1 truncate text-sm ${isUnread ? 'text-gray-200' : 'text-gray-500'}`}>
+                  <span className={`flex-1 truncate text-sm ${isUnread ? 'text-gray-800' : 'text-gray-500'}`}>
                     {preview}
                   </span>
 
                   {/* Draft indicator */}
                   {conv.hasDraft && !isBinView && (
-                    <span className="text-xs text-orange-400 flex-shrink-0">Draft</span>
+                    <span className="text-xs text-orange-500 flex-shrink-0">Draft</span>
                   )}
 
                   {/* Timestamp */}
-                  <span className="text-xs text-gray-500 flex-shrink-0 ml-2">
+                  <span className="text-xs text-gray-400 flex-shrink-0 ml-2">
                     {formatTimeShort(conv.lastMessageAt)}
                   </span>
 
@@ -1393,14 +1393,14 @@ export default function InboxPage() {
                     <div className="flex items-center gap-1 ml-2 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0">
                       <button
                         onClick={(e) => restoreConversation(conv.id, e)}
-                        className="p-1 text-gray-500 hover:text-green-400 transition rounded"
+                        className="p-1 text-gray-400 hover:text-green-600 transition rounded"
                         title="Restore"
                       >
                         <Undo2 size={14} />
                       </button>
                       <button
                         onClick={(e) => permanentDeleteConversation(conv.id, e)}
-                        className="p-1 text-gray-500 hover:text-red-400 transition rounded"
+                        className="p-1 text-gray-400 hover:text-red-600 transition rounded"
                         title="Delete permanently"
                       >
                         <Trash2 size={14} />
@@ -1410,14 +1410,14 @@ export default function InboxPage() {
                     <div className="flex items-center gap-1 ml-2 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0">
                       <button
                         onClick={(e) => toggleLead(conv.id, e)}
-                        className={`p-1 transition rounded ${conv.isLead ? 'text-primary-400 hover:text-primary-300' : 'text-gray-500 hover:text-primary-400'}`}
+                        className={`p-1 transition rounded ${conv.isLead ? 'text-[#1787FE] hover:text-[#1377e0]' : 'text-gray-400 hover:text-[#1787FE]'}`}
                         title={conv.isLead ? 'Remove from Leads' : 'Mark as Lead'}
                       >
                         <Users size={14} />
                       </button>
                       <button
                         onClick={(e) => deleteConversation(conv.id, e)}
-                        className="p-1 text-gray-500 hover:text-red-400 transition rounded"
+                        className="p-1 text-gray-400 hover:text-red-600 transition rounded"
                         title="Move to Bin"
                       >
                         <Trash2 size={14} />
@@ -1432,7 +1432,7 @@ export default function InboxPage() {
 
         {/* Pagination */}
         {filteredConversations.length > 0 && (
-          <div className="flex items-center justify-between px-4 sm:px-6 py-3 border-t border-white/10 text-sm text-gray-400">
+          <div className="flex items-center justify-between px-4 sm:px-6 py-3 border-t border-gray-100 text-sm text-gray-500">
             <span>
               Showing {Math.min((currentPage - 1) * ITEMS_PER_PAGE + 1, filteredConversations.length)}-{Math.min(currentPage * ITEMS_PER_PAGE, filteredConversations.length)} of {filteredConversations.length.toLocaleString()}
             </span>
@@ -1440,14 +1440,14 @@ export default function InboxPage() {
               <button
                 onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
                 disabled={currentPage === 1}
-                className="p-1.5 rounded-lg border border-white/10 text-gray-400 hover:text-white hover:bg-white/5 transition disabled:opacity-30 disabled:cursor-not-allowed"
+                className="p-1.5 rounded-lg border border-gray-200 text-gray-500 hover:text-gray-700 hover:bg-gray-50 transition disabled:opacity-30 disabled:cursor-not-allowed"
               >
                 <ChevronLeft size={16} />
               </button>
               <button
                 onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
                 disabled={currentPage === totalPages}
-                className="p-1.5 rounded-lg border border-white/10 text-gray-400 hover:text-white hover:bg-white/5 transition disabled:opacity-30 disabled:cursor-not-allowed"
+                className="p-1.5 rounded-lg border border-gray-200 text-gray-500 hover:text-gray-700 hover:bg-gray-50 transition disabled:opacity-30 disabled:cursor-not-allowed"
               >
                 <ChevronRight size={16} />
               </button>
@@ -1479,16 +1479,16 @@ function FilterPanel({ activeFilter, setActiveFilter, filterCounts, sourceFilter
               className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-sm transition ${
                 isActive
                   ? 'bg-[#1787FE] text-white shadow-lg shadow-[#1787FE]/20'
-                  : 'text-white/60 hover:bg-white/5 hover:text-white'
+                  : 'text-gray-700 hover:bg-gray-100 hover:text-gray-900'
               }`}
             >
               <div className="flex items-center gap-3">
-                <Icon size={18} className={isActive ? 'text-white' : 'text-white/50'} />
+                <Icon size={18} className={isActive ? 'text-white' : 'text-gray-400'} />
                 <span className={isActive ? 'font-semibold' : ''}>{label}</span>
               </div>
               {count > 0 && (
                 <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${
-                  isActive ? 'bg-white/20 text-white' : 'text-white/50'
+                  isActive ? 'bg-white/25 text-white' : 'text-gray-400'
                 }`}>
                   {count}
                 </span>
@@ -1512,17 +1512,19 @@ function FilterPanel({ activeFilter, setActiveFilter, filterCounts, sourceFilter
                   onClick={() => toggleSourceFilter(key)}
                   className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-sm transition ${
                     isActive
-                      ? 'bg-white/5 text-white'
-                      : 'text-white/60 hover:bg-white/5 hover:text-white'
+                      ? 'bg-blue-50 text-gray-900'
+                      : 'text-gray-700 hover:bg-gray-50 hover:text-gray-900'
                   }`}
                 >
                   <div className="flex items-center gap-3">
-                    <span className={`w-4 h-4 rounded flex-shrink-0 flex items-center justify-center ${
-                      key === 'instagram' ? 'bg-orange-500' :
-                      key === 'facebook' ? 'bg-blue-500' :
-                      key === 'whatsapp' ? 'bg-green-500' :
-                      key === 'gmail' ? 'bg-red-500' :
-                      key === 'linkedin' ? 'bg-sky-500' : 'bg-gray-500'
+                    <span className={`w-4 h-4 rounded flex-shrink-0 flex items-center justify-center border ${
+                      isActive
+                        ? key === 'instagram' ? 'bg-orange-500 border-orange-500' :
+                          key === 'facebook' ? 'bg-blue-500 border-blue-500' :
+                          key === 'whatsapp' ? 'bg-green-500 border-green-500' :
+                          key === 'gmail' ? 'bg-red-500 border-red-500' :
+                          key === 'linkedin' ? 'bg-sky-500 border-sky-500' : 'bg-gray-500 border-gray-500'
+                        : 'bg-white border-gray-300'
                     }`}>
                       {isActive && <span className="text-white text-[10px] leading-none">✓</span>}
                     </span>
@@ -1530,7 +1532,7 @@ function FilterPanel({ activeFilter, setActiveFilter, filterCounts, sourceFilter
                   </div>
                   {count > 0 && (
                     <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${
-                      isActive ? 'bg-primary-500/20 text-primary-300' : 'text-gray-500'
+                      isActive ? 'bg-blue-100 text-blue-700' : 'text-gray-400'
                     }`}>
                       {count}
                     </span>
@@ -1544,7 +1546,7 @@ function FilterPanel({ activeFilter, setActiveFilter, filterCounts, sourceFilter
 
       {/* Connect account link */}
       <div className="mt-4 px-6">
-        <a href="/connections" className="flex items-center gap-2 text-sm text-gray-500 hover:text-primary-400 transition">
+        <a href="/connections" className="flex items-center gap-2 text-sm text-gray-500 hover:text-[#1787FE] transition">
           <span className="text-lg leading-none">+</span>
           Connect account
         </a>
@@ -2208,12 +2210,12 @@ function getPlatformTheme(platform) {
 
 function getPlatformBadgeStyle(platform) {
   switch (platform) {
-    case 'instagram': return 'bg-orange-400/15 text-orange-300 border border-orange-400/30';
-    case 'facebook': return 'bg-blue-400/15 text-blue-300 border border-blue-400/30';
-    case 'gmail': return 'bg-pink-400/15 text-pink-300 border border-pink-400/30';
-    case 'whatsapp': return 'bg-green-400/15 text-green-300 border border-green-400/30';
-    case 'linkedin': return 'bg-pink-400/15 text-pink-300 border border-pink-400/30';
-    default: return 'bg-white/10 text-white/60 border border-white/10';
+    case 'instagram': return 'bg-emerald-100 text-emerald-700 border border-emerald-200';
+    case 'facebook': return 'bg-blue-100 text-blue-700 border border-blue-200';
+    case 'gmail': return 'bg-pink-100 text-pink-700 border border-pink-200';
+    case 'whatsapp': return 'bg-green-100 text-green-700 border border-green-200';
+    case 'linkedin': return 'bg-rose-100 text-rose-700 border border-rose-200';
+    default: return 'bg-gray-100 text-gray-600 border border-gray-200';
   }
 }
 
