@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext.jsx';
 import api from '../services/api.js';
-import { Check, Upload, ChevronRight, X, RefreshCw, Plus } from 'lucide-react';
+import { Check, ChevronRight, RefreshCw, Plus } from 'lucide-react';
 import logoUrl from '../assets/logo.svg';
 
 /* ─────────────── BRAND ICONS ─────────────── */
@@ -93,9 +93,17 @@ function PrimaryButton({ children, ...props }) {
 /* ─────────────── STEP 1: CONNECT PLATFORM ─────────────── */
 function PlatformStep({ onNext, successPlatform }) {
   const [accounts, setAccounts] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const [, setLoading] = useState(true);
   const [successMsg, setSuccessMsg] = useState(successPlatform || null);
+  const [connected, setConnected] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('connectedPlatforms')) || {}; }
+    catch { return {}; }
+  });
   const pollRef = useRef(null);
+
+  useEffect(() => {
+    localStorage.setItem('connectedPlatforms', JSON.stringify(connected));
+  }, [connected]);
 
   const platforms = [
     { id: 'instagram', name: 'Instagram' },
@@ -107,8 +115,17 @@ function PlatformStep({ onNext, successPlatform }) {
   const fetchAccounts = useCallback(() => {
     setLoading(true);
     return api.get('/api/accounts').then((res) => {
-      setAccounts(res.data.accounts || []);
-      return res.data.accounts || [];
+      const list = res.data.accounts || [];
+      setAccounts(list);
+      // Sync localStorage map with backend truth
+      setConnected((prev) => {
+        const next = { ...prev };
+        ['instagram', 'facebook', 'whatsapp', 'gmail'].forEach((id) => {
+          next[id] = list.some((a) => a.platform === id && a.status === 'active');
+        });
+        return next;
+      });
+      return list;
     }).catch(() => []).finally(() => setLoading(false));
   }, []);
 
@@ -116,12 +133,14 @@ function PlatformStep({ onNext, successPlatform }) {
 
   useEffect(() => {
     if (!successPlatform) return;
+    // Optimistically mark connected so UI updates immediately
+    setConnected((prev) => ({ ...prev, [successPlatform]: true }));
     let attempts = 0;
     const poll = async () => {
       attempts++;
       const accts = await fetchAccounts();
       const found = accts.some((a) => a.platform === successPlatform && a.status === 'active');
-      if (found || attempts >= 8) {
+      if (found || attempts >= 15) {
         clearInterval(pollRef.current);
         pollRef.current = null;
       }
@@ -163,16 +182,23 @@ function PlatformStep({ onNext, successPlatform }) {
     }
   };
 
-  const handleDisconnect = async (id) => {
+  const handleDisconnect = async (platformId) => {
+    const account = accounts.find((a) => a.platform === platformId && a.status === 'active');
+    // Optimistically clear UI
+    setConnected((prev) => ({ ...prev, [platformId]: false }));
+    if (!account) return;
     try {
-      await api.delete(`/api/accounts/${id}`);
+      await api.delete(`/api/accounts/${account.id}`);
       fetchAccounts();
     } catch (err) {
       console.error('Disconnect failed:', err);
+      // Roll back on error
+      setConnected((prev) => ({ ...prev, [platformId]: true }));
     }
   };
 
-  const accountFor = (id) => accounts.find((a) => a.platform === id && a.status === 'active');
+  const isConnected = (id) =>
+    connected[id] || accounts.some((a) => a.platform === id && a.status === 'active');
 
   return (
     <div className="text-center">
@@ -187,28 +213,22 @@ function PlatformStep({ onNext, successPlatform }) {
 
       <div className="space-y-3 max-w-md mx-auto">
         {platforms.map((p) => {
-          const account = accountFor(p.id);
-          if (account) {
+          if (isConnected(p.id)) {
             return (
               <div
                 key={p.id}
-                className="w-full flex items-center justify-between bg-green-50 border border-green-200 rounded-full px-5 py-3 transition-all duration-300"
+                className="w-full flex items-center justify-between bg-green-50 border border-green-300 rounded-full px-5 py-3 transition-all duration-300"
               >
                 <div className="flex items-center gap-3">
                   {ICONS[p.id]}
                   <span className="font-medium text-sm text-gray-800">{p.name}</span>
                 </div>
-                <div className="flex items-center gap-3">
-                  <span className="flex items-center gap-1 text-green-600 text-xs font-semibold">
-                    <Check size={14} /> Connected
-                  </span>
-                  <button
-                    onClick={() => handleDisconnect(account.id)}
-                    className="text-xs font-semibold text-red-500 hover:text-red-600 transition"
-                  >
-                    Disconnect
-                  </button>
-                </div>
+                <button
+                  onClick={() => handleDisconnect(p.id)}
+                  className="text-xs font-semibold text-red-500 hover:text-red-600 transition"
+                >
+                  Disconnect
+                </button>
               </div>
             );
           }
@@ -527,7 +547,7 @@ export default function OnboardingPage() {
     <div className="relative min-h-screen bg-[#f4f7fb] flex flex-col items-center justify-center px-4 py-8">
       <div className="mb-6 flex items-center gap-2">
         <img src={logoUrl} alt="AuraDesk" className="h-7 w-auto" />
-        <span className="text-[18px] font-bold text-gray-800">AuraDesk</span>
+        <span className="text-[18px] font-bold text-blue-600">AuraDesk</span>
       </div>
 
       <div className="bg-white rounded-2xl shadow-[0_2px_24px_rgba(15,42,99,0.06)] border border-blue-100/60 p-6 sm:p-10 md:p-12 w-full max-w-2xl">
