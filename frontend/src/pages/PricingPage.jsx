@@ -83,7 +83,7 @@ function PlanCard({ plan, cycle, loading, disabled, onChoose }) {
     // `min-h` enforces taller cards across all tiers; `h-full` then lets the
     // grid stretch the shorter ones to match the tallest. Combined, these
     // give every card the same generous height regardless of feature count.
-    <div className="relative pr-3 pb-12 h-full min-h-[440px]">
+    <div className="relative pr-3 pb-12 h-full min-h-[480px] group/card">
       {/* Stack/back card — extends right + below the white card for the 3D effect */}
       <div
         aria-hidden="true"
@@ -117,22 +117,27 @@ function PlanCard({ plan, cycle, loading, disabled, onChoose }) {
         </div>
       </div>
 
-      {/* CHOOSE PLAN bar — sits on the back card, anchored to the bottom of the grid cell */}
+      {/* CHOOSE PLAN bar — anchored to the bottom of the grid cell.
+          Default state: no button background, the colored back panel shows
+          through directly so it reads as plain text. On hover, a gradient
+          overlay fades in to give it the full button treatment.
+          The hover overlay is a sibling absolute layer so the background
+          can transition smoothly via opacity (CSS doesn't transition
+          background-image gradients reliably). */}
       <button
         type="button"
         onClick={() => onChoose(plan.id)}
         disabled={loading || disabled}
-        className="absolute left-3 right-0 bottom-0 px-6 py-3.5 text-white text-[11px] font-bold tracking-[0.18em] flex items-center justify-between transition disabled:opacity-60 disabled:cursor-not-allowed rounded-b-md"
-        style={{ background: plan.btnGradient }}
-        onMouseEnter={(e) => {
-          if (!loading && !disabled) e.currentTarget.style.background = plan.btnGradientHover;
-        }}
-        onMouseLeave={(e) => {
-          e.currentTarget.style.background = plan.btnGradient;
-        }}
+        className="absolute left-3 right-0 bottom-0 px-6 py-3.5 text-white text-[11px] font-bold tracking-[0.18em] flex items-center justify-between transition disabled:opacity-60 disabled:cursor-not-allowed rounded-b-md overflow-hidden"
       >
-        <span>{loading ? 'REDIRECTING…' : 'CHOOSE PLAN'}</span>
-        <ChevronRight size={16} strokeWidth={2.5} />
+        {/* Hover-only gradient overlay */}
+        <span
+          aria-hidden="true"
+          className="absolute inset-0 opacity-0 group-hover/card:opacity-100 transition-opacity duration-200 ease-out rounded-b-md"
+          style={{ background: plan.btnGradientHover }}
+        />
+        <span className="relative z-10">{loading ? 'REDIRECTING…' : 'CHOOSE PLAN'}</span>
+        <ChevronRight size={16} strokeWidth={2.5} className="relative z-10" />
       </button>
     </div>
   );
@@ -293,26 +298,28 @@ export default function PricingPage() {
 
   return (
     <div
-      className="min-h-screen w-full flex items-start justify-center px-4 sm:px-8 py-6 sm:py-8"
+      className="min-h-screen w-full flex flex-col px-5 sm:px-8 lg:px-12 py-5 sm:py-6"
       style={{
         background: 'linear-gradient(180deg, #d6e4ff 0%, #e7eeff 40%, #f1f5ff 100%)',
       }}
     >
-      {/* No inner wrapper card — heading and pricing grid sit directly on
-          the page background to match the reference layout. */}
-      <div className="w-full max-w-[1140px]">
-        {/* Top: return-to-login link */}
-        <button
-          type="button"
-          onClick={handleReturnToLogin}
-          className="flex items-center gap-1 text-[12px] text-gray-500 hover:text-gray-800 transition"
-        >
-          <ChevronLeft size={15} />
-          <span>Return to Log in</span>
-        </button>
+      {/* Top bar — full page width so the link sits at the LEFT page edge,
+          not centered with the cards. */}
+      <button
+        type="button"
+        onClick={handleReturnToLogin}
+        className="flex items-center gap-1 text-[12px] text-gray-500 hover:text-gray-800 transition self-start"
+      >
+        <ChevronLeft size={15} />
+        <span>Return to Log in</span>
+      </button>
 
+      {/* Centered card section — heading, toggle, cards live inside the
+          max-w container so they stay nicely aligned in the middle of the
+          viewport while the top/bottom rails sit at the page edges. */}
+      <div className="w-full max-w-[1140px] mx-auto mt-4 flex-1">
         {/* Header row: title/subtitle on the left, cycle toggle on the right */}
-        <div className="mt-3 flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
+        <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
           <div>
             <h1 className="text-[22px] sm:text-[26px] font-extrabold text-[#0B1E3F] leading-tight tracking-tight">
               {heading}
@@ -356,11 +363,12 @@ export default function PricingPage() {
             />
           ))}
         </div>
+      </div>
 
-        {/* Footer row: copyright only */}
-        <div className="mt-5 text-[11px] text-gray-400">
-          <span>Copyright 2021 - 2025 AuraDesk Inc. All Rights Reserved.</span>
-        </div>
+      {/* Footer — full page width, copyright pinned to the LEFT page edge,
+          aligned consistently with the Return-to-Log-in link above. */}
+      <div className="mt-6 text-[11px] text-gray-400 self-start">
+        <span>Copyright 2021 - 2025 AuraDesk Inc. All Rights Reserved.</span>
       </div>
     </div>
   );
