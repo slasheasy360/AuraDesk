@@ -20,6 +20,7 @@ import metaWebhook from './webhooks/meta.js';
 import gmailWebhook from './webhooks/gmail.js';
 import { renewExpiringWatches, reRegisterAllWatches } from './services/gmail.js';
 import prisma from './utils/prisma.js';
+import { sendEmail } from './utils/email.js';
 
 const app = express();
 const server = http.createServer(app);
@@ -112,12 +113,31 @@ app.get('/health', async (req, res) => {
     res.json({
       status: 'ok',
       db: 'ok',
-      version: 'cicd-test-2-https',
-      deployedFrom: 'kundan_dev-via-alb-cloudfront',
+      version: 'ses-integration-1',
+      deployedFrom: 'kundan_dev-ses',
       timestamp: new Date().toISOString(),
     });
   } catch (err) {
     res.status(503).json({ status: 'degraded', db: 'error', timestamp: new Date().toISOString() });
+  }
+});
+
+// TEMPORARY: SES integration test endpoint. Remove after verification.
+// Protected by a shared secret to prevent abuse.
+app.post('/dev/test-email', async (req, res) => {
+  if (req.headers['x-test-secret'] !== process.env.JWT_SECRET) {
+    return res.status(403).json({ error: 'forbidden' });
+  }
+  try {
+    const result = await sendEmail({
+      to: req.body?.to || process.env.SES_FROM_EMAIL,
+      subject: 'AuraDesk SES Test Email',
+      html: '<h1>Hello from AuraDesk</h1><p>If you can read this, AWS SES integration is working.</p><p>Sent at: ' + new Date().toISOString() + '</p>',
+    });
+    res.json({ ok: true, messageId: result.messageId });
+  } catch (err) {
+    console.error('[/dev/test-email] failed:', err);
+    res.status(500).json({ ok: false, error: err.message, name: err.name });
   }
 });
 
