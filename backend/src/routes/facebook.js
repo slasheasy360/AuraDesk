@@ -23,7 +23,8 @@ router.get('/', authenticate, (req, res) => {
 // Start Facebook OAuth for page connection (authenticated)
 router.get('/start', authenticate, async (req, res) => {
   try {
-    const state = facebookService.encodeConnectState(req.user.id);
+    const popup = String(req.query.popup || '') === '1';
+    const state = facebookService.encodeConnectState(req.user.id, { popup });
     const url = facebookService.getLoginUrl(state);
     console.log('[Facebook OAuth] /start — generated OAuth URL', {
       userId: req.user.id,
@@ -39,6 +40,21 @@ router.get('/start', authenticate, async (req, res) => {
 // Facebook OAuth callback — Facebook redirects here after user approves
 router.get('/callback', async (req, res) => {
   const frontendUrl = getFrontendUrl();
+  const sendPopupResponse = (payload) => {
+    const json = JSON.stringify(payload);
+    const html = `<!doctype html><html><head><meta charset="utf-8"/></head><body>
+      <script>
+        try {
+          if (window.opener) {
+            window.opener.postMessage(${json}, "${frontendUrl}");
+          }
+        } catch (e) {}
+        window.close();
+      </script>
+    </body></html>`;
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    return res.status(200).send(html);
+  };
   console.log('[Facebook OAuth] /callback — received', {
     hasCode: Boolean(req.query.code),
     hasState: Boolean(req.query.state),
@@ -50,6 +66,19 @@ router.get('/callback', async (req, res) => {
   // Handle user denial
   if (req.query.error) {
     console.warn('[Facebook OAuth] User denied or error from Facebook:', req.query.error_description);
+    if (req.query.state) {
+      try {
+        const { popup } = facebookService.decodeConnectState(req.query.state);
+        if (popup) {
+          return sendPopupResponse({
+            type: 'auradesk:connect',
+            platform: 'facebook',
+            status: 'error',
+            reason: req.query.error_description || req.query.error,
+          });
+        }
+      } catch { }
+    }
     return res.redirect(`${frontendUrl}/connections?error=facebook&reason=${encodeURIComponent(req.query.error_description || req.query.error)}`);
   }
 
@@ -65,7 +94,8 @@ router.get('/callback', async (req, res) => {
       return res.redirect(`${frontendUrl}/connections?error=facebook&reason=missing_state`);
     }
 
-    const { userId } = facebookService.decodeConnectState(state);
+    const decoded = facebookService.decodeConnectState(state);
+    const { userId, popup } = decoded || {};
     if (!userId) {
       console.warn('[Facebook OAuth] Decoded state without userId');
       return res.redirect(`${frontendUrl}/connections?error=facebook&reason=invalid_state`);
@@ -97,6 +127,14 @@ router.get('/callback', async (req, res) => {
     }
 
     // Redirect to onboarding if user hasn't completed it, otherwise connections page
+    if (popup) {
+      return sendPopupResponse({
+        type: 'auradesk:connect',
+        platform: 'facebook',
+        status: 'success',
+      });
+    }
+
     const user = await prisma.user.findUnique({ where: { id: userId }, select: { onboardingStep: true } });
     const redirectPath = (user && user.onboardingStep < 4) ? '/onboarding' : '/connections';
     return res.redirect(`${frontendUrl}${redirectPath}?success=facebook`);
@@ -112,6 +150,19 @@ router.get('/callback', async (req, res) => {
       rawData: err.response?.data || null,
       stack: err.stack,
     });
+    if (req.query.state) {
+      try {
+        const { popup } = facebookService.decodeConnectState(req.query.state);
+        if (popup) {
+          return sendPopupResponse({
+            type: 'auradesk:connect',
+            platform: 'facebook',
+            status: 'error',
+            reason: err.message,
+          });
+        }
+      } catch { }
+    }
     return res.redirect(`${frontendUrl}/connections?error=facebook&reason=${encodeURIComponent(err.message)}`);
   }
 });

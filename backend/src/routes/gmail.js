@@ -27,7 +27,8 @@ router.get('/', (req, res) => {
 
 // GET /auth/gmail/start — Gmail channel connection (authenticated, returns JSON)
 router.get('/start', authenticate, (req, res) => {
-  const state = Buffer.from(JSON.stringify({ userId: req.user.id, mode: 'connect' })).toString('base64url');
+  const popup = String(req.query.popup || '') === '1';
+  const state = Buffer.from(JSON.stringify({ userId: req.user.id, mode: 'connect', popup })).toString('base64url');
   const url = gmailService.getAuthUrl(state);
   res.json({ url });
 });
@@ -35,13 +36,14 @@ router.get('/start', authenticate, (req, res) => {
 // GET /auth/gmail/connect — Gmail channel connection via browser redirect
 router.get('/connect', (req, res) => {
   const { token } = req.query;
+  const popup = String(req.query.popup || '') === '1';
   if (!token) {
     return res.redirect(`${getFrontendUrl()}/login?error=auth_required`);
   }
 
   try {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    const state = Buffer.from(JSON.stringify({ userId: decoded.userId, mode: 'connect' })).toString('base64url');
+    const state = Buffer.from(JSON.stringify({ userId: decoded.userId, mode: 'connect', popup })).toString('base64url');
     const url = gmailService.getAuthUrl(state);
     res.redirect(url);
   } catch {
@@ -52,8 +54,24 @@ router.get('/connect', (req, res) => {
 // GET /auth/gmail/callback — handles BOTH login and channel connection
 router.get('/callback', async (req, res) => {
   const frontendUrl = getFrontendUrl();
+  const sendPopupResponse = (payload) => {
+    const json = JSON.stringify(payload);
+    const html = `<!doctype html><html><head><meta charset="utf-8"/></head><body>
+      <script>
+        try {
+          if (window.opener) {
+            window.opener.postMessage(${json}, "${frontendUrl}");
+          }
+        } catch (e) {}
+        window.close();
+      </script>
+    </body></html>`;
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    return res.status(200).send(html);
+  };
   let mode = 'login';
   let connectUserId = null;
+  let popup = false;
 
   const resolveConnectTarget = async () => {
     if (!connectUserId) return `${frontendUrl}/connections`;
@@ -73,11 +91,25 @@ router.get('/callback', async (req, res) => {
   try {
     const { code, state } = req.query;
     if (!code || !state) {
+      if (state) {
+        try {
+          const parsed = JSON.parse(Buffer.from(state, 'base64url').toString());
+          if (parsed.popup) {
+            return sendPopupResponse({
+              type: 'auradesk:connect',
+              platform: 'gmail',
+              status: 'error',
+              reason: 'missing_code_or_state',
+            });
+          }
+        } catch { }
+      }
       return redirectWithError('missing_code_or_state');
     }
 
     const stateData = JSON.parse(Buffer.from(state, 'base64url').toString());
     mode = stateData.mode || 'login';
+    popup = Boolean(stateData.popup);
 
     if (stateData.mode === 'login') {
       // === LOGIN FLOW ===
@@ -137,6 +169,14 @@ router.get('/callback', async (req, res) => {
       }
 
       // Redirect to onboarding if user hasn't completed it, otherwise connections page
+      if (popup) {
+        return sendPopupResponse({
+          type: 'auradesk:connect',
+          platform: 'gmail',
+          status: 'success',
+        });
+      }
+
       const user = await prisma.user.findUnique({ where: { id: userId }, select: { onboardingStep: true } });
       const redirectPath = (user && user.onboardingStep < 4) ? '/onboarding' : '/connections';
       res.redirect(`${frontendUrl}${redirectPath}?success=gmail`);
@@ -145,7 +185,23 @@ router.get('/callback', async (req, res) => {
     console.error('Gmail callback error:', err);
     if (err.code === 'DUPLICATE_ACCOUNT') {
       const target = await resolveConnectTarget();
+      if (popup) {
+        return sendPopupResponse({
+          type: 'auradesk:connect',
+          platform: 'gmail',
+          status: 'error',
+          reason: err.message,
+        });
+      }
       return res.redirect(`${target}?error=gmail&reason=${encodeURIComponent(err.message)}`);
+    }
+    if (popup) {
+      return sendPopupResponse({
+        type: 'auradesk:connect',
+        platform: 'gmail',
+        status: 'error',
+        reason: 'google_auth_failed',
+      });
     }
     await redirectWithError('google_auth_failed');
   }

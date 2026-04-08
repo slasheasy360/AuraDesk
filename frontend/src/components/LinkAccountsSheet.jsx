@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { X, ChevronRight, Check } from 'lucide-react';
 import api from '../services/api.js';
 import { useAuth } from '../context/AuthContext.jsx';
@@ -68,12 +68,12 @@ const PLATFORMS = [
 export default function LinkAccountsSheet({ open, onClose }) {
   const { user } = useAuth();
   const [accounts, setAccounts] = useState([]);
+  const [connectingPlatform, setConnectingPlatform] = useState(null);
   const [connected, setConnected] = useState(() => {
     try { return JSON.parse(localStorage.getItem('connectedPlatforms')) || {}; }
     catch { return {}; }
   });
   const [errMsg, setErrMsg] = useState(null);
-  const pollRef = useRef(null);
 
   useEffect(() => {
     localStorage.setItem('connectedPlatforms', JSON.stringify(connected));
@@ -92,6 +92,60 @@ export default function LinkAccountsSheet({ open, onClose }) {
       });
       return list;
     }).catch(() => []);
+  }, []);
+
+  const openAuthPopup = useCallback(async (platformId) => {
+    const endpoints = {
+      instagram: '/auth/instagram/start',
+      facebook: '/auth/facebook/start',
+      gmail: '/auth/gmail/start',
+    };
+    const res = await api.get(endpoints[platformId], { params: { popup: 1 } });
+    const url = res.data?.url;
+    if (!url) throw new Error('Missing OAuth URL');
+
+    const popup = window.open(
+      url,
+      `auradesk-${platformId}-connect`,
+      'width=520,height=700,menubar=0,toolbar=0,location=0,status=0,scrollbars=1'
+    );
+
+    if (!popup) throw new Error('Popup blocked. Please allow popups and try again.');
+
+    const apiOrigin = new URL(api.defaults.baseURL || window.location.origin).origin;
+
+    return new Promise((resolve, reject) => {
+      const timeoutId = setTimeout(() => {
+        cleanup();
+        reject(new Error('Connection timed out. Please try again.'));
+      }, 2 * 60 * 1000);
+
+      const pollId = setInterval(() => {
+        if (popup.closed) {
+          cleanup();
+          reject(new Error('Connection window was closed.'));
+        }
+      }, 600);
+
+      const onMessage = (event) => {
+        if (![window.location.origin, apiOrigin].includes(event.origin)) return;
+        const data = event.data;
+        if (!data || data.type !== 'auradesk:connect') return;
+        if (data.platform !== platformId) return;
+        cleanup();
+        if (data.status === 'success') resolve(data);
+        else reject(new Error(data.reason || 'Connection failed.'));
+      };
+
+      const cleanup = () => {
+        clearTimeout(timeoutId);
+        clearInterval(pollId);
+        window.removeEventListener('message', onMessage);
+        try { popup.close(); } catch {}
+      };
+
+      window.addEventListener('message', onMessage);
+    });
   }, []);
 
   useEffect(() => {
@@ -195,17 +249,16 @@ export default function LinkAccountsSheet({ open, onClose }) {
       launchWhatsAppSignup();
       return;
     }
-    const endpoints = {
-      instagram: '/auth/instagram/start',
-      facebook: '/auth/facebook/start',
-      gmail: '/auth/gmail/start',
-    };
     try {
-      const res = await api.get(endpoints[platformId]);
-      if (res.data.url) window.location.href = res.data.url;
+      setConnectingPlatform(platformId);
+      await openAuthPopup(platformId);
+      setConnected((prev) => ({ ...prev, [platformId]: true }));
+      fetchAccounts();
     } catch (err) {
       console.error(`Connect ${platformId} failed:`, err);
-      setErrMsg({ platform: platformId, reason: 'Failed to start authentication.' });
+      setErrMsg({ platform: platformId, reason: err.message || 'Failed to start authentication.' });
+    } finally {
+      setConnectingPlatform(null);
     }
   };
 
@@ -342,18 +395,28 @@ export default function LinkAccountsSheet({ open, onClose }) {
                 </div>
               );
             }
+            const isConnecting = connectingPlatform === p.id;
             return (
               <button
                 key={p.id}
                 type="button"
                 onClick={() => handleConnect(p.id)}
-                className="w-full flex items-center justify-between bg-[#EAF2FF] hover:bg-[#dbe8ff] rounded-full px-4 py-3 transition"
+                disabled={isConnecting}
+                className="w-full flex items-center justify-between bg-[#EAF2FF] hover:bg-[#dbe8ff] rounded-full px-4 py-3 transition disabled:opacity-70 disabled:cursor-not-allowed"
               >
                 <div className="flex items-center gap-3">
                   {ICONS[p.id]}
-                  <span className="font-medium text-sm text-gray-800">Connect {p.name}</span>
+                  <span className="font-medium text-sm text-gray-800">
+                    {isConnecting ? 'Connecting...' : `Connect ${p.name}`}
+                  </span>
                 </div>
-                <ChevronRight size={18} className="text-gray-400" />
+                {isConnecting ? (
+                  <span className="inline-flex h-4 w-4 items-center justify-center">
+                    <span className="h-4 w-4 animate-spin rounded-full border-2 border-gray-400 border-t-transparent" />
+                  </span>
+                ) : (
+                  <ChevronRight size={18} className="text-gray-400" />
+                )}
               </button>
             );
           })}

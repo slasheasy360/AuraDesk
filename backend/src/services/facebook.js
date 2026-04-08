@@ -32,8 +32,8 @@ function getFacebookRedirectUri() {
   return process.env.FACEBOOK_REDIRECT_URI || DEFAULT_FACEBOOK_REDIRECT_URI;
 }
 
-export function encodeConnectState(userId) {
-  return Buffer.from(JSON.stringify({ userId, mode: 'connect' })).toString('base64url');
+export function encodeConnectState(userId, options = {}) {
+  return Buffer.from(JSON.stringify({ userId, mode: 'connect', ...options })).toString('base64url');
 }
 
 export function decodeConnectState(state) {
@@ -158,7 +158,7 @@ export async function handleCallbackWithToken(shortLivedToken, userId) {
   if (!pages || pages.length === 0) {
     throw new Error(
       'No Facebook Pages found. Make sure: (1) You are admin of a Facebook Page, (2) Your Meta app has pages_show_list permission, (3) You granted page access during OAuth. Raw response: ' +
-        JSON.stringify(pagesRes.data)
+      JSON.stringify(pagesRes.data)
     );
   }
 
