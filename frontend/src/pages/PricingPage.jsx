@@ -171,8 +171,8 @@ function TrialBanner({ onTryNow, loading }) {
         <h2 className="text-[22px] sm:text-[26px] font-extrabold text-[#0B1E3F] leading-tight">
           14 Day Free Trial Available!
         </h2>
-        <p className="mt-1 text-[11px] tracking-[0.18em] font-semibold text-[#1f3559]/70">
-          NO CREDIT CARD REQUIRED
+        <p className="mt-1.5 text-[13px] sm:text-[14px] text-[#1f3559]/75">
+          Start your free trial now. Billing starts after trial ends.
         </p>
       </div>
       <button
@@ -184,7 +184,7 @@ function TrialBanner({ onTryNow, loading }) {
           background: 'linear-gradient(90deg, #2A6FD4 0%, #1787FE 100%)',
         }}
       >
-        {loading ? 'STARTING…' : 'TRY NOW!'}
+        {loading ? 'REDIRECTING…' : 'TRY NOW'}
       </button>
     </div>
   );
@@ -237,16 +237,50 @@ export default function PricingPage() {
   const heading = trialEligible ? 'Or choose a plan' : 'Choose a plan to continue';
 
   // ── Handlers ──
+  // "Try Now" → Stripe Checkout in subscription mode with a 14-day trial.
+  // We default to the Starter plan (cheapest entry point) so users can sample
+  // the product without surprise billing. Stripe collects the card up-front but
+  // doesn't charge until the trial ends. After Stripe success, the user lands
+  // on /onboarding via the success_url, then proceeds to the dashboard.
+  const TRIAL_DEFAULT_PLAN = 'starter';
+  const TRIAL_DEFAULT_CYCLE = 'monthly';
+
   const handleStartTrial = async () => {
+    if (alreadyPaid) return;
     setErrorMsg(null);
     setTrialLoading(true);
     try {
-      await api.post('/api/subscription/start-trial');
-      if (refreshUser) await refreshUser();
-      navigate('/onboarding');
+      const res = await api.post('/api/subscription/create-checkout', {
+        plan: TRIAL_DEFAULT_PLAN,
+        cycle: TRIAL_DEFAULT_CYCLE,
+        includeTrial: true,
+      });
+      try {
+        localStorage.setItem(
+          'selectedPlan',
+          JSON.stringify({ plan: TRIAL_DEFAULT_PLAN, cycle: TRIAL_DEFAULT_CYCLE, trial: true }),
+        );
+      } catch {}
+      await redirectToStripeCheckout({ url: res.data.url, sessionId: res.data.sessionId });
     } catch (err) {
-      console.error('Start trial failed:', err);
-      setErrorMsg(err.response?.data?.error || 'Could not start trial. Please try again.');
+      // If Stripe is not configured server-side (501), fall back to the no-card
+      // trial activation so local/dev environments still work.
+      if (err.response?.status === 501) {
+        try {
+          await api.post('/api/subscription/start-trial');
+          if (refreshUser) await refreshUser();
+          navigate('/onboarding');
+          return;
+        } catch (fallbackErr) {
+          console.error('Trial fallback failed:', fallbackErr);
+          setErrorMsg('Could not start trial. Please try again.');
+        }
+      } else {
+        console.error('Start trial failed:', err);
+        setErrorMsg(
+          err.response?.data?.error || err.message || 'Could not start trial. Please try again.',
+        );
+      }
     } finally {
       setTrialLoading(false);
     }
