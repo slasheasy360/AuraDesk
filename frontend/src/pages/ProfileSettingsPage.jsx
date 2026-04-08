@@ -322,29 +322,6 @@ function PlanTab({ user }) {
   const hasStripeSub = !!status?.subscriptionId;
   const isPaidPlan = ['starter', 'pro', 'elite'].includes(status?.plan);
 
-  const handleChangePlan = async (targetPlan, targetCycle) => {
-    if (!hasStripeSub) {
-      // No active sub yet — send them through Checkout
-      window.location.href = '/pricing';
-      return;
-    }
-    setError(''); setSuccess(''); setActionPending(targetPlan);
-    try {
-      const r = await api.post('/api/subscription/change-plan', { plan: targetPlan, cycle: targetCycle });
-      setSuccess(
-        r.data.effectiveAt === 'immediately'
-          ? `Upgraded to ${PLAN_LABELS[targetPlan]} — change is effective now.`
-          : `Downgrade to ${PLAN_LABELS[targetPlan]} scheduled for the next billing period.`
-      );
-      await loadStatus();
-      if (refreshUser) await refreshUser();
-    } catch (e) {
-      setError(e.response?.data?.error || 'Could not change plan');
-    } finally {
-      setActionPending(null);
-    }
-  };
-
   const handleCancel = async () => {
     setError(''); setSuccess(''); setActionPending('cancel');
     try {
@@ -452,12 +429,13 @@ function PlanTab({ user }) {
         </div>
       </div>
 
-      {/* Plan switcher */}
+      {/* Plans overview — read-only.
+          Self-serve plan switching from settings is intentionally disabled;
+          users who want to change tiers cancel and resubscribe via /pricing.
+          The cards stay visible so users can compare what they're on. */}
       <div>
         <div className="flex items-center justify-between mb-3 pb-2 border-b">
-          <h3 className="text-sm font-semibold text-gray-700">
-            {hasStripeSub ? 'Change plan' : 'Choose a plan'}
-          </h3>
+          <h3 className="text-sm font-semibold text-gray-700">Plans</h3>
           <div className="inline-flex bg-gray-100 rounded-full p-0.5 text-[11px] font-bold">
             <button
               onClick={() => setCycle('monthly')}
@@ -478,19 +456,6 @@ function PlanTab({ user }) {
             const isCurrent = status?.plan === planId && status?.billingCycle === cycle && !status?.cancelAtPeriodEnd;
             const price = info[cycle];
             const period = cycle === 'monthly' ? 'mo' : 'yr';
-            const currentRank = ['starter', 'pro', 'elite'].indexOf(status?.plan);
-            const targetRank = ['starter', 'pro', 'elite'].indexOf(planId);
-            const action = isCurrent
-              ? 'Current'
-              : !hasStripeSub
-                ? 'Subscribe'
-                : targetRank > currentRank
-                  ? 'Upgrade'
-                  : targetRank < currentRank
-                    ? 'Downgrade'
-                    : cycle !== status?.billingCycle
-                      ? (cycle === 'yearly' ? 'Switch to yearly' : 'Switch to monthly')
-                      : 'Switch';
 
             return (
               <div
@@ -499,24 +464,20 @@ function PlanTab({ user }) {
                   isCurrent ? 'border-primary-500 bg-primary-50/40 ring-1 ring-primary-200' : 'border-gray-200 bg-white'
                 }`}
               >
-                <div className="mb-3">
-                  <p className="text-lg font-bold text-gray-900">{PLAN_LABELS[planId]}</p>
-                  <p className="text-2xl font-extrabold text-gray-900 mt-1">
-                    ${price}<span className="text-sm font-medium text-gray-500">/{period}</span>
-                  </p>
+                <div className="mb-3 flex items-start justify-between gap-2">
+                  <div>
+                    <p className="text-lg font-bold text-gray-900">{PLAN_LABELS[planId]}</p>
+                    <p className="text-2xl font-extrabold text-gray-900 mt-1">
+                      ${price}<span className="text-sm font-medium text-gray-500">/{period}</span>
+                    </p>
+                  </div>
+                  {isCurrent && (
+                    <span className="inline-block px-2 py-0.5 text-[10px] font-bold tracking-wider rounded-full bg-primary-600 text-white">
+                      CURRENT
+                    </span>
+                  )}
                 </div>
-                <p className="text-xs text-gray-500 leading-relaxed flex-1 mb-4">{info.features}</p>
-                <button
-                  onClick={() => handleChangePlan(planId, cycle)}
-                  disabled={isCurrent || actionPending === planId}
-                  className={`w-full py-2 rounded-lg text-sm font-semibold transition ${
-                    isCurrent
-                      ? 'bg-gray-100 text-gray-500 cursor-not-allowed'
-                      : 'bg-primary-600 hover:bg-primary-700 text-white'
-                  } disabled:opacity-60`}
-                >
-                  {actionPending === planId ? 'Updating…' : action}
-                </button>
+                <p className="text-xs text-gray-500 leading-relaxed flex-1">{info.features}</p>
               </div>
             );
           })}
