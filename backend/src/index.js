@@ -21,6 +21,7 @@ import gmailWebhook from './webhooks/gmail.js';
 import { renewExpiringWatches, reRegisterAllWatches } from './services/gmail.js';
 import prisma from './utils/prisma.js';
 import { sendEmail } from './utils/email.js';
+import { sendWelcomeEmail } from './emails/senders/sendWelcomeEmail.js';
 
 const app = express();
 const server = http.createServer(app);
@@ -137,6 +138,27 @@ app.post('/dev/test-email', async (req, res) => {
     res.json({ ok: true, messageId: result.messageId });
   } catch (err) {
     console.error('[/dev/test-email] failed:', err);
+    res.status(500).json({ ok: false, error: err.message, name: err.name });
+  }
+});
+
+// TEMPORARY: Welcome template test endpoint. Remove after verification.
+// POST /dev/test-welcome { to, firstName? }
+app.post('/dev/test-welcome', async (req, res) => {
+  if (req.headers['x-test-secret'] !== process.env.JWT_SECRET) {
+    return res.status(403).json({ error: 'forbidden' });
+  }
+  try {
+    const to = req.body?.to;
+    if (!to) return res.status(400).json({ error: 'body.to is required' });
+    const result = await sendWelcomeEmail({
+      email: to,
+      firstName: req.body?.firstName,
+      name: req.body?.name,
+    });
+    res.json({ ok: true, messageId: result.messageId });
+  } catch (err) {
+    console.error('[/dev/test-welcome] failed:', err);
     res.status(500).json({ ok: false, error: err.message, name: err.name });
   }
 });
