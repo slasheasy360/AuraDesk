@@ -22,6 +22,17 @@ import metaWebhook from './webhooks/meta.js';
 import gmailWebhook from './webhooks/gmail.js';
 import { renewExpiringWatches, reRegisterAllWatches } from './services/gmail.js';
 import prisma from './utils/prisma.js';
+import { authenticate, requireActiveSubscription } from './middleware/auth.js';
+
+// Routes that handle paid product features. Gating them at mount-time means
+// every endpoint inside automatically inherits the subscription check.
+// Routes that must stay accessible WITHOUT a paid subscription:
+//   - /auth/*               (login, register, forgot password)
+//   - /api/profile          (user must always be able to update their profile)
+//   - /api/subscription     (user must always be able to manage billing)
+//   - /api/onboarding       (must run during the trial / onboarding window)
+//   - /api/team             (workspace owner manages team independently)
+const requirePaidAccess = [authenticate, requireActiveSubscription];
 
 const app = express();
 const server = http.createServer(app);
@@ -94,16 +105,21 @@ app.use('/auth/facebook', facebookRoutes);
 app.use('/auth/instagram', instagramRoutes);
 app.use('/auth/whatsapp', whatsappRoutes);
 
-// API routes
-app.use('/api/conversations', conversationRoutes);
-app.use('/api/messages', messageRoutes);
-app.use('/api/accounts', accountRoutes);
+// API routes — gated routes require an active paid plan / live trial
+app.use('/api/conversations', requirePaidAccess, conversationRoutes);
+app.use('/api/messages',      requirePaidAccess, messageRoutes);
+app.use('/api/accounts',      requirePaidAccess, accountRoutes);
+app.use('/api/leads',         requirePaidAccess, leadRoutes);
+// Invoices: NOT mounted with the gate because /api/invoices/public/:slug
+// must stay reachable for unauthenticated invoice viewers. The gate is
+// applied per-handler inside the route file via requireActiveSubscription.
+app.use('/api/invoices',      invoiceRoutes);
+
+// Open routes — accessible regardless of subscription status
 app.use('/api/subscription', subscriptionRoutes);
-app.use('/api/onboarding', onboardingRoutes);
-app.use('/api/leads', leadRoutes);
-app.use('/api/invoices', invoiceRoutes);
-app.use('/api/profile', profileRoutes);
-app.use('/api/team', teamRoutes);
+app.use('/api/onboarding',   onboardingRoutes);
+app.use('/api/profile',      profileRoutes);
+app.use('/api/team',         teamRoutes);
 
 // Webhook routes
 app.use('/webhooks/meta', metaWebhook);

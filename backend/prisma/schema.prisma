@@ -24,9 +24,15 @@ model User {
   plan              PlanType    @default(trial)
   trialEndsAt       DateTime?   @map("trial_ends_at")
   subscriptionStatus SubStatus  @default(trialing) @map("subscription_status")
+  isSubscribed      Boolean     @default(false) @map("is_subscribed")
   stripeCustomerId  String?     @unique @map("stripe_customer_id")
   stripeSubscriptionId String?  @unique @map("stripe_subscription_id")
+  currentPeriodStart DateTime?  @map("current_period_start")
   currentPeriodEnd  DateTime?   @map("current_period_end")
+  cancelAtPeriodEnd Boolean     @default(false) @map("cancel_at_period_end")
+  // When set, the user is in grace period after a failed payment.
+  // Access is denied once we pass this timestamp.
+  gracePeriodEndsAt DateTime?   @map("grace_period_ends_at")
   billingCycle      BillingCycle? @map("billing_cycle")
 
   // ── Onboarding ──

@@ -1,22 +1,77 @@
 import { Router } from 'express';
-import Stripe from 'stripe';
 import prisma from '../utils/prisma.js';
 import { authenticate } from '../middleware/auth.js';
+import {
+  getStripe,
+  getOrCreateStripeCustomer,
+  subscriptionToUserData,
+  mapStripeStatus,
+  PLANS,
+  TRIAL_DAYS,
+  GRACE_PERIOD_DAYS,
+} from '../utils/stripe.js';
 
 const router = Router();
 
-// Stripe is optional — if STRIPE_SECRET_KEY is not set, payment endpoints return 501
-const stripe = process.env.STRIPE_SECRET_KEY
-  ? new Stripe(process.env.STRIPE_SECRET_KEY)
-  : null;
+// ─────────────────────────────────────────────────────────────────
+// Stripe key validation — runs once on import.
+//
+// Catches the most common misconfigurations BEFORE they cause silent
+// failures at checkout time. The actual SDK instance lives in
+// utils/stripe.js so it can be shared with auth and access middleware.
+// ─────────────────────────────────────────────────────────────────
+function detectKeyMode(key) {
+  if (!key) return null;
+  if (key.startsWith('sk_test_') || key.startsWith('rk_test_')) return 'test';
+  if (key.startsWith('sk_live_') || key.startsWith('rk_live_')) return 'live';
+  return 'unknown';
+}
 
-const PLANS = {
-  starter: { monthly: 2900, yearly: 29000, name: 'Starter' },
-  pro:     { monthly: 7900, yearly: 79000, name: 'Pro' },
-  elite:   { monthly: 14900, yearly: 149000, name: 'Elite' },
-};
+function validateStripeConfig() {
+  const secret = process.env.STRIPE_SECRET_KEY;
+  const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
+  const nodeEnv = process.env.NODE_ENV;
 
-const TRIAL_DAYS = 14;
+  if (!secret) {
+    console.warn('[Stripe] STRIPE_SECRET_KEY is not set — payment endpoints will return 501.');
+    return;
+  }
+  if (secret.startsWith('pk_')) {
+    console.error(
+      '[Stripe] FATAL: STRIPE_SECRET_KEY appears to be a PUBLISHABLE key (starts with "pk_"). ' +
+      'Set the SECRET key (sk_test_… or sk_live_…) from https://dashboard.stripe.com/apikeys'
+    );
+    return;
+  }
+  if (!secret.startsWith('sk_') && !secret.startsWith('rk_')) {
+    console.warn('[Stripe] STRIPE_SECRET_KEY does not start with "sk_" or "rk_". May not be valid.');
+  }
+
+  const secretMode = detectKeyMode(secret);
+  if (webhookSecret && !webhookSecret.startsWith('whsec_')) {
+    console.warn('[Stripe] STRIPE_WEBHOOK_SECRET does not start with "whsec_". Verification will fail.');
+  }
+  if (!webhookSecret) {
+    console.warn(
+      '[Stripe] STRIPE_WEBHOOK_SECRET is not set — webhooks will be accepted WITHOUT signature ' +
+      'verification. OK for local dev only.'
+    );
+  }
+  if (nodeEnv === 'production' && secretMode === 'test') {
+    console.warn('[Stripe] WARNING: NODE_ENV=production with a TEST key — real customers will not be charged.');
+  }
+  if (nodeEnv !== 'production' && secretMode === 'live') {
+    console.warn('[Stripe] WARNING: LIVE key outside production — real cards will be charged.');
+  }
+  console.log(
+    `[Stripe] Initialized in ${secretMode || 'unknown'} mode` +
+    `${webhookSecret ? ' with verified webhooks' : ' (UNVERIFIED webhooks)'}`
+  );
+}
+
+validateStripeConfig();
+
+const stripe = getStripe();
 
 function frontendBase() {
   return (process.env.FRONTEND_URL || 'http://localhost:5173')
@@ -24,7 +79,9 @@ function frontendBase() {
     .replace(/\/$/, '');
 }
 
-// ── Get subscription status ──
+// ────────────────────────────────────────────────────────────────────
+// GET /api/subscription/status — full snapshot for the dashboard UI
+// ────────────────────────────────────────────────────────────────────
 router.get('/status', authenticate, async (req, res) => {
   const user = await prisma.user.findUnique({ where: { id: req.user.id } });
   if (!user) return res.status(404).json({ error: 'User not found' });
@@ -36,27 +93,45 @@ router.get('/status', authenticate, async (req, res) => {
     ? Math.ceil((new Date(user.trialEndsAt) - now) / (1000 * 60 * 60 * 24))
     : 0;
 
+  const inGracePeriod =
+    user.subscriptionStatus === 'past_due' &&
+    user.gracePeriodEndsAt &&
+    new Date(user.gracePeriodEndsAt) > now;
+  const graceDaysLeft = inGracePeriod
+    ? Math.ceil((new Date(user.gracePeriodEndsAt) - now) / (1000 * 60 * 60 * 24))
+    : 0;
+
   res.json({
     plan: user.plan,
     subscriptionStatus: user.subscriptionStatus,
+    isSubscribed: user.isSubscribed,
+    stripeCustomerId: user.stripeCustomerId,
+    subscriptionId: user.stripeSubscriptionId,
+    currentPeriodStart: user.currentPeriodStart,
+    currentPeriodEnd: user.currentPeriodEnd,
+    cancelAtPeriodEnd: user.cancelAtPeriodEnd,
     trialEndsAt: user.trialEndsAt,
     trialActive,
     trialNotStarted,
-    trialEligible: trialNotStarted, // alias for clarity in UI
+    trialEligible: trialNotStarted,
     trialDaysLeft,
-    currentPeriodEnd: user.currentPeriodEnd,
+    inGracePeriod,
+    graceDaysLeft,
+    gracePeriodEndsAt: user.gracePeriodEndsAt,
     billingCycle: user.billingCycle,
     onboardingStep: user.onboardingStep,
   });
 });
 
-// ── Start the 14-day free trial (no credit card required) ──
-// Idempotent: silently no-ops if user has already started a trial or is on a paid plan.
+// ────────────────────────────────────────────────────────────────────
+// POST /api/subscription/start-trial
+// Local-dev fallback: activate the 14-day trial WITHOUT collecting a card.
+// In production we route through Stripe Checkout instead so a card is on file.
+// ────────────────────────────────────────────────────────────────────
 router.post('/start-trial', authenticate, async (req, res) => {
   const user = await prisma.user.findUnique({ where: { id: req.user.id } });
   if (!user) return res.status(404).json({ error: 'User not found' });
 
-  // Already on a paid plan — nothing to do
   if (['starter', 'pro', 'elite'].includes(user.plan) && user.subscriptionStatus === 'active') {
     return res.json({
       plan: user.plan,
@@ -66,7 +141,6 @@ router.post('/start-trial', authenticate, async (req, res) => {
     });
   }
 
-  // Trial already started — return existing window
   if (user.plan === 'trial' && user.trialEndsAt) {
     return res.json({
       plan: user.plan,
@@ -76,7 +150,6 @@ router.post('/start-trial', authenticate, async (req, res) => {
     });
   }
 
-  // Trial expired — must subscribe
   if (user.plan === 'expired') {
     return res.status(403).json({ error: 'Trial already used. Please subscribe to continue.' });
   }
@@ -86,11 +159,7 @@ router.post('/start-trial', authenticate, async (req, res) => {
 
   const updated = await prisma.user.update({
     where: { id: user.id },
-    data: {
-      plan: 'trial',
-      subscriptionStatus: 'trialing',
-      trialEndsAt,
-    },
+    data: { plan: 'trial', subscriptionStatus: 'trialing', trialEndsAt },
   });
 
   res.json({
@@ -100,7 +169,13 @@ router.post('/start-trial', authenticate, async (req, res) => {
   });
 });
 
-// ── Create Stripe Checkout Session ──
+// ────────────────────────────────────────────────────────────────────
+// POST /api/subscription/create-checkout
+// Creates a Stripe Checkout Session in subscription mode.
+// - Trial flow: pass includeTrial=true to get trial_period_days=14
+// - Direct flow: pass includeTrial=false to charge immediately
+// Always collects a payment method up-front so the trial converts cleanly.
+// ────────────────────────────────────────────────────────────────────
 router.post('/create-checkout', authenticate, async (req, res) => {
   if (!stripe) return res.status(501).json({ error: 'Stripe not configured' });
 
@@ -110,68 +185,220 @@ router.post('/create-checkout', authenticate, async (req, res) => {
     return res.status(400).json({ error: 'Invalid billing cycle' });
   }
 
-  const user = await prisma.user.findUnique({ where: { id: req.user.id } });
-  const amount = PLANS[plan][cycle];
-  const interval = cycle === 'yearly' ? 'year' : 'month';
+  try {
+    const user = await prisma.user.findUnique({ where: { id: req.user.id } });
+    const amount = PLANS[plan][cycle];
+    const interval = cycle === 'yearly' ? 'year' : 'month';
 
-  // Create or reuse Stripe customer
-  let customerId = user.stripeCustomerId;
-  if (!customerId) {
-    const customer = await stripe.customers.create({
-      email: user.email,
-      name: user.name,
-      metadata: { userId: user.id },
+    const customerId = await getOrCreateStripeCustomer(user);
+    if (!customerId) return res.status(501).json({ error: 'Stripe not configured' });
+
+    // Trial eligibility: only attach a trial period if the user has never used one
+    // AND the request explicitly opts in. Users whose plan is 'expired' (trial
+    // already consumed) cannot get another.
+    const trialEligible = user.plan === 'trial' && !user.trialEndsAt;
+    const subscriptionData = {
+      metadata: { userId: user.id, plan, cycle },
+      // Persist the card collected during checkout as the default payment
+      // method on the resulting subscription. Required for trial conversions.
+      payment_settings: { save_default_payment_method: 'on_subscription' },
+      ...(includeTrial && trialEligible ? { trial_period_days: TRIAL_DAYS } : {}),
+    };
+
+    const base = frontendBase();
+
+    const session = await stripe.checkout.sessions.create({
+      customer: customerId,
+      mode: 'subscription',
+      payment_method_types: ['card'],
+      line_items: [{
+        price_data: {
+          currency: 'usd',
+          product_data: { name: `AuraDesk ${PLANS[plan].name} Plan` },
+          unit_amount: amount,
+          recurring: { interval },
+        },
+        quantity: 1,
+      }],
+      subscription_data: subscriptionData,
+      payment_method_collection: 'always',
+      metadata: { userId: user.id, plan, cycle, includeTrial: includeTrial ? '1' : '0' },
+      success_url: `${base}/onboarding?payment=success&session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: `${base}/pricing?payment=cancel&plan=${plan}&cycle=${cycle}`,
     });
-    customerId = customer.id;
-    await prisma.user.update({
-      where: { id: user.id },
-      data: { stripeCustomerId: customerId },
-    });
+
+    res.json({ url: session.url, sessionId: session.id });
+  } catch (err) {
+    console.error('[Stripe] create-checkout failed:', err);
+    res.status(500).json({ error: err.message || 'Could not create checkout session' });
   }
-
-  // Trial eligibility: only attach a trial period if the user has never used one
-  // AND the request explicitly opts in. Users whose plan is already 'expired'
-  // (trial consumed) cannot get another.
-  const trialEligible = user.plan === 'trial' && !user.trialEndsAt;
-  const subscriptionData = (includeTrial && trialEligible)
-    ? { trial_period_days: TRIAL_DAYS, metadata: { userId: user.id, plan, cycle } }
-    : { metadata: { userId: user.id, plan, cycle } };
-
-  const base = frontendBase();
-
-  const session = await stripe.checkout.sessions.create({
-    customer: customerId,
-    mode: 'subscription',
-    payment_method_types: ['card'],
-    line_items: [{
-      price_data: {
-        currency: 'usd',
-        product_data: { name: `AuraDesk ${PLANS[plan].name} Plan` },
-        unit_amount: amount,
-        recurring: { interval },
-      },
-      quantity: 1,
-    }],
-    subscription_data: subscriptionData,
-    // Always collect a payment method up-front (true for both with and without trial)
-    payment_method_collection: 'always',
-    metadata: { userId: user.id, plan, cycle, includeTrial: includeTrial ? '1' : '0' },
-    success_url: `${base}/onboarding?payment=success&session_id={CHECKOUT_SESSION_ID}`,
-    cancel_url: `${base}/pricing?payment=cancel&plan=${plan}&cycle=${cycle}`,
-  });
-
-  res.json({ url: session.url, sessionId: session.id });
 });
 
-// ── Stripe Webhook Handler ──
+// ────────────────────────────────────────────────────────────────────
+// POST /api/subscription/change-plan
+// Upgrade or downgrade the active subscription.
+//
+// - Upgrades: prorate immediately, customer is charged the difference now.
+// - Downgrades: prorate but defer; customer keeps current plan until the end
+//   of the current period, then transitions. (Stripe handles the actual
+//   transition automatically when the period rolls over.)
+//
+// Body: { plan: 'starter'|'pro'|'elite', cycle: 'monthly'|'yearly' }
+// ────────────────────────────────────────────────────────────────────
+router.post('/change-plan', authenticate, async (req, res) => {
+  if (!stripe) return res.status(501).json({ error: 'Stripe not configured' });
+
+  const { plan: targetPlan, cycle: targetCycle = 'monthly' } = req.body;
+  if (!PLANS[targetPlan]) return res.status(400).json({ error: 'Invalid plan' });
+  if (!['monthly', 'yearly'].includes(targetCycle)) {
+    return res.status(400).json({ error: 'Invalid billing cycle' });
+  }
+
+  try {
+    const user = await prisma.user.findUnique({ where: { id: req.user.id } });
+    if (!user.stripeSubscriptionId) {
+      return res.status(400).json({ error: 'No active subscription to change. Please subscribe first.' });
+    }
+
+    // Pull the current subscription so we know the current plan/price + item id.
+    const sub = await stripe.subscriptions.retrieve(user.stripeSubscriptionId);
+    if (['canceled', 'incomplete_expired'].includes(sub.status)) {
+      return res.status(400).json({ error: 'Subscription is no longer active. Please resubscribe.' });
+    }
+
+    // Determine if this is an upgrade or downgrade by comparing prices.
+    const currentRank = ['starter', 'pro', 'elite'].indexOf(user.plan);
+    const targetRank = ['starter', 'pro', 'elite'].indexOf(targetPlan);
+    const isUpgrade = targetRank > currentRank ||
+      (targetRank === currentRank && targetCycle === 'yearly' && user.billingCycle === 'monthly');
+
+    // Build the new price inline. Using price_data avoids requiring pre-created
+    // Stripe Products / Prices for each (plan, cycle) combination.
+    const interval = targetCycle === 'yearly' ? 'year' : 'month';
+    const newPriceData = {
+      currency: 'usd',
+      product_data: { name: `AuraDesk ${PLANS[targetPlan].name} Plan` },
+      unit_amount: PLANS[targetPlan][targetCycle],
+      recurring: { interval },
+    };
+
+    const updated = await stripe.subscriptions.update(user.stripeSubscriptionId, {
+      items: [{
+        id: sub.items.data[0].id,
+        price_data: newPriceData,
+      }],
+      // Upgrades: prorate now and bill the difference immediately.
+      // Downgrades: prorate but defer to the next cycle so the user keeps
+      // what they already paid for.
+      proration_behavior: isUpgrade ? 'always_invoice' : 'create_prorations',
+      billing_cycle_anchor: isUpgrade ? 'now' : 'unchanged',
+      metadata: { ...sub.metadata, userId: user.id, plan: targetPlan, cycle: targetCycle },
+    });
+
+    // Mirror the change locally — webhook will also fire and reconcile.
+    await prisma.user.update({
+      where: { id: user.id },
+      data: subscriptionToUserData(updated, {
+        planFromMetadata: targetPlan,
+        cycleFromMetadata: targetCycle,
+      }),
+    });
+
+    res.json({
+      ok: true,
+      plan: targetPlan,
+      cycle: targetCycle,
+      prorationApplied: isUpgrade,
+      effectiveAt: isUpgrade ? 'immediately' : 'next billing period',
+    });
+  } catch (err) {
+    console.error('[Stripe] change-plan failed:', err);
+    res.status(500).json({ error: err.message || 'Could not change plan' });
+  }
+});
+
+// ────────────────────────────────────────────────────────────────────
+// POST /api/subscription/cancel
+// Schedule cancellation at the end of the current billing period.
+// Customer keeps full access until currentPeriodEnd.
+// ────────────────────────────────────────────────────────────────────
+router.post('/cancel', authenticate, async (req, res) => {
+  if (!stripe) return res.status(501).json({ error: 'Stripe not configured' });
+
+  try {
+    const user = await prisma.user.findUnique({ where: { id: req.user.id } });
+    if (!user.stripeSubscriptionId) {
+      return res.status(400).json({ error: 'No active subscription to cancel.' });
+    }
+
+    const updated = await stripe.subscriptions.update(user.stripeSubscriptionId, {
+      cancel_at_period_end: true,
+    });
+
+    await prisma.user.update({
+      where: { id: user.id },
+      data: {
+        cancelAtPeriodEnd: true,
+        currentPeriodEnd: updated.current_period_end
+          ? new Date(updated.current_period_end * 1000)
+          : user.currentPeriodEnd,
+      },
+    });
+
+    res.json({
+      ok: true,
+      cancelAtPeriodEnd: true,
+      accessUntil: updated.current_period_end
+        ? new Date(updated.current_period_end * 1000)
+        : user.currentPeriodEnd,
+    });
+  } catch (err) {
+    console.error('[Stripe] cancel failed:', err);
+    res.status(500).json({ error: err.message || 'Could not cancel subscription' });
+  }
+});
+
+// ────────────────────────────────────────────────────────────────────
+// POST /api/subscription/resume
+// Undo a scheduled cancellation while the subscription is still in its
+// current period.
+// ────────────────────────────────────────────────────────────────────
+router.post('/resume', authenticate, async (req, res) => {
+  if (!stripe) return res.status(501).json({ error: 'Stripe not configured' });
+
+  try {
+    const user = await prisma.user.findUnique({ where: { id: req.user.id } });
+    if (!user.stripeSubscriptionId) {
+      return res.status(400).json({ error: 'No subscription to resume.' });
+    }
+
+    const updated = await stripe.subscriptions.update(user.stripeSubscriptionId, {
+      cancel_at_period_end: false,
+    });
+
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { cancelAtPeriodEnd: false },
+    });
+
+    res.json({ ok: true, cancelAtPeriodEnd: false, status: updated.status });
+  } catch (err) {
+    console.error('[Stripe] resume failed:', err);
+    res.status(500).json({ error: err.message || 'Could not resume subscription' });
+  }
+});
+
+// ────────────────────────────────────────────────────────────────────
+// POST /api/subscription/webhook
+// Stripe webhook handler. Mounted with express.raw() in index.js so the
+// signature can be verified against the unparsed body.
+// ────────────────────────────────────────────────────────────────────
 router.post('/webhook', async (req, res) => {
   if (!stripe) return res.sendStatus(200);
 
-  // If no webhook secret is configured, accept the webhook unverified
-  // (only safe for local dev / testing — set STRIPE_WEBHOOK_SECRET in prod).
   let event;
   if (!process.env.STRIPE_WEBHOOK_SECRET) {
-    console.warn('[Stripe] STRIPE_WEBHOOK_SECRET not set — accepting webhook without signature verification.');
+    console.warn('[Stripe] STRIPE_WEBHOOK_SECRET not set — accepting webhook unverified.');
     try {
       event = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
     } catch (err) {
@@ -193,38 +420,41 @@ router.post('/webhook', async (req, res) => {
       // ── Initial checkout completed: persist plan + sub id ──
       case 'checkout.session.completed': {
         const session = event.data.object;
-        const { userId, plan, cycle, includeTrial } = session.metadata || {};
+        const { userId, plan, cycle } = session.metadata || {};
         if (!userId || !plan) break;
 
-        // For sessions with a trial, Stripe sets status to 'trialing' until trial ends
-        const subStatus = includeTrial === '1' ? 'trialing' : 'active';
-        const periodMs = (cycle === 'yearly' ? 365 : 30) * 24 * 60 * 60 * 1000;
-
-        // Pull subscription for accurate trial_end / current_period_end if available
-        let trialEndsAt = null;
-        let currentPeriodEnd = new Date(Date.now() + periodMs);
         if (session.subscription) {
-          try {
-            const sub = await stripe.subscriptions.retrieve(session.subscription);
-            if (sub.trial_end) trialEndsAt = new Date(sub.trial_end * 1000);
-            if (sub.current_period_end) currentPeriodEnd = new Date(sub.current_period_end * 1000);
-          } catch (e) {
-            console.warn('[Stripe] Could not fetch subscription details:', e.message);
-          }
+          const sub = await stripe.subscriptions.retrieve(session.subscription);
+          await prisma.user.update({
+            where: { id: userId },
+            data: subscriptionToUserData(sub, {
+              planFromMetadata: plan,
+              cycleFromMetadata: cycle,
+            }),
+          });
         }
+        console.log(`[Stripe] checkout.session.completed → user ${userId} on ${plan} (${cycle})`);
+        break;
+      }
 
-        await prisma.user.update({
-          where: { id: userId },
-          data: {
-            plan,
-            subscriptionStatus: subStatus,
-            stripeSubscriptionId: session.subscription || null,
-            billingCycle: cycle || 'monthly',
-            currentPeriodEnd,
-            ...(trialEndsAt ? { trialEndsAt } : {}),
+      // ── Subscription created (fires alongside checkout.session.completed) ──
+      // Idempotent with the checkout handler — we just keep the user row in sync.
+      case 'customer.subscription.created': {
+        const sub = event.data.object;
+        const user = await prisma.user.findFirst({
+          where: {
+            OR: [
+              { stripeSubscriptionId: sub.id },
+              { stripeCustomerId: sub.customer },
+            ],
           },
         });
-        console.log(`[Stripe] checkout.session.completed → user ${userId} on ${plan} (${cycle}) status=${subStatus}`);
+        if (!user) break;
+        await prisma.user.update({
+          where: { id: user.id },
+          data: subscriptionToUserData(sub),
+        });
+        console.log(`[Stripe] customer.subscription.created → user ${user.id} status=${sub.status}`);
         break;
       }
 
@@ -235,18 +465,10 @@ router.post('/webhook', async (req, res) => {
           where: { stripeSubscriptionId: sub.id },
         });
         if (!user) break;
-        const data = {
-          subscriptionStatus:
-            sub.status === 'active' ? 'active'
-            : sub.status === 'trialing' ? 'trialing'
-            : sub.status === 'past_due' ? 'past_due'
-            : sub.status === 'canceled' ? 'canceled'
-            : sub.status === 'incomplete_expired' ? 'expired'
-            : user.subscriptionStatus,
-        };
-        if (sub.current_period_end) data.currentPeriodEnd = new Date(sub.current_period_end * 1000);
-        if (sub.trial_end) data.trialEndsAt = new Date(sub.trial_end * 1000);
-        await prisma.user.update({ where: { id: user.id }, data });
+        await prisma.user.update({
+          where: { id: user.id },
+          data: subscriptionToUserData(sub),
+        });
         console.log(`[Stripe] customer.subscription.updated → user ${user.id} status=${sub.status}`);
         break;
       }
@@ -273,7 +495,13 @@ router.post('/webhook', async (req, res) => {
         if (user) {
           await prisma.user.update({
             where: { id: user.id },
-            data: { plan: 'expired', subscriptionStatus: 'canceled' },
+            data: {
+              plan: 'expired',
+              subscriptionStatus: 'canceled',
+              isSubscribed: false,
+              cancelAtPeriodEnd: false,
+              gracePeriodEndsAt: null,
+            },
           });
           console.log(`[Stripe] Subscription canceled for user ${user.id}`);
         }
@@ -281,54 +509,77 @@ router.post('/webhook', async (req, res) => {
       }
 
       // ── Successful invoice (recurring billing) ──
+      // Mark active + isSubscribed=true and clear any past grace period.
       case 'invoice.payment_succeeded': {
         const invoice = event.data.object;
         const user = await prisma.user.findFirst({
           where: { stripeCustomerId: invoice.customer },
         });
         if (user && invoice.subscription) {
-          const data = { subscriptionStatus: 'active' };
+          const data = {
+            subscriptionStatus: 'active',
+            isSubscribed: true,
+            gracePeriodEndsAt: null,
+          };
+          if (invoice.lines?.data?.[0]?.period?.start) {
+            data.currentPeriodStart = new Date(invoice.lines.data[0].period.start * 1000);
+          }
           if (invoice.lines?.data?.[0]?.period?.end) {
             data.currentPeriodEnd = new Date(invoice.lines.data[0].period.end * 1000);
           }
           await prisma.user.update({ where: { id: user.id }, data });
+          console.log(`[Stripe] invoice.payment_succeeded → user ${user.id}`);
         }
         break;
       }
 
       // ── Failed invoice (card declined, etc.) ──
+      // Move to past_due and start a grace period. Stripe will keep retrying
+      // inside this window. We keep `isSubscribed=true` until the grace ends.
       case 'invoice.payment_failed': {
         const invoice = event.data.object;
         const user = await prisma.user.findFirst({
           where: { stripeCustomerId: invoice.customer },
         });
         if (user) {
+          const graceEnd = new Date();
+          graceEnd.setDate(graceEnd.getDate() + GRACE_PERIOD_DAYS);
           await prisma.user.update({
             where: { id: user.id },
-            data: { subscriptionStatus: 'past_due' },
+            data: {
+              subscriptionStatus: 'past_due',
+              // isSubscribed stays true during grace — access cuts off via the
+              // requireActiveSubscription middleware once the timestamp passes.
+              isSubscribed: true,
+              gracePeriodEndsAt: graceEnd,
+            },
           });
-          console.log(`[Stripe] Payment failed for user ${user.id}`);
+          console.log(`[Stripe] invoice.payment_failed → user ${user.id} (grace until ${graceEnd.toISOString()})`);
         }
         break;
       }
 
       default:
-        // Unhandled event types are fine — just log at debug level
+        // Unhandled event types are fine — just no-op
         break;
     }
   } catch (err) {
     console.error(`[Stripe] Webhook handler error for ${event.type}:`, err);
-    // Still return 200 so Stripe doesn't retry on a code bug — but keep logs
+    // Still 200 so Stripe doesn't retry on a code bug; logs preserve the trace.
   }
 
   res.sendStatus(200);
 });
 
-// ── Manual plan activation (for testing without Stripe) ──
+// ────────────────────────────────────────────────────────────────────
+// POST /api/subscription/activate
+// Local-dev fallback for environments without Stripe configured.
+// ────────────────────────────────────────────────────────────────────
 router.post('/activate', authenticate, async (req, res) => {
   const { plan, cycle = 'monthly' } = req.body;
   if (!PLANS[plan]) return res.status(400).json({ error: 'Invalid plan' });
 
+  const periodStart = new Date();
   const periodEnd = new Date();
   periodEnd.setDate(periodEnd.getDate() + (cycle === 'yearly' ? 365 : 30));
 
@@ -337,8 +588,11 @@ router.post('/activate', authenticate, async (req, res) => {
     data: {
       plan,
       subscriptionStatus: 'active',
+      isSubscribed: true,
       billingCycle: cycle,
+      currentPeriodStart: periodStart,
       currentPeriodEnd: periodEnd,
+      gracePeriodEndsAt: null,
     },
   });
 

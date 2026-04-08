@@ -5,6 +5,7 @@ import jwt from 'jsonwebtoken';
 import prisma from '../utils/prisma.js';
 import { authenticate } from '../middleware/auth.js';
 import { sendMail, buildPasswordResetEmail } from '../utils/mailer.js';
+import { getOrCreateStripeCustomer } from '../utils/stripe.js';
 
 const router = Router();
 
@@ -65,7 +66,7 @@ router.post('/register', async (req, res) => {
     // Trial is NOT auto-activated. The user lands on /pricing after register
     // and either clicks "TRY NOW" (→ POST /api/subscription/start-trial) to
     // activate the 14-day trial, or picks a paid plan via Stripe.
-    const user = await prisma.user.create({
+    let user = await prisma.user.create({
       data: {
         email,
         name,
@@ -76,6 +77,18 @@ router.post('/register', async (req, res) => {
         onboardingStep: 0,
       },
     });
+
+    // Provision a Stripe customer immediately so the customer id is always
+    // present before any subscription action. Failure here is non-fatal —
+    // create-checkout will lazily retry if Stripe was temporarily unreachable.
+    try {
+      const stripeCustomerId = await getOrCreateStripeCustomer(user);
+      if (stripeCustomerId) {
+        user = { ...user, stripeCustomerId };
+      }
+    } catch (e) {
+      console.warn(`[auth/register] Stripe customer creation deferred for ${user.email}: ${e.message}`);
+    }
 
     const token = jwt.sign({ userId: user.id }, process.env.JWT_SECRET, { expiresIn: '7d' });
 
@@ -158,11 +171,16 @@ router.get('/me', authenticate, async (req, res) => {
     user: {
       id: user.id, email: user.email, name: user.name,
       plan: user.plan, subscriptionStatus: user.subscriptionStatus,
+      isSubscribed: user.isSubscribed,
       trialEndsAt: user.trialEndsAt, onboardingStep: user.onboardingStep,
       companyName: user.companyName, companyLogo: user.companyLogo,
       brandColor: user.brandColor, firstName: user.firstName,
       lastName: user.lastName, cannedResponse: user.cannedResponse,
-      currentPeriodEnd: user.currentPeriodEnd, billingCycle: user.billingCycle,
+      currentPeriodStart: user.currentPeriodStart,
+      currentPeriodEnd: user.currentPeriodEnd,
+      cancelAtPeriodEnd: user.cancelAtPeriodEnd,
+      gracePeriodEndsAt: user.gracePeriodEndsAt,
+      billingCycle: user.billingCycle,
       role: user.role, inviterUserId: user.inviterUserId,
     },
   });

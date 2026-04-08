@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import crypto from 'crypto';
-import { authenticate } from '../middleware/auth.js';
+import { authenticate, requireActiveSubscription } from '../middleware/auth.js';
 import prisma from '../utils/prisma.js';
 import { emitToUser } from '../utils/socket.js';
 import * as facebookService from '../services/facebook.js';
@@ -144,7 +144,7 @@ router.get('/public/:slug', async (req, res) => {
 // ═══════════════════════════════════════════════════════════════════
 // GET /api/invoices — list
 // ═══════════════════════════════════════════════════════════════════
-router.get('/', authenticate, async (req, res) => {
+router.get('/', authenticate, requireActiveSubscription, async (req, res) => {
   try {
     const { search, status, leadId } = req.query;
     const where = { userId: req.user.id };
@@ -177,7 +177,7 @@ router.get('/', authenticate, async (req, res) => {
 // ═══════════════════════════════════════════════════════════════════
 // GET /api/invoices/:id — detail
 // ═══════════════════════════════════════════════════════════════════
-router.get('/:id', authenticate, async (req, res) => {
+router.get('/:id', authenticate, requireActiveSubscription, async (req, res) => {
   try {
     const invoice = await loadInvoiceWithComputed({ id: req.params.id, userId: req.user.id });
     if (!invoice) return res.status(404).json({ error: 'Invoice not found' });
@@ -191,7 +191,7 @@ router.get('/:id', authenticate, async (req, res) => {
 // ═══════════════════════════════════════════════════════════════════
 // POST /api/invoices — create
 // ═══════════════════════════════════════════════════════════════════
-router.post('/', authenticate, async (req, res) => {
+router.post('/', authenticate, requireActiveSubscription, async (req, res) => {
   try {
     const {
       leadId,
@@ -345,7 +345,7 @@ router.post('/', authenticate, async (req, res) => {
 // ═══════════════════════════════════════════════════════════════════
 // PATCH /api/invoices/:id/status
 // ═══════════════════════════════════════════════════════════════════
-router.patch('/:id/status', authenticate, async (req, res) => {
+router.patch('/:id/status', authenticate, requireActiveSubscription, async (req, res) => {
   try {
     const { status } = req.body;
     if (!VALID_STATUSES.includes(status)) {
@@ -371,7 +371,7 @@ router.patch('/:id/status', authenticate, async (req, res) => {
 // ═══════════════════════════════════════════════════════════════════
 // DELETE /api/invoices/:id
 // ═══════════════════════════════════════════════════════════════════
-router.delete('/:id', authenticate, async (req, res) => {
+router.delete('/:id', authenticate, requireActiveSubscription, async (req, res) => {
   try {
     const existing = await prisma.invoice.findFirst({
       where: { id: req.params.id, userId: req.user.id },
@@ -389,7 +389,7 @@ router.delete('/:id', authenticate, async (req, res) => {
 // ═══════════════════════════════════════════════════════════════════
 // POST /api/invoices/:id/payments — record payment
 // ═══════════════════════════════════════════════════════════════════
-router.post('/:id/payments', authenticate, async (req, res) => {
+router.post('/:id/payments', authenticate, requireActiveSubscription, async (req, res) => {
   try {
     const { amount, date, type, note } = req.body;
     const amt = Number(amount);
@@ -432,7 +432,7 @@ router.post('/:id/payments', authenticate, async (req, res) => {
 // ═══════════════════════════════════════════════════════════════════
 // DELETE /api/invoices/:id/payments/:paymentId
 // ═══════════════════════════════════════════════════════════════════
-router.delete('/:id/payments/:paymentId', authenticate, async (req, res) => {
+router.delete('/:id/payments/:paymentId', authenticate, requireActiveSubscription, async (req, res) => {
   try {
     const existing = await prisma.invoice.findFirst({
       where: { id: req.params.id, userId: req.user.id },

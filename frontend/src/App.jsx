@@ -60,27 +60,38 @@ function FullPageSkeleton() {
 }
 
 /**
- * Access control logic:
- * 1. Not logged in → /login
- * 2. Trial expired & no paid plan → /pricing
- * 3. Paid/trial active but onboarding incomplete → /onboarding
- * 4. Fully setup → allow dashboard
+ * Access control — must mirror backend `requireActiveSubscription`.
+ * Allows: paid plan with status active/trialing, paid plan with past_due
+ * inside grace period, OR free trial that hasn't elapsed yet.
  */
+function hasUsableAccess(user) {
+  if (!user) return false;
+  const PAID = ['starter', 'pro', 'elite'];
+  const now = new Date();
+
+  if (PAID.includes(user.plan) && ['active', 'trialing'].includes(user.subscriptionStatus)) {
+    return true;
+  }
+  if (
+    PAID.includes(user.plan) &&
+    user.subscriptionStatus === 'past_due' &&
+    user.gracePeriodEndsAt &&
+    new Date(user.gracePeriodEndsAt) > now
+  ) {
+    return true;
+  }
+  if (user.plan === 'trial' && user.trialEndsAt && new Date(user.trialEndsAt) > now) {
+    return true;
+  }
+  return false;
+}
+
 function ProtectedRoute({ children }) {
   const { user, loading } = useAuth();
   if (loading) return <FullPageSkeleton />;
   if (!user) return <Navigate to="/welcome" />;
-
-  const hasActivePlan =
-    (user.plan === 'trial' && user.trialEndsAt && new Date(user.trialEndsAt) > new Date()) ||
-    ['starter', 'pro', 'elite'].includes(user.plan);
-
-  // Trial expired or no plan → pricing
-  if (!hasActivePlan) return <Navigate to="/pricing" />;
-
-  // Onboarding incomplete → onboarding
+  if (!hasUsableAccess(user)) return <Navigate to="/pricing" />;
   if (user.onboardingStep < 4) return <Navigate to="/onboarding" />;
-
   return children;
 }
 
@@ -106,10 +117,7 @@ function RequireActivePlan({ children }) {
   const { user, loading } = useAuth();
   if (loading) return <FullPageLoader />;
   if (!user) return <Navigate to="/welcome" />;
-  const hasActivePlan =
-    (user.plan === 'trial' && user.trialEndsAt && new Date(user.trialEndsAt) > new Date()) ||
-    ['starter', 'pro', 'elite'].includes(user.plan);
-  if (!hasActivePlan) return <Navigate to="/pricing" replace />;
+  if (!hasUsableAccess(user)) return <Navigate to="/pricing" replace />;
   return children;
 }
 

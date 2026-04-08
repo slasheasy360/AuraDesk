@@ -268,31 +268,308 @@ function IntegrationsTab({ showError }) {
 }
 
 /* ─────────────── PLAN ─────────────── */
+/* ─────────────── PLAN / BILLING ─────────────── */
+const PLAN_LABELS = { trial: 'Trial', starter: 'Starter', pro: 'Pro', elite: 'Elite', expired: 'Expired' };
+const PLAN_PRICES = {
+  starter: { monthly: 29,  yearly: 290,  features: '1 social inbox · 30 AI replies/mo · Basic dashboard' },
+  pro:     { monthly: 79,  yearly: 790,  features: '3 inboxes · Unlimited AI replies · Analytics · Priority support' },
+  elite:   { monthly: 149, yearly: 1490, features: 'Unlimited inboxes · Multi-language · Team access · Premium support' },
+};
+const STATUS_PILLS = {
+  trialing:  { label: 'Trialing',  bg: 'bg-blue-100',    text: 'text-blue-700' },
+  active:    { label: 'Active',    bg: 'bg-emerald-100', text: 'text-emerald-700' },
+  past_due:  { label: 'Past due',  bg: 'bg-amber-100',   text: 'text-amber-700' },
+  canceled:  { label: 'Canceled',  bg: 'bg-gray-200',    text: 'text-gray-700' },
+  expired:   { label: 'Expired',   bg: 'bg-red-100',     text: 'text-red-700' },
+};
+
+function fmtDate(dateLike) {
+  if (!dateLike) return '—';
+  try {
+    return new Date(dateLike).toLocaleDateString(undefined, {
+      month: 'short', day: 'numeric', year: 'numeric',
+    });
+  } catch {
+    return '—';
+  }
+}
+
 function PlanTab({ user }) {
-  const planMap = { trial: 'Trial', starter: 'Starter', pro: 'Pro', elite: 'Elite', expired: 'Expired' };
+  const { refreshUser } = useAuth();
+  const [status, setStatus] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [actionPending, setActionPending] = useState(null); // 'cancel' | 'resume' | plan id
+  const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [cycle, setCycle] = useState('monthly');
+
+  const loadStatus = () => {
+    setLoading(true);
+    api.get('/api/subscription/status')
+      .then((r) => {
+        setStatus(r.data);
+        if (r.data.billingCycle) setCycle(r.data.billingCycle);
+      })
+      .catch(() => setError('Could not load subscription details'))
+      .finally(() => setLoading(false));
+  };
+
+  useEffect(() => { loadStatus(); /* eslint-disable-next-line */ }, []);
+
+  const planLabel = PLAN_LABELS[status?.plan] || status?.plan || '—';
+  const statusPill = STATUS_PILLS[status?.subscriptionStatus] || { label: status?.subscriptionStatus, bg: 'bg-gray-100', text: 'text-gray-700' };
+  const hasStripeSub = !!status?.subscriptionId;
+  const isPaidPlan = ['starter', 'pro', 'elite'].includes(status?.plan);
+
+  const handleChangePlan = async (targetPlan, targetCycle) => {
+    if (!hasStripeSub) {
+      // No active sub yet — send them through Checkout
+      window.location.href = '/pricing';
+      return;
+    }
+    setError(''); setSuccess(''); setActionPending(targetPlan);
+    try {
+      const r = await api.post('/api/subscription/change-plan', { plan: targetPlan, cycle: targetCycle });
+      setSuccess(
+        r.data.effectiveAt === 'immediately'
+          ? `Upgraded to ${PLAN_LABELS[targetPlan]} — change is effective now.`
+          : `Downgrade to ${PLAN_LABELS[targetPlan]} scheduled for the next billing period.`
+      );
+      await loadStatus();
+      if (refreshUser) await refreshUser();
+    } catch (e) {
+      setError(e.response?.data?.error || 'Could not change plan');
+    } finally {
+      setActionPending(null);
+    }
+  };
+
+  const handleCancel = async () => {
+    setError(''); setSuccess(''); setActionPending('cancel');
+    try {
+      const r = await api.post('/api/subscription/cancel');
+      setSuccess(`Subscription will end on ${fmtDate(r.data.accessUntil)}. You can resume anytime before then.`);
+      await loadStatus();
+      if (refreshUser) await refreshUser();
+    } catch (e) {
+      setError(e.response?.data?.error || 'Could not cancel subscription');
+    } finally {
+      setActionPending(null);
+      setConfirmOpen(false);
+    }
+  };
+
+  const handleResume = async () => {
+    setError(''); setSuccess(''); setActionPending('resume');
+    try {
+      await api.post('/api/subscription/resume');
+      setSuccess('Subscription resumed. Your billing will continue as normal.');
+      await loadStatus();
+      if (refreshUser) await refreshUser();
+    } catch (e) {
+      setError(e.response?.data?.error || 'Could not resume subscription');
+    } finally {
+      setActionPending(null);
+    }
+  };
+
+  if (loading) {
+    return <div className="flex justify-center py-10"><Loader2 className="animate-spin text-primary-500" /></div>;
+  }
+
   return (
     <div className="max-w-4xl space-y-6">
-      <div>
-        <h3 className="text-sm font-semibold text-gray-700 mb-3 pb-2 border-b">Subscription</h3>
-        <div className="bg-gray-50 rounded-xl p-5 flex items-center justify-between">
+      {/* Banner: error / success */}
+      {error && (
+        <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg text-sm">{error}</div>
+      )}
+      {success && (
+        <div className="bg-emerald-50 border border-emerald-200 text-emerald-700 px-4 py-3 rounded-lg text-sm">{success}</div>
+      )}
+
+      {/* Trial countdown banner */}
+      {status?.trialActive && (
+        <div className="bg-blue-50 border border-blue-200 text-blue-700 px-4 py-3 rounded-lg text-sm flex items-center justify-between gap-4">
           <div>
-            <p className="text-xs uppercase text-gray-500 font-semibold mb-1">Plan</p>
-            <p className="text-lg font-bold text-gray-900">{planMap[user?.plan] || user?.plan}</p>
-            <p className="text-xs text-gray-500 mt-1">
-              Status: <span className="font-semibold">{user?.subscriptionStatus}</span>
-            </p>
-            {user?.currentPeriodEnd && (
-              <p className="text-xs text-gray-500 mt-1">Next payment: {new Date(user.currentPeriodEnd).toLocaleDateString()}</p>
-            )}
-            {user?.trialEndsAt && user?.plan === 'trial' && (
-              <p className="text-xs text-gray-500 mt-1">Trial ends: {new Date(user.trialEndsAt).toLocaleDateString()}</p>
+            <strong>Trial active.</strong> {status.trialDaysLeft} day{status.trialDaysLeft === 1 ? '' : 's'} remaining
+            {status.trialEndsAt ? ` — converts on ${fmtDate(status.trialEndsAt)}.` : '.'}
+          </div>
+        </div>
+      )}
+
+      {/* Grace period banner */}
+      {status?.inGracePeriod && (
+        <div className="bg-amber-50 border border-amber-200 text-amber-800 px-4 py-3 rounded-lg text-sm">
+          <strong>Payment failed.</strong> You have {status.graceDaysLeft} day{status.graceDaysLeft === 1 ? '' : 's'} of grace remaining
+          (until {fmtDate(status.gracePeriodEndsAt)}). Please update your payment method to keep your account active.
+        </div>
+      )}
+
+      {/* Cancellation pending banner */}
+      {status?.cancelAtPeriodEnd && hasStripeSub && (
+        <div className="bg-gray-100 border border-gray-200 text-gray-800 px-4 py-3 rounded-lg text-sm flex items-center justify-between gap-4">
+          <div>
+            Your subscription is scheduled to end on <strong>{fmtDate(status.currentPeriodEnd)}</strong>.
+          </div>
+          <button
+            onClick={handleResume}
+            disabled={actionPending === 'resume'}
+            className="px-4 py-1.5 bg-primary-600 hover:bg-primary-700 text-white text-xs font-semibold rounded-lg disabled:opacity-50"
+          >
+            {actionPending === 'resume' ? 'Resuming…' : 'Resume'}
+          </button>
+        </div>
+      )}
+
+      {/* Current plan card */}
+      <div>
+        <h3 className="text-sm font-semibold text-gray-700 mb-3 pb-2 border-b">Current subscription</h3>
+        <div className="bg-white border border-gray-200 rounded-xl p-6 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
+          <div>
+            <p className="text-[11px] uppercase tracking-wider text-gray-500 font-semibold mb-1">Plan</p>
+            <p className="text-xl font-bold text-gray-900">{planLabel}</p>
+            {status?.billingCycle && isPaidPlan && (
+              <p className="text-xs text-gray-500 mt-0.5 capitalize">{status.billingCycle}</p>
             )}
           </div>
-          <a href="/pricing" className="px-5 py-2.5 bg-primary-600 text-white text-sm font-semibold rounded-lg shadow">
-            Switch plan →
-          </a>
+          <div>
+            <p className="text-[11px] uppercase tracking-wider text-gray-500 font-semibold mb-1">Status</p>
+            <span className={`inline-block px-2.5 py-1 rounded-full text-[11px] font-bold ${statusPill.bg} ${statusPill.text}`}>
+              {statusPill.label}
+            </span>
+          </div>
+          <div>
+            <p className="text-[11px] uppercase tracking-wider text-gray-500 font-semibold mb-1">Started</p>
+            <p className="text-sm text-gray-900">{fmtDate(status?.currentPeriodStart)}</p>
+          </div>
+          <div>
+            <p className="text-[11px] uppercase tracking-wider text-gray-500 font-semibold mb-1">
+              {status?.cancelAtPeriodEnd ? 'Access until' : 'Next billing'}
+            </p>
+            <p className="text-sm text-gray-900">{fmtDate(status?.currentPeriodEnd)}</p>
+          </div>
         </div>
       </div>
+
+      {/* Plan switcher */}
+      <div>
+        <div className="flex items-center justify-between mb-3 pb-2 border-b">
+          <h3 className="text-sm font-semibold text-gray-700">
+            {hasStripeSub ? 'Change plan' : 'Choose a plan'}
+          </h3>
+          <div className="inline-flex bg-gray-100 rounded-full p-0.5 text-[11px] font-bold">
+            <button
+              onClick={() => setCycle('monthly')}
+              className={`px-3 py-1 rounded-full transition ${cycle === 'monthly' ? 'bg-primary-600 text-white' : 'text-gray-600'}`}
+            >
+              MONTHLY
+            </button>
+            <button
+              onClick={() => setCycle('yearly')}
+              className={`px-3 py-1 rounded-full transition ${cycle === 'yearly' ? 'bg-primary-600 text-white' : 'text-gray-600'}`}
+            >
+              YEARLY
+            </button>
+          </div>
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          {Object.entries(PLAN_PRICES).map(([planId, info]) => {
+            const isCurrent = status?.plan === planId && status?.billingCycle === cycle && !status?.cancelAtPeriodEnd;
+            const price = info[cycle];
+            const period = cycle === 'monthly' ? 'mo' : 'yr';
+            const currentRank = ['starter', 'pro', 'elite'].indexOf(status?.plan);
+            const targetRank = ['starter', 'pro', 'elite'].indexOf(planId);
+            const action = isCurrent
+              ? 'Current'
+              : !hasStripeSub
+                ? 'Subscribe'
+                : targetRank > currentRank
+                  ? 'Upgrade'
+                  : targetRank < currentRank
+                    ? 'Downgrade'
+                    : cycle !== status?.billingCycle
+                      ? (cycle === 'yearly' ? 'Switch to yearly' : 'Switch to monthly')
+                      : 'Switch';
+
+            return (
+              <div
+                key={planId}
+                className={`rounded-xl border p-5 flex flex-col ${
+                  isCurrent ? 'border-primary-500 bg-primary-50/40 ring-1 ring-primary-200' : 'border-gray-200 bg-white'
+                }`}
+              >
+                <div className="mb-3">
+                  <p className="text-lg font-bold text-gray-900">{PLAN_LABELS[planId]}</p>
+                  <p className="text-2xl font-extrabold text-gray-900 mt-1">
+                    ${price}<span className="text-sm font-medium text-gray-500">/{period}</span>
+                  </p>
+                </div>
+                <p className="text-xs text-gray-500 leading-relaxed flex-1 mb-4">{info.features}</p>
+                <button
+                  onClick={() => handleChangePlan(planId, cycle)}
+                  disabled={isCurrent || actionPending === planId}
+                  className={`w-full py-2 rounded-lg text-sm font-semibold transition ${
+                    isCurrent
+                      ? 'bg-gray-100 text-gray-500 cursor-not-allowed'
+                      : 'bg-primary-600 hover:bg-primary-700 text-white'
+                  } disabled:opacity-60`}
+                >
+                  {actionPending === planId ? 'Updating…' : action}
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Cancel section */}
+      {hasStripeSub && !status?.cancelAtPeriodEnd && (
+        <div>
+          <h3 className="text-sm font-semibold text-gray-700 mb-3 pb-2 border-b">Cancel subscription</h3>
+          <div className="bg-gray-50 border border-gray-200 rounded-xl p-5 flex items-center justify-between gap-4">
+            <p className="text-xs text-gray-600">
+              You'll keep access until <strong>{fmtDate(status?.currentPeriodEnd)}</strong>. You can resume anytime before then.
+            </p>
+            <button
+              onClick={() => setConfirmOpen(true)}
+              disabled={actionPending === 'cancel'}
+              className="px-4 py-2 border border-red-300 text-red-600 hover:bg-red-50 text-xs font-semibold rounded-lg disabled:opacity-50"
+            >
+              Cancel subscription
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Confirmation modal for cancel */}
+      {confirmOpen && (
+        <div className="fixed inset-0 bg-black/40 z-[100] flex items-center justify-center px-4">
+          <div className="bg-white rounded-xl shadow-2xl max-w-md w-full p-6">
+            <h3 className="text-lg font-bold text-gray-900 mb-2">Cancel subscription?</h3>
+            <p className="text-sm text-gray-600 mb-5">
+              You'll keep full access until <strong>{fmtDate(status?.currentPeriodEnd)}</strong>.
+              After that your account will lose access to paid features. You can resume the subscription
+              at any time before that date.
+            </p>
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={() => setConfirmOpen(false)}
+                className="px-4 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-100 rounded-lg"
+              >
+                Keep subscription
+              </button>
+              <button
+                onClick={handleCancel}
+                disabled={actionPending === 'cancel'}
+                className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white text-sm font-semibold rounded-lg disabled:opacity-50"
+              >
+                {actionPending === 'cancel' ? 'Canceling…' : 'Confirm cancel'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
