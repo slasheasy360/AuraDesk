@@ -3,6 +3,8 @@ import { useAuth } from './context/AuthContext.jsx';
 import WelcomePage from './pages/WelcomePage.jsx';
 import LoginPage from './pages/LoginPage.jsx';
 import RegisterPage from './pages/RegisterPage.jsx';
+import ForgotPasswordPage from './pages/ForgotPasswordPage.jsx';
+import ResetPasswordPage from './pages/ResetPasswordPage.jsx';
 import OAuthCallbackPage from './pages/OAuthCallbackPage.jsx';
 import PricingPage from './pages/PricingPage.jsx';
 import OnboardingPage from './pages/OnboardingPage.jsx';
@@ -121,6 +123,8 @@ export default function App() {
       <Route path="/welcome" element={<WelcomePage />} />
       <Route path="/login" element={<LoginPage />} />
       <Route path="/register" element={<RegisterPage />} />
+      <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+      <Route path="/reset-password/:token" element={<ResetPasswordPage />} />
       <Route path="/dashboard" element={<OAuthCallbackPage />} />
 
       {/* Pricing — accessible when logged in (trial expired or choosing plan) */}

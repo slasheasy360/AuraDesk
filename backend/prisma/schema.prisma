@@ -14,6 +14,12 @@ model User {
   passwordHash  String   @map("password_hash")
   createdAt     DateTime @default(now()) @map("created_at")
 
+  // ── Password Reset ──
+  // Stores SHA-256 hash of the raw token (never the raw token itself).
+  // Single-use: cleared after a successful reset. Expires after 10 minutes.
+  passwordResetTokenHash String?   @map("password_reset_token_hash")
+  passwordResetExpiresAt DateTime? @map("password_reset_expires_at")
+
   // ── Trial & Subscription ──
   plan              PlanType    @default(trial)
   trialEndsAt       DateTime?   @map("trial_ends_at")

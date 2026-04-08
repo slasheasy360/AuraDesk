@@ -119,6 +119,14 @@ export default function LoginPage() {
           onChange={(e) => setPassword(e.target.value)}
           required
         />
+        <div className="flex justify-end -mt-1">
+          <Link
+            to="/forgot-password"
+            className="text-[12px] font-semibold text-white/70 lg:text-brand-slate hover:text-brand-blue transition"
+          >
+            Forgot password?
+          </Link>
+        </div>
         <div className="pt-2">
           <GradientButton type="submit" disabled={loading}>
             {loading ? 'LOGGING IN...' : <>CONTINUE <span className="text-lg leading-none">›</span></>}
