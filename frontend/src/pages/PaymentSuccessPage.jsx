@@ -37,9 +37,9 @@ export default function PaymentSuccessPage() {
     const sessionId = searchParams.get('session_id');
 
     const routeNext = (user) => {
-      // Honour onboarding state — if not complete, send the user there;
-      // otherwise drop them into the dashboard.
-      if (user && (user.onboardingStep ?? 0) >= 4) {
+      // Honour onboarding state — if it's already complete, drop the user
+      // into the dashboard; otherwise send them to the wizard.
+      if (user?.onboardingCompleted) {
         navigate('/', { replace: true });
       } else {
         navigate('/onboarding?welcome=1', { replace: true });

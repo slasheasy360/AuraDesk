@@ -96,7 +96,9 @@ router.post('/register', async (req, res) => {
       user: {
         id: user.id, email: user.email, name: user.name,
         plan: user.plan, subscriptionStatus: user.subscriptionStatus,
-        trialEndsAt: user.trialEndsAt, onboardingStep: user.onboardingStep,
+        trialEndsAt: user.trialEndsAt,
+        onboardingStep: user.onboardingStep,
+        onboardingCompleted: user.onboardingCompleted,
       },
       token,
     });
@@ -140,7 +142,9 @@ router.post('/login', async (req, res) => {
       user: {
         id: user.id, email: user.email, name: user.name,
         plan: user.plan, subscriptionStatus: user.subscriptionStatus,
-        trialEndsAt: user.trialEndsAt, onboardingStep: user.onboardingStep,
+        trialEndsAt: user.trialEndsAt,
+        onboardingStep: user.onboardingStep,
+        onboardingCompleted: user.onboardingCompleted,
         companyName: user.companyName, firstName: user.firstName, lastName: user.lastName,
         role: user.role, inviterUserId: user.inviterUserId,
       },
@@ -172,7 +176,9 @@ router.get('/me', authenticate, async (req, res) => {
       id: user.id, email: user.email, name: user.name,
       plan: user.plan, subscriptionStatus: user.subscriptionStatus,
       isSubscribed: user.isSubscribed,
-      trialEndsAt: user.trialEndsAt, onboardingStep: user.onboardingStep,
+      trialEndsAt: user.trialEndsAt,
+      onboardingStep: user.onboardingStep,
+      onboardingCompleted: user.onboardingCompleted,
       companyName: user.companyName, companyLogo: user.companyLogo,
       brandColor: user.brandColor, firstName: user.firstName,
       lastName: user.lastName, cannedResponse: user.cannedResponse,

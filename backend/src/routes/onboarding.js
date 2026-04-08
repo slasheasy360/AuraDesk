@@ -17,11 +17,15 @@ const logoUpload = multer({
 });
 
 // ── Get onboarding state ──
+// Single source of truth used by both the frontend route guards and
+// the wizard's resume logic. `onboardingCompleted` is the canonical
+// flag — `onboardingStep` is just a UI breadcrumb.
 router.get('/status', authenticate, async (req, res) => {
   const user = await prisma.user.findUnique({
     where: { id: req.user.id },
     select: {
       onboardingStep: true,
+      onboardingCompleted: true,
       companyName: true,
       companyLogo: true,
       brandColor: true,
@@ -30,7 +34,21 @@ router.get('/status', authenticate, async (req, res) => {
       cannedResponse: true,
     },
   });
-  res.json(user);
+  if (!user) return res.status(404).json({ error: 'User not found' });
+
+  // Count active connected accounts so the frontend can show "you have
+  // X platforms connected" without an extra round-trip.
+  const platformCount = await prisma.connectedAccount.count({
+    where: { userId: req.user.id, status: 'active' },
+  });
+
+  res.json({
+    ...user,
+    onboardingCompleted: user.onboardingCompleted,
+    hasOrganization: !!user.companyName,
+    platformsConnected: platformCount > 0,
+    platformCount,
+  });
 });
 
 // ── Upload logo ──
@@ -53,7 +71,13 @@ router.post('/upload-logo', authenticate, logoUpload.single('logo'), async (req,
   res.json({ url, s3Key });
 });
 
-// ── Step 1: Branding ──
+// ── Branding (organization setup) ──
+//
+// Creating the organization is the ONLY hard requirement to consider a
+// user onboarded. Connecting platforms is optional and can be done later
+// from the Connections page. The moment this endpoint succeeds we set
+// `onboardingCompleted = true` so the user is permanently routed past
+// the wizard from then on.
 router.post('/branding', authenticate, async (req, res) => {
   const { firstName, lastName, companyName, brandColor, companyLogo } = req.body;
   if (!firstName || !companyName) {
@@ -61,7 +85,6 @@ router.post('/branding', authenticate, async (req, res) => {
   }
 
   const current = await prisma.user.findUnique({ where: { id: req.user.id } });
-  const newStep = Math.max(current.onboardingStep, 1);
 
   const user = await prisma.user.update({
     where: { id: req.user.id },
@@ -71,11 +94,16 @@ router.post('/branding', authenticate, async (req, res) => {
       companyName,
       brandColor: brandColor || null,
       companyLogo: companyLogo || current.companyLogo || null,
-      onboardingStep: newStep,
+      onboardingStep: 4,
+      onboardingCompleted: true,
     },
   });
 
-  res.json({ success: true, onboardingStep: user.onboardingStep });
+  res.json({
+    success: true,
+    onboardingStep: user.onboardingStep,
+    onboardingCompleted: user.onboardingCompleted,
+  });
 });
 
 // ── Step 2: Platform connection ── (marks step as visited)
@@ -99,12 +127,30 @@ router.post('/first-message', authenticate, async (req, res) => {
 });
 
 // ── Complete onboarding ──
+// Idempotent. Used by the legacy "LET'S START" button on the success
+// screen. Branding now marks the user as complete on its own, so this
+// endpoint is effectively a no-op safety net.
 router.post('/complete', authenticate, async (req, res) => {
+  const user = await prisma.user.update({
+    where: { id: req.user.id },
+    data: { onboardingStep: 4, onboardingCompleted: true },
+  });
+  res.json({
+    success: true,
+    onboardingStep: user.onboardingStep,
+    onboardingCompleted: user.onboardingCompleted,
+  });
+});
+
+// ── Reset onboarding (debug / admin) ──
+// Lets a user start the wizard again. Wired only for explicit user action;
+// the route guards never trigger this on their own.
+router.post('/reset', authenticate, async (req, res) => {
   await prisma.user.update({
     where: { id: req.user.id },
-    data: { onboardingStep: 4 },
+    data: { onboardingStep: 0, onboardingCompleted: false },
   });
-  res.json({ success: true, onboardingStep: 4 });
+  res.json({ success: true });
 });
 
 export default router;

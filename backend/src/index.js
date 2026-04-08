@@ -121,6 +121,32 @@ app.use('/api/onboarding',   onboardingRoutes);
 app.use('/api/profile',      profileRoutes);
 app.use('/api/team',         teamRoutes);
 
+// Alias: GET /api/user/onboarding-status
+// Mirrors /api/onboarding/status. Kept as a thin alias because some clients
+// expect the user-namespaced path. Returns the same canonical shape:
+//   { onboardingCompleted, hasOrganization, platformsConnected, ... }
+app.get('/api/user/onboarding-status', authenticate, async (req, res) => {
+  const user = await prisma.user.findUnique({
+    where: { id: req.user.id },
+    select: {
+      onboardingStep: true,
+      onboardingCompleted: true,
+      companyName: true,
+    },
+  });
+  if (!user) return res.status(404).json({ error: 'User not found' });
+  const platformCount = await prisma.connectedAccount.count({
+    where: { userId: req.user.id, status: 'active' },
+  });
+  res.json({
+    onboardingCompleted: user.onboardingCompleted,
+    hasOrganization: !!user.companyName,
+    platformsConnected: platformCount > 0,
+    platformCount,
+    onboardingStep: user.onboardingStep,
+  });
+});
+
 // Webhook routes
 app.use('/webhooks/meta', metaWebhook);
 app.use('/webhooks/gmail', gmailWebhook);

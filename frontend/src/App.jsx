@@ -92,7 +92,10 @@ function ProtectedRoute({ children }) {
   if (loading) return <FullPageSkeleton />;
   if (!user) return <Navigate to="/welcome" />;
   if (!hasUsableAccess(user)) return <Navigate to="/pricing" />;
-  if (user.onboardingStep < 4) return <Navigate to="/onboarding" />;
+  // `onboardingCompleted` is the canonical flag — set as soon as the
+  // organization is created. The legacy `onboardingStep` int is kept
+  // around as a UI breadcrumb but is NOT used for routing.
+  if (!user.onboardingCompleted) return <Navigate to="/onboarding" />;
   return children;
 }
 
@@ -127,18 +130,25 @@ function RedirectIfActive({ children }) {
   if (loading) return <FullPageLoader />;
   if (!user) return <Navigate to="/welcome" />;
   if (hasUsableAccess(user)) {
-    if ((user.onboardingStep ?? 0) >= 4) return <Navigate to="/" replace />;
+    if (user.onboardingCompleted) return <Navigate to="/" replace />;
     return <Navigate to="/onboarding" replace />;
   }
   return children;
 }
 
-/** Onboarding can only be entered with an active plan/trial. Otherwise → /pricing */
+/**
+ * Onboarding wrapper.
+ *  - Must be logged in.
+ *  - Must have an active plan / trial (otherwise → /pricing).
+ *  - If onboarding is ALREADY complete, never show the wizard again →
+ *    bounce straight to the dashboard.
+ */
 function RequireActivePlan({ children }) {
   const { user, loading } = useAuth();
   if (loading) return <FullPageLoader />;
   if (!user) return <Navigate to="/welcome" />;
   if (!hasUsableAccess(user)) return <Navigate to="/pricing" replace />;
+  if (user.onboardingCompleted) return <Navigate to="/" replace />;
   return children;
 }
 

@@ -37,12 +37,14 @@ export default function LoginPage() {
     try {
       const u = await login(email, password);
       // Route the user based on their subscription / onboarding state.
+      // Both flags are pulled from the backend on every login — never
+      // trust frontend cache.
       const hasActivePlan =
         (u?.plan === 'trial' && u?.trialEndsAt && new Date(u.trialEndsAt) > new Date()) ||
         ['starter', 'pro', 'elite'].includes(u?.plan);
       if (!hasActivePlan) {
         navigate('/pricing', { replace: true });
-      } else if ((u?.onboardingStep ?? 0) < 4) {
+      } else if (!u?.onboardingCompleted) {
         navigate('/onboarding', { replace: true });
       } else {
         navigate('/inbox', { replace: true });

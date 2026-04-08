@@ -36,7 +36,13 @@ model User {
   billingCycle      BillingCycle? @map("billing_cycle")
 
   // ── Onboarding ──
-  onboardingStep    Int         @default(0) @map("onboarding_step")  // 0=not started, 1=branding, 2=platforms, 3=first-message, 4=complete
+  // `onboardingStep` is a UI breadcrumb for the multi-step wizard.
+  // `onboardingCompleted` is the canonical "is this user fully onboarded"
+  // flag — set the moment the organization (branding) step completes,
+  // regardless of whether they connected any platforms. This is the only
+  // value the route guards check; do NOT gate access on onboardingStep.
+  onboardingStep      Int      @default(0) @map("onboarding_step")  // 0=not started, 1=branding, 2=platforms, 3=first-message, 4=complete
+  onboardingCompleted Boolean  @default(false) @map("onboarding_completed")
   companyName       String?     @map("company_name")
   companyLogo       String?     @map("company_logo")
   brandColor        String?     @map("brand_color")

@@ -370,6 +370,7 @@ function BrandingStep({ onNext, savedData, onSaveData }) {
   const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
   const fileInputRef = useRef(null);
+  const { refreshUser } = useAuth();
 
   useEffect(() => {
     if (!savedData?.firstName) {
@@ -416,8 +417,15 @@ function BrandingStep({ onNext, savedData, onSaveData }) {
     if (!form.firstName || !form.companyName) return;
     setSaving(true);
     try {
+      // The branding endpoint sets `onboardingCompleted = true` server-side.
+      // We immediately refreshUser so the AuthContext picks up the new flag
+      // — without this, RequireActivePlan would still see the old user and
+      // could bounce a fast-clicking user back into the wizard on navigate.
       await api.post('/api/onboarding/branding', form);
       onSaveData(form);
+      if (refreshUser) {
+        try { await refreshUser(); } catch { /* non-fatal */ }
+      }
       onNext();
     } catch (err) {
       console.error('Branding save failed:', err);
@@ -595,41 +603,52 @@ export default function OnboardingPage() {
       return;
     }
     api.get('/api/onboarding/status').then((res) => {
-      const s = res.data.onboardingStep || 0;
-      if (s >= 4) {
-        navigate('/');
-      } else if (s > 0 && !successPlatform) {
-        const display = Math.min(s, 1);
-        setStep(display);
-        setMaxStep(display);
-        if (res.data.firstName || res.data.companyName) {
-          setBrandingData({
-            firstName: res.data.firstName || '',
-            lastName: res.data.lastName || '',
-            companyName: res.data.companyName || '',
-            brandColor: res.data.brandColor || '',
-            companyLogo: res.data.companyLogo || null,
-          });
-        }
+      // ── Hard short-circuit ──
+      // The backend `onboardingCompleted` flag is the single source of
+      // truth. If it's set, the user must NEVER see the wizard again.
+      if (res.data?.onboardingCompleted) {
+        navigate('/', { replace: true });
+        return;
+      }
+
+      // Pre-fill the branding form if the user has typed in it before
+      // (e.g. they returned mid-flow). The wizard always starts on the
+      // platform step — it's optional, so anyone can advance from it.
+      if (res.data?.firstName || res.data?.companyName) {
+        setBrandingData({
+          firstName: res.data.firstName || '',
+          lastName: res.data.lastName || '',
+          companyName: res.data.companyName || '',
+          brandColor: res.data.brandColor || '',
+          companyLogo: res.data.companyLogo || null,
+        });
       }
     }).catch((err) => {
       if (err.response?.status === 401) navigate('/login');
     });
-  }, [navigate, successPlatform]);
+  }, [navigate]);
 
   const goTo = (n) => {
     setStep(n);
     setMaxStep((m) => Math.max(m, n));
   };
 
+  // Called from the SuccessScreen "LET'S START" button. Branding has
+  // already marked the user as complete server-side, so this is mostly
+  // a UI nudge — but we still hit /complete to be defensive against
+  // partial-state writes, then refresh the auth user and navigate.
   const handleFinish = async () => {
     try {
       await api.post('/api/onboarding/complete');
-      if (refreshUser) await refreshUser();
-      navigate('/');
-    } catch {
-      navigate('/');
+    } catch (e) {
+      // non-fatal — branding endpoint already flipped the flag
     }
+    try {
+      if (refreshUser) await refreshUser();
+    } catch (e) {
+      // non-fatal
+    }
+    navigate('/', { replace: true });
   };
 
   return (
