@@ -294,72 +294,69 @@ export default function PricingPage() {
 
   return (
     <div
-      className="min-h-screen w-full flex items-center justify-center px-3 sm:px-6 py-6 sm:py-10"
-      style={{
-        background:
-          'linear-gradient(180deg, #d6e4ff 0%, #e7eeff 40%, #f1f5ff 100%)',
-      }}
+      className="min-h-screen w-full flex flex-col px-6 sm:px-10 lg:px-16 pt-6 sm:pt-8 pb-5"
+      style={{ backgroundColor: '#f3f5f8' }}
     >
-      <div className="w-full max-w-[1080px] bg-[#f6f8fc] rounded-3xl border border-blue-100 shadow-[0_10px_50px_rgba(15,42,99,0.08)] px-5 sm:px-10 pt-6 sm:pt-7 pb-5 sm:pb-6">
-        {/* Top: return-to-login link */}
-        <button
-          type="button"
-          onClick={handleReturnToLogin}
-          className="flex items-center gap-1 text-[13px] text-gray-500 hover:text-gray-800 transition"
-        >
-          <ChevronLeft size={16} />
-          <span>Return to Log in</span>
-        </button>
+      {/* Top: return-to-login link */}
+      <button
+        type="button"
+        onClick={handleReturnToLogin}
+        className="flex items-center gap-1 text-[13px] text-gray-500 hover:text-gray-800 transition self-start"
+      >
+        <ChevronLeft size={16} />
+        <span>Return to Log in</span>
+      </button>
 
-        {/* Trial banner (only if eligible) */}
-        {trialEligible && (
-          <div className="mt-5">
-            <TrialBanner onTryNow={handleStartTrial} loading={trialLoading} />
-          </div>
-        )}
-
-        {/* Header row: title/subtitle on the left, cycle toggle on the right */}
-        <div className="mt-3 flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
-          <div>
-            <h1 className="text-[26px] sm:text-[30px] font-extrabold text-[#0B1E3F] leading-tight">
-              {heading}
-            </h1>
-            <p className="mt-1 text-[13px] sm:text-[14px] text-gray-500 max-w-xl">
-              {subtitle}
-            </p>
-          </div>
-          <div className="sm:pt-2">
-            <CycleToggle cycle={cycle} onChange={setCycle} />
-          </div>
+      {/* Trial banner (only if eligible) */}
+      {trialEligible && (
+        <div className="mt-5 max-w-[1080px] mx-auto w-full">
+          <TrialBanner onTryNow={handleStartTrial} loading={trialLoading} />
         </div>
+      )}
 
-        {/* Error / status messages */}
-        {alreadyPaid && (
-          <div className="mt-5 max-w-xl bg-green-50 border border-green-200 text-green-700 px-4 py-2.5 rounded-lg text-sm">
-            ✅ Your subscription is active. Redirecting…
-          </div>
-        )}
-        {trialActive && !alreadyPaid && user?.trialEndsAt && (
-          <div className="mt-5 max-w-xl bg-blue-50 border border-blue-200 text-blue-700 px-4 py-2.5 rounded-lg text-sm">
-            Your trial ends on{' '}
-            <strong>
-              {new Date(user.trialEndsAt).toLocaleDateString(undefined, {
-                month: 'long',
-                day: 'numeric',
-                year: 'numeric',
-              })}
-            </strong>
-            . Pick a plan now to keep your account active afterwards.
-          </div>
-        )}
-        {errorMsg && (
-          <div className="mt-5 max-w-xl bg-red-50 border border-red-200 text-red-700 px-4 py-2.5 rounded-lg text-sm">
-            {errorMsg}
-          </div>
-        )}
+      {/* Header row: title/subtitle on the left, cycle toggle on the right */}
+      <div className="mt-4 flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
+        <div>
+          <h1 className="text-[26px] sm:text-[30px] font-extrabold text-[#0B1E3F] leading-tight">
+            {heading}
+          </h1>
+          <p className="mt-1 text-[13px] sm:text-[14px] text-gray-500 max-w-xl">
+            {subtitle}
+          </p>
+        </div>
+        <div className="sm:pt-2">
+          <CycleToggle cycle={cycle} onChange={setCycle} />
+        </div>
+      </div>
 
-        {/* Plan cards */}
-        <div className="mt-7 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6 sm:gap-7">
+      {/* Error / status messages */}
+      {alreadyPaid && (
+        <div className="mt-5 max-w-xl bg-green-50 border border-green-200 text-green-700 px-4 py-2.5 rounded-lg text-sm">
+          ✅ Your subscription is active. Redirecting…
+        </div>
+      )}
+      {trialActive && !alreadyPaid && user?.trialEndsAt && (
+        <div className="mt-5 max-w-xl bg-blue-50 border border-blue-200 text-blue-700 px-4 py-2.5 rounded-lg text-sm">
+          Your trial ends on{' '}
+          <strong>
+            {new Date(user.trialEndsAt).toLocaleDateString(undefined, {
+              month: 'long',
+              day: 'numeric',
+              year: 'numeric',
+            })}
+          </strong>
+          . Pick a plan now to keep your account active afterwards.
+        </div>
+      )}
+      {errorMsg && (
+        <div className="mt-5 max-w-xl bg-red-50 border border-red-200 text-red-700 px-4 py-2.5 rounded-lg text-sm">
+          {errorMsg}
+        </div>
+      )}
+
+      {/* Plan cards */}
+      <div className="flex-1 flex items-center justify-center w-full">
+        <div className="w-full max-w-[1080px] grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6 sm:gap-8 py-8">
           {PLANS.map((plan) => (
             <PlanCard
               key={plan.id}
@@ -371,19 +368,19 @@ export default function PricingPage() {
             />
           ))}
         </div>
+      </div>
 
-        {/* Footer */}
-        <div className="mt-8 sm:mt-10 flex items-center justify-between text-[11px] text-gray-400">
-          <span>Copyright 2021 - 2025 AuraDesk Inc. All Rights Reserved.</span>
-          <button
-            type="button"
-            className="flex items-center gap-1.5 hover:text-gray-600 transition"
-            onClick={() => window.open('mailto:support@auradesk.com', '_blank')}
-          >
-            <HelpCircle size={13} />
-            <span>Need help?</span>
-          </button>
-        </div>
+      {/* Footer */}
+      <div className="mt-4 flex items-center justify-between text-[11px] text-gray-400">
+        <span>Copyright 2021 - 2025 AuraDesk Inc. All Rights Reserved.</span>
+        <button
+          type="button"
+          className="flex items-center gap-1.5 hover:text-gray-600 transition"
+          onClick={() => window.open('mailto:support@auradesk.com', '_blank')}
+        >
+          <HelpCircle size={13} />
+          <span>Need help?</span>
+        </button>
       </div>
     </div>
   );
