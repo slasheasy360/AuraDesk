@@ -1,4 +1,5 @@
 import nodemailer from 'nodemailer';
+import crypto from 'crypto';
 
 let transporter = null;
 
@@ -18,13 +19,45 @@ function getTransporter() {
   return transporter;
 }
 
-export async function sendMail({ to, subject, html, text }) {
+function buildMessageId(from) {
+  const domain = (from || '').split('@')[1] || 'auradesk.local';
+  return `${crypto.randomBytes(16).toString('hex')}@${domain}`;
+}
+
+export async function sendMail({
+  to,
+  subject,
+  html,
+  text,
+  from,
+  replyTo,
+  headers,
+  messageId,
+  attachments,
+}) {
   const t = getTransporter();
   if (!t) return { sent: false, reason: 'SMTP not configured' };
-  const from = process.env.SMTP_FROM || `AuraDesk <${process.env.SMTP_USER}>`;
+  const resolvedFrom = from || process.env.SMTP_FROM || `AuraDesk <${process.env.SMTP_USER}>`;
+  const resolvedMessageId = messageId || buildMessageId(resolvedFrom);
   try {
-    const info = await t.sendMail({ from, to, subject, html, text });
-    return { sent: true, messageId: info.messageId };
+    const info = await t.sendMail({
+      from: resolvedFrom,
+      to,
+      subject,
+      html,
+      text,
+      replyTo,
+      headers,
+      messageId: resolvedMessageId,
+      attachments,
+    });
+    return {
+      sent: true,
+      messageId: info.messageId,
+      accepted: info.accepted,
+      rejected: info.rejected,
+      response: info.response,
+    };
   } catch (err) {
     console.error('[Mailer] Send failed:', err.message);
     return { sent: false, reason: err.message };

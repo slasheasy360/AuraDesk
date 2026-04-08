@@ -6,7 +6,7 @@ import { emitToUser } from '../utils/socket.js';
 import * as facebookService from '../services/facebook.js';
 import * as instagramService from '../services/instagram.js';
 import * as whatsappService from '../services/whatsapp.js';
-import * as gmailService from '../services/gmail.js';
+import { sendMail } from '../utils/mailer.js';
 
 const router = Router();
 
@@ -66,19 +66,84 @@ async function sendOnPlatform(conversation, content) {
       const subject = lastMsg?.subject
         ? (lastMsg.subject.startsWith('Re:') ? lastMsg.subject : `Re: ${lastMsg.subject}`)
         : 'Your invoice';
-      const r = await gmailService.sendEmail(
-        conversation.connectedAccountId,
-        recipientEmail,
+      const headers = await getThreadingHeaders(conversation.id);
+      const mailResult = await sendMail({
+        from: conversation.connectedAccount.platformAccountId,
+        to: recipientEmail,
         subject,
-        content,
-        conversation.platformConversationId,
-        []
-      );
-      return { platformMessageId: r?.id || null, subject };
+        text: content,
+        headers: headers || undefined,
+      });
+      if (!mailResult.sent) {
+        throw new Error(`SMTP send failed: ${mailResult.reason || 'Unknown error'}`);
+      }
+      console.log('[Invoice SMTP] Gmail thread reply sent:', {
+        to: recipientEmail,
+        subject,
+        messageId: mailResult.messageId,
+        response: mailResult.response,
+        accepted: mailResult.accepted,
+        rejected: mailResult.rejected,
+      });
+      return { platformMessageId: mailResult.messageId || null, subject };
     }
     default:
       throw new Error(`Unsupported platform: ${platform}`);
   }
+}
+
+function extractHeader(headers = [], name) {
+  const target = name.toLowerCase();
+  const header = headers.find((h) => String(h.name || '').toLowerCase() === target);
+  return header?.value || '';
+}
+
+async function getThreadingHeaders(conversationId) {
+  const lastWithPayload = await prisma.message.findFirst({
+    where: { conversationId, rawPayload: { not: null } },
+    orderBy: { sentAt: 'desc' },
+    select: { rawPayload: true },
+  });
+
+  const headers = lastWithPayload?.rawPayload?.payload?.headers || [];
+  const messageId = extractHeader(headers, 'Message-ID');
+  const references = extractHeader(headers, 'References');
+
+  if (!messageId && !references) return null;
+
+  const refValue = references
+    ? `${references} ${messageId || ''}`.trim()
+    : messageId || '';
+
+  return {
+    'In-Reply-To': messageId || undefined,
+    References: refValue || undefined,
+  };
+}
+
+function buildInvoiceEmail({ invoice, company, publicLink }) {
+  const subject = `Invoice ${invoice.invoiceNumber} from ${company || 'AuraDesk'}`;
+  const lines = [
+    `Hi ${invoice.clientName || 'there'},`,
+    '',
+    `Here is your invoice ${invoice.invoiceNumber}.`,
+    `Total: ${invoice.currency} ${invoice.total.toFixed(2)}`,
+    `Due date: ${invoice.dueDate.toISOString().slice(0, 10)}`,
+    '',
+    `View and pay: ${publicLink}`,
+  ];
+  const text = lines.join('\n');
+  const html = `
+    <div style="font-family:Segoe UI,Arial,sans-serif;max-width:560px;margin:0 auto;padding:24px;">
+      <h2 style="margin:0 0 12px;color:#0f172a;">Invoice ${invoice.invoiceNumber}</h2>
+      <p style="margin:0 0 8px;color:#334155;">Hi ${invoice.clientName || 'there'},</p>
+      <p style="margin:0 0 8px;color:#334155;">Here is your invoice.</p>
+      <p style="margin:0 0 8px;color:#334155;"><strong>Total:</strong> ${invoice.currency} ${invoice.total.toFixed(2)}</p>
+      <p style="margin:0 0 16px;color:#334155;"><strong>Due date:</strong> ${invoice.dueDate.toISOString().slice(0, 10)}</p>
+      <a href="${publicLink}" style="display:inline-block;background:#2563eb;color:#fff;text-decoration:none;padding:10px 16px;border-radius:6px;">View invoice</a>
+    </div>
+  `;
+  return { subject, text, html };
 }
 
 function calcTotals(items, taxRate) {
@@ -272,6 +337,8 @@ router.post('/', authenticate, requireActiveSubscription, async (req, res) => {
       include: { items: true, payments: true },
     });
 
+    let gmailConversationRecipient = null;
+
     // ── Auto-send to chat if lead has conversation: real platform delivery ──
     if (lead?.conversationId) {
       try {
@@ -293,6 +360,10 @@ router.post('/', authenticate, requireActiveSubscription, async (req, res) => {
 
         // Actually send via the platform (Gmail / WhatsApp / IG / FB)
         const { platformMessageId, subject } = await sendOnPlatform(conversation, content);
+
+        if (conversation.connectedAccount.platform === 'gmail') {
+          gmailConversationRecipient = conversation.contact?.platformUserId || null;
+        }
 
         // Persist the outbound message in our DB
         const platform = conversation.connectedAccount.platform;
@@ -334,8 +405,51 @@ router.post('/', authenticate, requireActiveSubscription, async (req, res) => {
       }
     }
 
+    let emailDelivery = null;
+    if (clientEmail && clientEmail !== gmailConversationRecipient) {
+      const frontendBase = (process.env.FRONTEND_URL || 'http://localhost:5173').split(',')[0].trim();
+      const publicLink = `${frontendBase}/i/${publicSlug}`;
+      const { subject, text, html } = buildInvoiceEmail({
+        invoice,
+        company: req.user.companyName || req.user.name,
+        publicLink,
+      });
+
+      const mailResult = await sendMail({
+        from: process.env.SMTP_FROM || `${req.user.name || 'AuraDesk'} <${req.user.email}>`,
+        to: clientEmail,
+        subject,
+        text,
+        html,
+      });
+
+      emailDelivery = {
+        sent: mailResult.sent,
+        messageId: mailResult.messageId || null,
+        reason: mailResult.sent ? null : mailResult.reason || 'Unknown error',
+        response: mailResult.response || null,
+      };
+
+      if (mailResult.sent) {
+        console.log('[Invoice SMTP] Invoice email sent:', {
+          to: clientEmail,
+          subject,
+          messageId: mailResult.messageId,
+          response: mailResult.response,
+          accepted: mailResult.accepted,
+          rejected: mailResult.rejected,
+        });
+      } else {
+        console.error('[Invoice SMTP] Invoice email failed:', {
+          to: clientEmail,
+          subject,
+          reason: mailResult.reason,
+        });
+      }
+    }
+
     emitToUser(req.user.id, 'invoice_created', { invoice });
-    res.status(201).json({ invoice });
+    res.status(201).json({ invoice, emailDelivery });
   } catch (err) {
     console.error('Create invoice error:', err);
     res.status(500).json({ error: 'Failed to create invoice' });
