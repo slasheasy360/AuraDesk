@@ -3,7 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext.jsx';
 import api from '../services/api.js';
 import { redirectToStripeCheckout } from '../services/stripe.js';
-import { ChevronLeft, ChevronRight, HelpCircle } from 'lucide-react';
+import { ChevronLeft, ChevronRight } from 'lucide-react';
 
 /* ─────────────── PLAN DATA ─────────────── */
 const PLANS = [
@@ -14,9 +14,9 @@ const PLANS = [
     yearly: 290,
     // Stack/back-card colour for the 3D effect
     stackColor: '#1787FE',
-    // CTA button colour
-    btnColor: '#1787FE',
-    btnHover: '#0f6fd8',
+    // CTA gradient (top → bottom)
+    btnGradient: 'linear-gradient(180deg, #2196FE 0%, #0f6fd8 100%)',
+    btnGradientHover: 'linear-gradient(180deg, #1787FE 0%, #0a5ec0 100%)',
     features: [
       '1 social inbox (IG, FB, TikTok, etc.)',
       'AI-generated replies (max 30/month)',
@@ -33,8 +33,8 @@ const PLANS = [
     yearly: 790,
     popular: true,
     stackColor: '#0B1E3F',
-    btnColor: '#0B1E3F',
-    btnHover: '#13294d',
+    btnGradient: 'linear-gradient(180deg, #13294d 0%, #0B1E3F 100%)',
+    btnGradientHover: 'linear-gradient(180deg, #1a3460 0%, #13294d 100%)',
     features: [
       '3 social inboxes',
       'Unlimited AI replies',
@@ -52,8 +52,8 @@ const PLANS = [
     monthly: 149,
     yearly: 1490,
     stackColor: '#031428',
-    btnColor: '#031428',
-    btnHover: '#0a2240',
+    btnGradient: 'linear-gradient(180deg, #0a2240 0%, #031428 100%)',
+    btnGradientHover: 'linear-gradient(180deg, #102e50 0%, #0a2240 100%)',
     features: [
       'Unlimited inboxes + platforms',
       'Multi-language AI replies',
@@ -82,7 +82,10 @@ function PlanCard({ plan, cycle, loading, disabled, onChoose }) {
       />
 
       {/* Front white card */}
-      <div className="relative bg-white rounded-2xl shadow-sm border border-gray-100 flex flex-col overflow-hidden">
+      <div
+        className="relative bg-white rounded-2xl border border-gray-100 flex flex-col overflow-hidden"
+        style={{ boxShadow: '0 10px 30px rgba(0, 0, 0, 0.08)' }}
+      >
         <div className="p-7 pb-5 flex-1 flex flex-col">
           <div className="mb-5">
             <div className="flex items-baseline gap-1">
@@ -103,20 +106,20 @@ function PlanCard({ plan, cycle, loading, disabled, onChoose }) {
           </ul>
         </div>
 
-        {/* CTA — full-width bar at the bottom of the white card */}
+        {/* CTA — full-width gradient bar at the bottom of the white card */}
         <button
           type="button"
           onClick={() => onChoose(plan.id)}
           disabled={loading || disabled}
           className="w-full px-7 py-4 text-white text-[12px] font-bold tracking-[0.18em] flex items-center justify-between transition disabled:opacity-60 disabled:cursor-not-allowed"
           style={{
-            backgroundColor: plan.btnColor,
+            background: plan.btnGradient,
           }}
           onMouseEnter={(e) => {
-            if (!loading && !disabled) e.currentTarget.style.backgroundColor = plan.btnHover;
+            if (!loading && !disabled) e.currentTarget.style.background = plan.btnGradientHover;
           }}
           onMouseLeave={(e) => {
-            e.currentTarget.style.backgroundColor = plan.btnColor;
+            e.currentTarget.style.background = plan.btnGradient;
           }}
         >
           <span>{loading ? 'REDIRECTING…' : 'CHOOSE PLAN'}</span>
@@ -219,8 +222,6 @@ export default function PricingPage() {
   // User can start the free trial only if they're brand-new (plan === 'trial' but
   // trialEndsAt is null, meaning the trial has never been started).
   const trialEligible = !!user && user.plan === 'trial' && !user.trialEndsAt;
-  const trialActive =
-    !!user && user.plan === 'trial' && user.trialEndsAt && new Date(user.trialEndsAt) > new Date();
   const trialExpired = !!user && (user.plan === 'expired' ||
     (user.plan === 'trial' && user.trialEndsAt && new Date(user.trialEndsAt) <= new Date()));
 
@@ -317,10 +318,10 @@ export default function PricingPage() {
       {/* Header row: title/subtitle on the left, cycle toggle on the right */}
       <div className="mt-4 flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
         <div>
-          <h1 className="text-[26px] sm:text-[30px] font-extrabold text-[#0B1E3F] leading-tight">
+          <h1 className="text-[28px] sm:text-[34px] font-extrabold text-[#0B1E3F] leading-tight tracking-tight">
             {heading}
           </h1>
-          <p className="mt-1 text-[13px] sm:text-[14px] text-gray-500 max-w-xl">
+          <p className="mt-2 text-[13px] sm:text-[14px] text-gray-500 max-w-xl">
             {subtitle}
           </p>
         </div>
@@ -333,19 +334,6 @@ export default function PricingPage() {
       {alreadyPaid && (
         <div className="mt-5 max-w-xl bg-green-50 border border-green-200 text-green-700 px-4 py-2.5 rounded-lg text-sm">
           ✅ Your subscription is active. Redirecting…
-        </div>
-      )}
-      {trialActive && !alreadyPaid && user?.trialEndsAt && (
-        <div className="mt-5 max-w-xl bg-blue-50 border border-blue-200 text-blue-700 px-4 py-2.5 rounded-lg text-sm">
-          Your trial ends on{' '}
-          <strong>
-            {new Date(user.trialEndsAt).toLocaleDateString(undefined, {
-              month: 'long',
-              day: 'numeric',
-              year: 'numeric',
-            })}
-          </strong>
-          . Pick a plan now to keep your account active afterwards.
         </div>
       )}
       {errorMsg && (
@@ -371,16 +359,8 @@ export default function PricingPage() {
       </div>
 
       {/* Footer */}
-      <div className="mt-4 flex items-center justify-between text-[11px] text-gray-400">
+      <div className="mt-4 text-[11px] text-gray-400">
         <span>Copyright 2021 - 2025 AuraDesk Inc. All Rights Reserved.</span>
-        <button
-          type="button"
-          className="flex items-center gap-1.5 hover:text-gray-600 transition"
-          onClick={() => window.open('mailto:support@auradesk.com', '_blank')}
-        >
-          <HelpCircle size={13} />
-          <span>Need help?</span>
-        </button>
       </div>
     </div>
   );
