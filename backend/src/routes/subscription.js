@@ -196,12 +196,14 @@ router.post('/create-checkout', authenticate, async (req, res) => {
     // Trial eligibility: only attach a trial period if the user has never used one
     // AND the request explicitly opts in. Users whose plan is 'expired' (trial
     // already consumed) cannot get another.
+    //
+    // Note: we do NOT pass `payment_settings` here. Stripe Checkout in
+    // subscription mode already attaches the collected card as the default
+    // payment method on the resulting subscription, and `payment_settings`
+    // is rejected by the Checkout Session API as an unknown parameter.
     const trialEligible = user.plan === 'trial' && !user.trialEndsAt;
     const subscriptionData = {
       metadata: { userId: user.id, plan, cycle },
-      // Persist the card collected during checkout as the default payment
-      // method on the resulting subscription. Required for trial conversions.
-      payment_settings: { save_default_payment_method: 'on_subscription' },
       ...(includeTrial && trialEligible ? { trial_period_days: TRIAL_DAYS } : {}),
     };
 
