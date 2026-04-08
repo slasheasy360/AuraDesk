@@ -23,7 +23,7 @@ api.interceptors.response.use(
     if (
       error?.response?.status === 402 &&
       typeof window !== 'undefined' &&
-      !['/pricing', '/onboarding', '/login', '/welcome'].some((p) => window.location.pathname.startsWith(p))
+      !['/pricing', '/onboarding', '/login', '/welcome', '/payment'].some((p) => window.location.pathname.startsWith(p))
     ) {
       const reason = error.response.data?.reason || 'subscription_required';
       window.location.href = `/pricing?reason=${encodeURIComponent(reason)}`;

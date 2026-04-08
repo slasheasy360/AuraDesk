@@ -77,9 +77,22 @@ export function mapStripeStatus(stripeStatus) {
 }
 
 /**
+ * Resolve current_period_start / current_period_end from a Stripe Subscription
+ * object. Stripe moved these fields off the top-level Subscription and onto
+ * each subscription item starting with API version 2025-04-30. We read both
+ * shapes so the code is safe across older and newer accounts.
+ */
+export function resolvePeriodTimestamps(sub) {
+  const item = sub?.items?.data?.[0] || null;
+  const start = sub?.current_period_start ?? item?.current_period_start ?? null;
+  const end   = sub?.current_period_end   ?? item?.current_period_end   ?? null;
+  return { start, end };
+}
+
+/**
  * Convert a Stripe subscription object into the columns we want to write
- * onto the user row. Centralised so checkout, webhook, and change-plan all
- * stay in sync.
+ * onto the user row. Centralised so checkout, webhook, sync-session, and
+ * change-plan all stay in sync.
  *
  * `planFromMetadata` lets the caller override the plan name when the
  * subscription's metadata is the source of truth (e.g. checkout flow).
@@ -91,12 +104,9 @@ export function subscriptionToUserData(sub, { planFromMetadata, cycleFromMetadat
     cancelAtPeriodEnd: !!sub.cancel_at_period_end,
   };
 
-  if (sub.current_period_start) {
-    data.currentPeriodStart = new Date(sub.current_period_start * 1000);
-  }
-  if (sub.current_period_end) {
-    data.currentPeriodEnd = new Date(sub.current_period_end * 1000);
-  }
+  const { start, end } = resolvePeriodTimestamps(sub);
+  if (start) data.currentPeriodStart = new Date(start * 1000);
+  if (end)   data.currentPeriodEnd   = new Date(end * 1000);
   if (sub.trial_end) {
     data.trialEndsAt = new Date(sub.trial_end * 1000);
   }

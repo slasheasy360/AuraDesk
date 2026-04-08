@@ -245,20 +245,10 @@ export default function PricingPage() {
         cycle: withTrial ? TRIAL_DEFAULT_CYCLE : cycle,
         includeTrial: withTrial,
       });
-      try {
-        localStorage.setItem(
-          'selectedPlan',
-          JSON.stringify({
-            plan: planId,
-            cycle: withTrial ? TRIAL_DEFAULT_CYCLE : cycle,
-            withTrial,
-          }),
-        );
-      } catch {}
       await redirectToStripeCheckout({ url: res.data.url, sessionId: res.data.sessionId });
     } catch (err) {
       // 501 = Stripe not configured server-side. Fall back to the local-dev
-      // shortcut so the flow still completes in development.
+      // shortcut so the flow still completes in development without Stripe.
       if (err.response?.status === 501) {
         try {
           if (withTrial) {
@@ -266,15 +256,8 @@ export default function PricingPage() {
           } else {
             await api.post('/api/subscription/activate', { plan: planId, cycle });
           }
-          try {
-            localStorage.setItem(
-              'selectedPlan',
-              JSON.stringify({ plan: planId, cycle, withTrial }),
-            );
-            localStorage.setItem('paymentStatus', 'success');
-          } catch {}
           if (refreshUser) await refreshUser();
-          navigate('/onboarding?payment=success');
+          navigate('/onboarding?welcome=1');
           return;
         } catch (fallbackErr) {
           console.error('Stripe-less fallback failed:', fallbackErr);

@@ -556,23 +556,10 @@ export default function OnboardingPage() {
   const [step, setStep] = useState(0); // 0=platform, 1=branding, 2=success
   const [maxStep, setMaxStep] = useState(0);
   const [brandingData, setBrandingData] = useState(null);
-  const [paymentBanner, setPaymentBanner] = useState(() => {
-    try {
-      return localStorage.getItem('paymentStatus') === 'success' ? 'success-restored' : null;
-    } catch {
-      return null;
-    }
-  });
-  // Read which flow the user picked on the pricing page so we can show the
-  // right confirmation message and decide where to send them next.
-  const [selectedPlanInfo] = useState(() => {
-    try {
-      const raw = localStorage.getItem('selectedPlan');
-      return raw ? JSON.parse(raw) : null;
-    } catch {
-      return null;
-    }
-  });
+  // Brief success banner shown when a brand-new subscriber lands here from
+  // /payment/success. The actual subscription sync happens on /payment/success;
+  // by the time we get here the user row is already up-to-date.
+  const [showWelcome, setShowWelcome] = useState(false);
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const { refreshUser } = useAuth();
@@ -586,43 +573,21 @@ export default function OnboardingPage() {
   useEffect(() => {
     const sp = searchParams.get('success');
     const ep = searchParams.get('error');
-    const payment = searchParams.get('payment');
+    const welcome = searchParams.get('welcome');
     if (sp) successPlatformRef.current = sp;
     if (ep) errorRef.current = { platform: ep, reason: searchParams.get('reason') };
-    if (payment === 'success') {
-      try { localStorage.setItem('paymentStatus', 'success'); } catch {}
-      setPaymentBanner('success');
-      // Pull fresh user state so the dashboard route guard sees the new plan
-      // immediately when the auto-redirect fires below.
-      if (refreshUser) refreshUser();
-    } else if (payment === 'cancel') {
-      setPaymentBanner('cancel');
-    }
-    if (sp || ep || payment) setSearchParams({}, { replace: true });
-  }, [searchParams, setSearchParams, refreshUser]);
+    if (welcome === '1') setShowWelcome(true);
+    if (sp || ep || welcome) setSearchParams({}, { replace: true });
+  }, [searchParams, setSearchParams]);
   const errorInfo = errorRef.current;
 
-  // Auto-dismiss the payment banner after 6s. For the cancel banner that's
-  // all we do; for the success banner we ALSO auto-redirect to the dashboard
-  // (handled in the next effect).
+  // Auto-dismiss the welcome banner after a short window so it doesn't
+  // linger over the onboarding form.
   useEffect(() => {
-    if (paymentBanner === 'success' || paymentBanner === 'cancel') {
-      const t = setTimeout(() => setPaymentBanner(null), 6000);
-      return () => clearTimeout(t);
-    }
-  }, [paymentBanner]);
-
-  // After a successful payment, automatically take the user to the dashboard.
-  // We give them ~3 seconds to read the confirmation message first. The token
-  // / user is already loaded by AuthContext so this is purely a routing nudge.
-  useEffect(() => {
-    if (paymentBanner !== 'success') return;
-    const t = setTimeout(() => {
-      try { localStorage.removeItem('paymentStatus'); } catch {}
-      navigate('/', { replace: true });
-    }, 3000);
+    if (!showWelcome) return;
+    const t = setTimeout(() => setShowWelcome(false), 5000);
     return () => clearTimeout(t);
-  }, [paymentBanner, navigate]);
+  }, [showWelcome]);
 
   useEffect(() => {
     if (!localStorage.getItem('token')) {
@@ -674,22 +639,9 @@ export default function OnboardingPage() {
         <span className="text-[18px] font-bold text-blue-600">AuraDesk</span>
       </div>
 
-      {paymentBanner === 'success' && (
+      {showWelcome && (
         <div className="mb-4 max-w-2xl w-full bg-green-50 border border-green-200 text-green-700 px-4 py-3 rounded-lg text-sm flex items-center justify-center gap-2">
-          {selectedPlanInfo?.withTrial
-            ? <span>Your free trial has started 🎉 — taking you to your dashboard…</span>
-            : <span>Your subscription is now active 🎉 — taking you to your dashboard…</span>}
-        </div>
-      )}
-      {paymentBanner === 'cancel' && (
-        <div className="mb-4 max-w-2xl w-full bg-amber-50 border border-amber-200 text-amber-700 px-4 py-2.5 rounded-lg text-sm flex items-center justify-between gap-2">
-          <span>Payment was cancelled. You can try again from the pricing page.</span>
-          <button
-            onClick={() => navigate('/pricing')}
-            className="text-amber-800 font-semibold underline hover:text-amber-900"
-          >
-            Retry
-          </button>
+          <span>Subscription active — let's finish setting up your workspace.</span>
         </div>
       )}
 

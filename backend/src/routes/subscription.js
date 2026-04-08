@@ -5,6 +5,7 @@ import {
   getStripe,
   getOrCreateStripeCustomer,
   subscriptionToUserData,
+  resolvePeriodTimestamps,
   mapStripeStatus,
   PLANS,
   TRIAL_DAYS,
@@ -80,29 +81,70 @@ function frontendBase() {
 }
 
 // ────────────────────────────────────────────────────────────────────
+// Shared helper — compute the canonical "is this user paying right now"
+// state from the user row. Same logic the requireActiveSubscription
+// middleware enforces, exposed so the frontend can render against it.
+// ────────────────────────────────────────────────────────────────────
+function computeAccessState(user) {
+  const now = new Date();
+  const PAID = ['starter', 'pro', 'elite'];
+
+  const paidActive =
+    PAID.includes(user.plan) &&
+    ['active', 'trialing'].includes(user.subscriptionStatus) &&
+    (!user.currentPeriodEnd || new Date(user.currentPeriodEnd) > now);
+
+  const inGracePeriod =
+    PAID.includes(user.plan) &&
+    user.subscriptionStatus === 'past_due' &&
+    user.gracePeriodEndsAt &&
+    new Date(user.gracePeriodEndsAt) > now;
+
+  const trialActive =
+    user.plan === 'trial' &&
+    user.trialEndsAt &&
+    new Date(user.trialEndsAt) > now;
+
+  const isActive = paidActive || inGracePeriod || trialActive;
+
+  const trialNotStarted = user.plan === 'trial' && !user.trialEndsAt;
+  const trialDaysLeft = trialActive
+    ? Math.ceil((new Date(user.trialEndsAt) - now) / (1000 * 60 * 60 * 24))
+    : 0;
+  const graceDaysLeft = inGracePeriod
+    ? Math.ceil((new Date(user.gracePeriodEndsAt) - now) / (1000 * 60 * 60 * 24))
+    : 0;
+
+  return {
+    isActive,
+    paidActive,
+    trialActive,
+    trialNotStarted,
+    inGracePeriod,
+    trialDaysLeft,
+    graceDaysLeft,
+  };
+}
+
+// ────────────────────────────────────────────────────────────────────
 // GET /api/subscription/status — full snapshot for the dashboard UI
+// AND for the post-checkout success poller. The `isActive` boolean is
+// the single source of truth — frontend should rely on it instead of
+// inferring from plan/status combinations.
 // ────────────────────────────────────────────────────────────────────
 router.get('/status', authenticate, async (req, res) => {
   const user = await prisma.user.findUnique({ where: { id: req.user.id } });
   if (!user) return res.status(404).json({ error: 'User not found' });
 
-  const now = new Date();
-  const trialActive = user.plan === 'trial' && user.trialEndsAt && now < new Date(user.trialEndsAt);
-  const trialNotStarted = user.plan === 'trial' && !user.trialEndsAt;
-  const trialDaysLeft = trialActive
-    ? Math.ceil((new Date(user.trialEndsAt) - now) / (1000 * 60 * 60 * 24))
-    : 0;
-
-  const inGracePeriod =
-    user.subscriptionStatus === 'past_due' &&
-    user.gracePeriodEndsAt &&
-    new Date(user.gracePeriodEndsAt) > now;
-  const graceDaysLeft = inGracePeriod
-    ? Math.ceil((new Date(user.gracePeriodEndsAt) - now) / (1000 * 60 * 60 * 24))
-    : 0;
+  const access = computeAccessState(user);
 
   res.json({
+    // ── canonical access flag (use this on the frontend) ──
+    isActive: access.isActive,
     plan: user.plan,
+    expiresAt: user.currentPeriodEnd,
+
+    // ── full snapshot ──
     subscriptionStatus: user.subscriptionStatus,
     isSubscribed: user.isSubscribed,
     stripeCustomerId: user.stripeCustomerId,
@@ -111,12 +153,12 @@ router.get('/status', authenticate, async (req, res) => {
     currentPeriodEnd: user.currentPeriodEnd,
     cancelAtPeriodEnd: user.cancelAtPeriodEnd,
     trialEndsAt: user.trialEndsAt,
-    trialActive,
-    trialNotStarted,
-    trialEligible: trialNotStarted,
-    trialDaysLeft,
-    inGracePeriod,
-    graceDaysLeft,
+    trialActive: access.trialActive,
+    trialNotStarted: access.trialNotStarted,
+    trialEligible: access.trialNotStarted,
+    trialDaysLeft: access.trialDaysLeft,
+    inGracePeriod: access.inGracePeriod,
+    graceDaysLeft: access.graceDaysLeft,
     gracePeriodEndsAt: user.gracePeriodEndsAt,
     billingCycle: user.billingCycle,
     onboardingStep: user.onboardingStep,
@@ -241,7 +283,12 @@ router.post('/create-checkout', authenticate, async (req, res) => {
       subscription_data: subscriptionData,
       payment_method_collection: 'always',
       metadata: { userId: user.id, plan, cycle, includeTrial: shouldAttachTrial ? '1' : '0' },
-      success_url: `${base}/onboarding?payment=success&session_id={CHECKOUT_SESSION_ID}`,
+      // Land on a dedicated post-checkout page that:
+      //   1. Calls /api/subscription/sync-session to write the row from Stripe
+      //      (so we don't depend on the webhook firing first), and
+      //   2. Routes the user to /onboarding or /dashboard based on state.
+      // Webhooks still fire and stay the long-term source of truth.
+      success_url: `${base}/payment/success?session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: `${base}/pricing?payment=cancel&plan=${plan}&cycle=${cycle}`,
     });
 
@@ -249,6 +296,89 @@ router.post('/create-checkout', authenticate, async (req, res) => {
   } catch (err) {
     console.error('[Stripe] create-checkout failed:', err);
     res.status(500).json({ error: err.message || 'Could not create checkout session' });
+  }
+});
+
+// ────────────────────────────────────────────────────────────────────
+// POST /api/subscription/sync-session
+// Body: { sessionId }
+//
+// Called by the /payment/success landing page immediately after Stripe
+// redirects the user back. We retrieve the Checkout Session + Subscription
+// directly from Stripe and persist the row right away — this removes the
+// race against the asynchronous webhook so the dashboard guard sees the
+// new plan immediately. Webhooks still fire and re-confirm.
+//
+// Idempotent: re-running on the same session is a no-op.
+// ────────────────────────────────────────────────────────────────────
+router.post('/sync-session', authenticate, async (req, res) => {
+  if (!stripe) return res.status(501).json({ error: 'Stripe not configured' });
+
+  const { sessionId } = req.body || {};
+  if (!sessionId || typeof sessionId !== 'string') {
+    return res.status(400).json({ error: 'sessionId is required' });
+  }
+
+  try {
+    const session = await stripe.checkout.sessions.retrieve(sessionId, {
+      expand: ['subscription'],
+    });
+
+    // ── Authorisation: this session must belong to the calling user ──
+    // We check via metadata.userId (set when the session was created) AND
+    // via stripeCustomerId on the user row. If neither matches, refuse.
+    const sessionUserId = session.metadata?.userId;
+    if (sessionUserId && sessionUserId !== req.user.id) {
+      return res.status(403).json({ error: 'Session does not belong to this user' });
+    }
+
+    if (session.payment_status === 'unpaid' && session.status !== 'complete') {
+      return res.status(400).json({
+        error: 'Checkout session is not yet complete',
+        sessionStatus: session.status,
+        paymentStatus: session.payment_status,
+      });
+    }
+
+    // ── Resolve the subscription object (handle both expanded + id-only) ──
+    let sub = null;
+    if (session.subscription) {
+      sub = typeof session.subscription === 'string'
+        ? await stripe.subscriptions.retrieve(session.subscription)
+        : session.subscription;
+    }
+    if (!sub) {
+      return res.status(400).json({ error: 'No subscription attached to this checkout session' });
+    }
+
+    const plan = session.metadata?.plan;
+    const cycle = session.metadata?.cycle;
+
+    const updated = await prisma.user.update({
+      where: { id: req.user.id },
+      data: subscriptionToUserData(sub, {
+        planFromMetadata: plan,
+        cycleFromMetadata: cycle,
+      }),
+    });
+
+    console.log(
+      `[Stripe] sync-session user=${req.user.id} session=${sessionId} ` +
+      `→ plan=${updated.plan} status=${updated.subscriptionStatus}`
+    );
+
+    res.json({
+      ok: true,
+      isActive: ['active', 'trialing'].includes(updated.subscriptionStatus) &&
+                ['starter', 'pro', 'elite'].includes(updated.plan),
+      plan: updated.plan,
+      subscriptionStatus: updated.subscriptionStatus,
+      currentPeriodEnd: updated.currentPeriodEnd,
+      onboardingStep: updated.onboardingStep,
+    });
+  } catch (err) {
+    console.error('[Stripe] sync-session failed:', err);
+    res.status(500).json({ error: err.message || 'Could not sync checkout session' });
   }
 });
 
@@ -353,22 +483,21 @@ router.post('/cancel', authenticate, async (req, res) => {
       cancel_at_period_end: true,
     });
 
+    const { end: periodEndTs } = resolvePeriodTimestamps(updated);
+    const accessUntil = periodEndTs ? new Date(periodEndTs * 1000) : user.currentPeriodEnd;
+
     await prisma.user.update({
       where: { id: user.id },
       data: {
         cancelAtPeriodEnd: true,
-        currentPeriodEnd: updated.current_period_end
-          ? new Date(updated.current_period_end * 1000)
-          : user.currentPeriodEnd,
+        currentPeriodEnd: accessUntil,
       },
     });
 
     res.json({
       ok: true,
       cancelAtPeriodEnd: true,
-      accessUntil: updated.current_period_end
-        ? new Date(updated.current_period_end * 1000)
-        : user.currentPeriodEnd,
+      accessUntil,
     });
   } catch (err) {
     console.error('[Stripe] cancel failed:', err);
@@ -457,16 +586,18 @@ router.post('/webhook', async (req, res) => {
 
       // ── Subscription created (fires alongside checkout.session.completed) ──
       // Idempotent with the checkout handler — we just keep the user row in sync.
+      // We look up by stripeCustomerId FIRST so re-subscription after a cancel
+      // (which generates a new subscription id) still finds the existing user.
       case 'customer.subscription.created': {
         const sub = event.data.object;
-        const user = await prisma.user.findFirst({
-          where: {
-            OR: [
-              { stripeSubscriptionId: sub.id },
-              { stripeCustomerId: sub.customer },
-            ],
-          },
+        let user = await prisma.user.findFirst({
+          where: { stripeCustomerId: sub.customer },
         });
+        if (!user) {
+          user = await prisma.user.findFirst({
+            where: { stripeSubscriptionId: sub.id },
+          });
+        }
         if (!user) break;
         await prisma.user.update({
           where: { id: user.id },
@@ -479,9 +610,15 @@ router.post('/webhook', async (req, res) => {
       // ── Subscription updated: keep period_end + status fresh ──
       case 'customer.subscription.updated': {
         const sub = event.data.object;
-        const user = await prisma.user.findFirst({
+        let user = await prisma.user.findFirst({
           where: { stripeSubscriptionId: sub.id },
         });
+        if (!user) {
+          // Fallback: re-sub case where the user row still points at the old id.
+          user = await prisma.user.findFirst({
+            where: { stripeCustomerId: sub.customer },
+          });
+        }
         if (!user) break;
         await prisma.user.update({
           where: { id: user.id },
@@ -528,26 +665,46 @@ router.post('/webhook', async (req, res) => {
 
       // ── Successful invoice (recurring billing) ──
       // Mark active + isSubscribed=true and clear any past grace period.
+      // We also re-pull the full subscription so we can refresh the period
+      // window correctly across both old and new Stripe API shapes.
       case 'invoice.payment_succeeded': {
         const invoice = event.data.object;
         const user = await prisma.user.findFirst({
           where: { stripeCustomerId: invoice.customer },
         });
-        if (user && invoice.subscription) {
-          const data = {
-            subscriptionStatus: 'active',
-            isSubscribed: true,
-            gracePeriodEndsAt: null,
-          };
-          if (invoice.lines?.data?.[0]?.period?.start) {
-            data.currentPeriodStart = new Date(invoice.lines.data[0].period.start * 1000);
+        if (!user) break;
+
+        // Newer API: invoice.subscription removed, lives on invoice.parent
+        const subscriptionId =
+          invoice.subscription ||
+          invoice.parent?.subscription_details?.subscription ||
+          invoice.lines?.data?.[0]?.subscription ||
+          null;
+
+        if (subscriptionId) {
+          try {
+            const sub = await stripe.subscriptions.retrieve(subscriptionId);
+            await prisma.user.update({
+              where: { id: user.id },
+              data: subscriptionToUserData(sub),
+            });
+          } catch (e) {
+            // Fallback: derive what we can directly from the invoice line
+            const data = {
+              subscriptionStatus: 'active',
+              isSubscribed: true,
+              gracePeriodEndsAt: null,
+            };
+            if (invoice.lines?.data?.[0]?.period?.start) {
+              data.currentPeriodStart = new Date(invoice.lines.data[0].period.start * 1000);
+            }
+            if (invoice.lines?.data?.[0]?.period?.end) {
+              data.currentPeriodEnd = new Date(invoice.lines.data[0].period.end * 1000);
+            }
+            await prisma.user.update({ where: { id: user.id }, data });
           }
-          if (invoice.lines?.data?.[0]?.period?.end) {
-            data.currentPeriodEnd = new Date(invoice.lines.data[0].period.end * 1000);
-          }
-          await prisma.user.update({ where: { id: user.id }, data });
-          console.log(`[Stripe] invoice.payment_succeeded → user ${user.id}`);
         }
+        console.log(`[Stripe] invoice.payment_succeeded → user ${user.id}`);
         break;
       }
 

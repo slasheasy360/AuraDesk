@@ -7,6 +7,7 @@ import ForgotPasswordPage from './pages/ForgotPasswordPage.jsx';
 import ResetPasswordPage from './pages/ResetPasswordPage.jsx';
 import OAuthCallbackPage from './pages/OAuthCallbackPage.jsx';
 import PricingPage from './pages/PricingPage.jsx';
+import PaymentSuccessPage from './pages/PaymentSuccessPage.jsx';
 import OnboardingPage from './pages/OnboardingPage.jsx';
 import DashboardLayout from './components/DashboardLayout.jsx';
 import DashboardHome from './pages/DashboardHome.jsx';
@@ -112,6 +113,26 @@ function RequireAuth({ children }) {
   return children;
 }
 
+/**
+ * Pricing-page guard. If the user already has usable access, they should
+ * NEVER see the pricing page — bounce them straight into the app.
+ *   - Onboarding incomplete → /onboarding
+ *   - Onboarding complete   → /  (dashboard)
+ *
+ * The /payment/success page is exempt from this guard so it can complete
+ * its sync flow without being interrupted.
+ */
+function RedirectIfActive({ children }) {
+  const { user, loading } = useAuth();
+  if (loading) return <FullPageLoader />;
+  if (!user) return <Navigate to="/welcome" />;
+  if (hasUsableAccess(user)) {
+    if ((user.onboardingStep ?? 0) >= 4) return <Navigate to="/" replace />;
+    return <Navigate to="/onboarding" replace />;
+  }
+  return children;
+}
+
 /** Onboarding can only be entered with an active plan/trial. Otherwise → /pricing */
 function RequireActivePlan({ children }) {
   const { user, loading } = useAuth();
@@ -135,8 +156,26 @@ export default function App() {
       <Route path="/reset-password/:token" element={<ResetPasswordPage />} />
       <Route path="/dashboard" element={<OAuthCallbackPage />} />
 
-      {/* Pricing — accessible when logged in (trial expired or choosing plan) */}
-      <Route path="/pricing" element={<RequireAuth><PricingPage /></RequireAuth>} />
+      {/* Pricing — accessible when logged in WITHOUT a usable subscription.
+          Active subscribers are bounced to /onboarding or /dashboard. */}
+      <Route
+        path="/pricing"
+        element={
+          <RedirectIfActive>
+            <PricingPage />
+          </RedirectIfActive>
+        }
+      />
+
+      {/* Post-checkout landing — runs the sync flow then routes the user. */}
+      <Route
+        path="/payment/success"
+        element={
+          <RequireAuth>
+            <PaymentSuccessPage />
+          </RequireAuth>
+        }
+      />
 
       {/* Onboarding — must have an active plan/trial to enter */}
       <Route
