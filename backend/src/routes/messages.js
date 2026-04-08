@@ -16,6 +16,65 @@ import axios from 'axios';
 
 const router = Router();
 
+function getMetaParticipantIds(rawPayload = {}) {
+  const senderId = rawPayload.sender?.id || rawPayload.from?.id || null;
+  const recipientId = rawPayload.recipient?.id || rawPayload.to?.data?.[0]?.id || null;
+  return { senderId, recipientId };
+}
+
+async function resolveMetaRecipientId(conversation, platform) {
+  if (conversation.contact?.platformUserId) return conversation.contact.platformUserId;
+
+  const lastMsg = await prisma.message.findFirst({
+    where: { conversationId: conversation.id, rawPayload: { not: null } },
+    orderBy: { sentAt: 'desc' },
+    select: { rawPayload: true },
+  });
+
+  const { senderId, recipientId } = getMetaParticipantIds(lastMsg?.rawPayload || {});
+  const accountId = conversation.connectedAccount?.platformAccountId || null;
+  let otherId = null;
+
+  if (accountId) {
+    if (senderId && senderId !== accountId) otherId = senderId;
+    if (recipientId && recipientId !== accountId) otherId = recipientId;
+  }
+
+  if (!otherId) {
+    if (senderId && recipientId && senderId !== recipientId) {
+      otherId = senderId;
+    }
+  }
+
+  if (!otherId) return null;
+
+  const contact = await prisma.contact.upsert({
+    where: {
+      userId_platform_platformUserId: {
+        userId: conversation.connectedAccount.userId,
+        platform,
+        platformUserId: otherId,
+      },
+    },
+    update: {},
+    create: {
+      userId: conversation.connectedAccount.userId,
+      platform,
+      platformUserId: otherId,
+      name: `${platform.toUpperCase()} User ${otherId.slice(-4)}`,
+    },
+  });
+
+  if (!conversation.contactId) {
+    await prisma.conversation.update({
+      where: { id: conversation.id },
+      data: { contactId: contact.id },
+    });
+  }
+
+  return otherId;
+}
+
 // Get smart inbox messages across all connected platforms
 router.get('/', authenticate, async (req, res) => {
   try {
@@ -350,10 +409,14 @@ router.post('/send', authenticate, upload.array('attachments', 10), async (req, 
     try {
       switch (platform) {
         case 'facebook': {
+          const recipientPsid = await resolveMetaRecipientId(conversation, 'facebook');
+          if (!recipientPsid) {
+            return res.status(400).json({ error: 'No Facebook recipient found for this conversation' });
+          }
           if (content) {
             const result = await facebookService.sendMessage(
               conversation.connectedAccountId,
-              conversation.platformConversationId,
+              recipientPsid,
               content
             );
             platformMessageId = result.message_id;
@@ -361,7 +424,7 @@ router.post('/send', authenticate, upload.array('attachments', 10), async (req, 
           for (const file of files) {
             const result = await facebookService.sendAttachment(
               conversation.connectedAccountId,
-              conversation.platformConversationId,
+              recipientPsid,
               file
             );
             const meta = {
@@ -379,7 +442,10 @@ router.post('/send', authenticate, upload.array('attachments', 10), async (req, 
           break;
         }
         case 'instagram': {
-          const igRecipientId = conversation.contact?.platformUserId || conversation.platformConversationId;
+          const igRecipientId = await resolveMetaRecipientId(conversation, 'instagram');
+          if (!igRecipientId) {
+            return res.status(400).json({ error: 'No Instagram recipient found for this conversation' });
+          }
           if (content) {
             const result = await instagramService.sendMessage(
               conversation.connectedAccountId,

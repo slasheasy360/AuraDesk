@@ -1,5 +1,6 @@
 import axios from 'axios';
 import fs from 'fs';
+import { Readable } from 'stream';
 import FormData from 'form-data';
 import prisma from '../utils/prisma.js';
 import { encrypt, decrypt } from '../utils/encryption.js';
@@ -335,7 +336,10 @@ export async function sendAttachment(connectedAccountId, recipientPsid, file) {
   form.append('message', JSON.stringify({
     attachment: { type, payload: { is_reusable: false } },
   }));
-  form.append('filedata', fs.createReadStream(file.path), {
+  const fileStream = file.path
+    ? fs.createReadStream(file.path)
+    : Readable.from(file.buffer || []);
+  form.append('filedata', fileStream, {
     filename: file.originalname,
     contentType: file.mimetype,
   });
