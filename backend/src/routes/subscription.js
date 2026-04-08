@@ -179,7 +179,12 @@ router.post('/start-trial', authenticate, async (req, res) => {
 router.post('/create-checkout', authenticate, async (req, res) => {
   if (!stripe) return res.status(501).json({ error: 'Stripe not configured' });
 
-  const { plan, cycle = 'monthly', includeTrial = false } = req.body;
+  // The trial flag MUST be a real boolean from the frontend. We coerce here so
+  // any truthy/falsy value collapses cleanly, and default to FALSE so a missing
+  // or malformed flag never accidentally enrolls the user in a trial.
+  const { plan, cycle = 'monthly' } = req.body;
+  const includeTrial = req.body.includeTrial === true || req.body.includeTrial === 'true';
+
   if (!PLANS[plan]) return res.status(400).json({ error: 'Invalid plan' });
   if (!['monthly', 'yearly'].includes(cycle)) {
     return res.status(400).json({ error: 'Invalid billing cycle' });
@@ -193,19 +198,30 @@ router.post('/create-checkout', authenticate, async (req, res) => {
     const customerId = await getOrCreateStripeCustomer(user);
     if (!customerId) return res.status(501).json({ error: 'Stripe not configured' });
 
-    // Trial eligibility: only attach a trial period if the user has never used one
-    // AND the request explicitly opts in. Users whose plan is 'expired' (trial
-    // already consumed) cannot get another.
+    // ── Trial gating ─────────────────────────────────────────────
+    // Two independent conditions BOTH must be true for the trial to attach:
+    //   1. The frontend explicitly asked for it (includeTrial === true)
+    //   2. The user has never used a trial (`trial` plan, no trialEndsAt)
+    // Otherwise the subscription is created WITHOUT trial_period_days, so
+    // Stripe charges immediately on checkout.
     //
-    // Note: we do NOT pass `payment_settings` here. Stripe Checkout in
-    // subscription mode already attaches the collected card as the default
-    // payment method on the resulting subscription, and `payment_settings`
-    // is rejected by the Checkout Session API as an unknown parameter.
+    // We do NOT pass `payment_settings` here — Stripe Checkout in subscription
+    // mode already attaches the collected card as the default payment method,
+    // and `payment_settings` is rejected by the Checkout Session API.
     const trialEligible = user.plan === 'trial' && !user.trialEndsAt;
+    const shouldAttachTrial = includeTrial && trialEligible;
+
     const subscriptionData = {
       metadata: { userId: user.id, plan, cycle },
-      ...(includeTrial && trialEligible ? { trial_period_days: TRIAL_DAYS } : {}),
     };
+    if (shouldAttachTrial) {
+      subscriptionData.trial_period_days = TRIAL_DAYS;
+    }
+
+    console.log(
+      `[Stripe] create-checkout user=${user.id} plan=${plan} cycle=${cycle} ` +
+      `includeTrial=${includeTrial} trialEligible=${trialEligible} → trial=${shouldAttachTrial ? 'YES' : 'NO'}`
+    );
 
     const base = frontendBase();
 
@@ -224,7 +240,7 @@ router.post('/create-checkout', authenticate, async (req, res) => {
       }],
       subscription_data: subscriptionData,
       payment_method_collection: 'always',
-      metadata: { userId: user.id, plan, cycle, includeTrial: includeTrial ? '1' : '0' },
+      metadata: { userId: user.id, plan, cycle, includeTrial: shouldAttachTrial ? '1' : '0' },
       success_url: `${base}/onboarding?payment=success&session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: `${base}/pricing?payment=cancel&plan=${plan}&cycle=${cycle}`,
     });

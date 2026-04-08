@@ -130,6 +130,41 @@ function PlanCard({ plan, cycle, loading, disabled, onChoose }) {
   );
 }
 
+/* ─────────────── TRIAL BANNER ─────────────── */
+// Shown ONLY to trial-eligible users above the plan cards. Clicking the
+// button explicitly opts into the 14-day trial via includeTrial: true.
+function TrialBanner({ onStartTrial, loading }) {
+  return (
+    <div
+      className="rounded-2xl px-6 sm:px-8 py-5 sm:py-6 mb-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4"
+      style={{
+        background: 'linear-gradient(90deg, #cfe1ff 0%, #e3ecff 60%, #eef3ff 100%)',
+        border: '1px solid #c7d8f8',
+      }}
+    >
+      <div>
+        <h2 className="text-[20px] sm:text-[24px] font-extrabold text-[#0B1E3F] leading-tight">
+          14 Day Free Trial Available!
+        </h2>
+        <p className="mt-1.5 text-[12px] sm:text-[13px] text-[#1f3559]/75">
+          Start your free trial now. Billing starts after the trial ends.
+        </p>
+      </div>
+      <button
+        type="button"
+        onClick={onStartTrial}
+        disabled={loading}
+        className="self-start sm:self-auto px-6 py-2.5 rounded-full text-white text-[12px] font-bold tracking-[0.18em] shadow-md transition hover:shadow-lg active:scale-[0.98] disabled:opacity-60 disabled:cursor-not-allowed"
+        style={{
+          background: 'linear-gradient(90deg, #2A6FD4 0%, #1787FE 100%)',
+        }}
+      >
+        {loading ? 'REDIRECTING…' : 'START FREE TRIAL'}
+      </button>
+    </div>
+  );
+}
+
 /* ─────────────── BILLING CYCLE TOGGLE ─────────────── */
 function CycleToggle({ cycle, onChange }) {
   return (
@@ -157,9 +192,15 @@ function CycleToggle({ cycle, onChange }) {
 }
 
 /* ─────────────── MAIN PAGE ─────────────── */
+// Default plan/cycle used by the trial banner — Starter monthly is the cheapest
+// entry point so users can sample the product without committing to a tier.
+const TRIAL_DEFAULT_PLAN = 'starter';
+const TRIAL_DEFAULT_CYCLE = 'monthly';
+
 export default function PricingPage() {
   const [cycle, setCycle] = useState('monthly');
-  const [loading, setLoading] = useState(null); // plan id while redirecting
+  const [loading, setLoading] = useState(null);   // plan id while CHOOSE PLAN is mid-flight
+  const [trialLoading, setTrialLoading] = useState(false); // trial banner mid-flight
   const [errorMsg, setErrorMsg] = useState(null);
   const { user, refreshUser, logout } = useAuth();
   const navigate = useNavigate();
@@ -185,35 +226,42 @@ export default function PricingPage() {
   const subtitle = trialExpired
     ? 'Your 14-day free trial has exhausted. Subscribe to continue growing your business!'
     : trialEligible
-      ? 'Start with a 14-day free trial. Cancel anytime — no questions asked.'
+      ? 'Start with a 14-day free trial, or subscribe directly. Cancel anytime.'
       : 'Subscribe to continue growing your business!';
 
-  // ── Handler ──
-  // Single CHOOSE PLAN button per card. Trial-eligible users get the 14-day
-  // trial bundled into the Stripe subscription automatically; expired users
-  // are charged immediately. The frontend explicitly tells the backend which
-  // mode it wants via `includeTrial`.
-  const handleChoosePlan = async (planId) => {
+  // ── Handlers ──
+  // Two distinct flows, each setting `includeTrial` explicitly:
+  //   • CHOOSE PLAN  → includeTrial: false → billed immediately (Subscribe Now)
+  //   • Trial banner → includeTrial: true  → 14 days free, then billed
+  // The backend re-validates the flag and refuses to apply a trial unless
+  // the user is genuinely trial-eligible.
+  const startCheckout = async ({ planId, withTrial }) => {
     setErrorMsg(null);
-    setLoading(planId);
+    if (withTrial) setTrialLoading(true);
+    else setLoading(planId);
     try {
       const res = await api.post('/api/subscription/create-checkout', {
         plan: planId,
-        cycle,
-        includeTrial: trialEligible,
+        cycle: withTrial ? TRIAL_DEFAULT_CYCLE : cycle,
+        includeTrial: withTrial,
       });
       try {
         localStorage.setItem(
           'selectedPlan',
-          JSON.stringify({ plan: planId, cycle, withTrial: trialEligible }),
+          JSON.stringify({
+            plan: planId,
+            cycle: withTrial ? TRIAL_DEFAULT_CYCLE : cycle,
+            withTrial,
+          }),
         );
       } catch {}
       await redirectToStripeCheckout({ url: res.data.url, sessionId: res.data.sessionId });
     } catch (err) {
-      // If Stripe is not configured server-side (501), fall back to local activation
+      // 501 = Stripe not configured server-side. Fall back to the local-dev
+      // shortcut so the flow still completes in development.
       if (err.response?.status === 501) {
         try {
-          if (trialEligible) {
+          if (withTrial) {
             await api.post('/api/subscription/start-trial');
           } else {
             await api.post('/api/subscription/activate', { plan: planId, cycle });
@@ -221,7 +269,7 @@ export default function PricingPage() {
           try {
             localStorage.setItem(
               'selectedPlan',
-              JSON.stringify({ plan: planId, cycle, withTrial: trialEligible }),
+              JSON.stringify({ plan: planId, cycle, withTrial }),
             );
             localStorage.setItem('paymentStatus', 'success');
           } catch {}
@@ -239,9 +287,13 @@ export default function PricingPage() {
         );
       }
     } finally {
-      setLoading(null);
+      if (withTrial) setTrialLoading(false);
+      else setLoading(null);
     }
   };
+
+  const handleChoosePlan = (planId) => startCheckout({ planId, withTrial: false });
+  const handleStartTrial = () => startCheckout({ planId: TRIAL_DEFAULT_PLAN, withTrial: true });
 
   const handleReturnToLogin = () => {
     if (logout) logout();
@@ -288,6 +340,14 @@ export default function PricingPage() {
           </div>
         )}
 
+        {/* Trial banner — only shown to brand-new, trial-eligible users.
+            Clicking this button is the ONLY way to opt into the 14-day free trial. */}
+        {trialEligible && (
+          <div className="mt-6">
+            <TrialBanner onStartTrial={handleStartTrial} loading={trialLoading} />
+          </div>
+        )}
+
         {/* Plan cards — natural flow, items-start so cards keep their natural height */}
         <div className="mt-9 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-7 sm:gap-9 items-start">
           {PLANS.map((plan) => (
@@ -296,7 +356,7 @@ export default function PricingPage() {
               plan={plan}
               cycle={cycle}
               loading={loading === plan.id}
-              disabled={loading !== null}
+              disabled={loading !== null || trialLoading}
               onChoose={handleChoosePlan}
             />
           ))}
