@@ -220,7 +220,15 @@ export async function sendEmail(connectedAccountId, to, subject, body, threadId,
     where: { id: connectedAccountId },
   });
 
-  // Get the Message-ID of the last message in the thread for proper In-Reply-To
+  console.log('[Gmail API] Sending email:', {
+    from: account?.platformAccountId,
+    to,
+    subject,
+    threadId: threadId || null,
+    attachmentCount: attachments.length,
+  });
+
+  // Get the Message-ID of the last message in the thread for proper In-Reply-To threading
   let lastMessageId = null;
   if (threadId) {
     try {
@@ -238,8 +246,9 @@ export async function sendEmail(connectedAccountId, to, subject, body, threadId,
         );
         lastMessageId = msgIdHeader?.value || null;
       }
-    } catch {
-      // If we can't fetch the thread, send without In-Reply-To
+    } catch (threadErr) {
+      console.warn('[Gmail API] Could not fetch thread for In-Reply-To header:', threadErr.message);
+      // Continue without In-Reply-To — message still sends
     }
   }
 
@@ -253,6 +262,7 @@ export async function sendEmail(connectedAccountId, to, subject, body, threadId,
     requestBody,
   });
 
+  console.log('[Gmail API] Email sent:', { messageId: res.data.id, threadId: res.data.threadId });
   return res.data;
 }
 
@@ -288,9 +298,17 @@ function createRawEmail(from, to, subject, body, inReplyToMessageId, attachments
   email += 'Content-Type: text/plain; charset=utf-8\r\n\r\n';
   email += `${body}\r\n\r\n`;
 
-  // Attachment parts
+  // Attachment parts — support both in-memory buffers (multer memory storage) and disk paths
   for (const file of attachments) {
-    const fileData = fs.readFileSync(file.path);
+    let fileData;
+    if (file.buffer) {
+      fileData = file.buffer;
+    } else if (file.path) {
+      fileData = fs.readFileSync(file.path);
+    } else {
+      console.warn('[Gmail API] Attachment skipped (no buffer or path):', file.originalname);
+      continue;
+    }
     const base64Data = fileData.toString('base64');
     email += `--${boundary}\r\n`;
     email += `Content-Type: ${file.mimetype}; name="${file.originalname}"\r\n`;

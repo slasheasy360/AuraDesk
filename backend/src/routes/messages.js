@@ -8,7 +8,6 @@ import * as facebookService from '../services/facebook.js';
 import * as instagramService from '../services/instagram.js';
 import * as whatsappService from '../services/whatsapp.js';
 import * as gmailService from '../services/gmail.js';
-import { sendMail } from '../utils/mailer.js';
 import { syncGmailMessagesController, gmailDiagnosticController } from '../controllers/gmail.controller.js';
 import { syncInstagramMessages } from '../services/instagram.sync.js';
 import { syncFacebookMessages } from '../services/facebook.sync.js';
@@ -347,35 +346,6 @@ async function persistOutboundAttachment(file) {
   return s3Key;
 }
 
-function extractHeader(headers = [], name) {
-  const target = name.toLowerCase();
-  const header = headers.find((h) => String(h.name || '').toLowerCase() === target);
-  return header?.value || '';
-}
-
-async function getThreadingHeaders(conversationId) {
-  const lastWithPayload = await prisma.message.findFirst({
-    where: { conversationId, rawPayload: { not: null } },
-    orderBy: { sentAt: 'desc' },
-    select: { rawPayload: true },
-  });
-
-  const headers = lastWithPayload?.rawPayload?.payload?.headers || [];
-  const messageId = extractHeader(headers, 'Message-ID');
-  const references = extractHeader(headers, 'References');
-
-  if (!messageId && !references) return null;
-
-  const refValue = references
-    ? `${references} ${messageId || ''}`.trim()
-    : messageId || '';
-
-  return {
-    'In-Reply-To': messageId || undefined,
-    References: refValue || undefined,
-  };
-}
-
 // Send a message (with optional file attachments)
 router.post('/send', authenticate, upload.array('attachments', 10), async (req, res) => {
   try {
@@ -519,38 +489,24 @@ router.post('/send', authenticate, upload.array('attachments', 10), async (req, 
               : 'Re:';
           }
 
-          const headers = await getThreadingHeaders(conversation.id);
-          const attachments = files.map((file) => ({
-            filename: file.originalname,
-            content: file.buffer,
-            contentType: file.mimetype,
-          }));
+          // Send via Gmail API (OAuth) — uses the connected Gmail account directly
+          const gmailResult = await gmailService.sendEmail(
+            conversation.connectedAccountId,
+            recipientEmail,
+            subject,
+            content || '',
+            conversation.platformConversationId,
+            files
+          );
 
-          const mailResult = await sendMail({
-            from: conversation.connectedAccount.platformAccountId,
+          console.log('[Gmail API] Email sent successfully:', {
             to: recipientEmail,
             subject,
-            text: content || '',
-            headers: headers || undefined,
-            attachments,
+            messageId: gmailResult.id,
+            threadId: gmailResult.threadId,
           });
 
-          if (!mailResult.sent) {
-            return res.status(502).json({
-              error: `Failed to send via SMTP: ${mailResult.reason || 'Unknown error'}`,
-            });
-          }
-
-          console.log('[SMTP] Gmail reply sent:', {
-            to: recipientEmail,
-            subject,
-            messageId: mailResult.messageId,
-            response: mailResult.response,
-            accepted: mailResult.accepted,
-            rejected: mailResult.rejected,
-          });
-
-          platformMessageId = mailResult.messageId;
+          platformMessageId = gmailResult.id;
 
           for (const file of files) {
             const meta = {
