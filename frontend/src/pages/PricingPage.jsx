@@ -80,10 +80,11 @@ function PlanCard({ plan, cycle, loading, disabled, onChoose }) {
   const period = cycle === 'monthly' ? 'month' : 'year';
 
   return (
-    // `min-h` enforces taller cards across all tiers; `h-full` then lets the
-    // grid stretch the shorter ones to match the tallest. Combined, these
-    // give every card the same generous height regardless of feature count.
-    <div className="relative pr-3 pb-12 h-full min-h-[480px] group/card">
+    // `min-h` enforces taller cards across all tiers; `h-full` lets the grid
+    // stretch the shorter ones to match the tallest. The wrapper is also a
+    // flex column so the white card itself can grow with `flex-1`, giving
+    // every white card the same (taller) height regardless of feature count.
+    <div className="relative pr-3 pb-14 h-full min-h-[540px] flex flex-col group/card">
       {/* Stack/back card — extends right + below the white card for the 3D effect */}
       <div
         aria-hidden="true"
@@ -91,9 +92,12 @@ function PlanCard({ plan, cycle, loading, disabled, onChoose }) {
         style={{ backgroundColor: plan.stackColor }}
       />
 
-      {/* Front white card — content only (no CTA inside) */}
+      {/* Front white card — content only (no CTA inside).
+          `flex-1` here is what equalises the white-card heights: it stretches
+          each card to fill the wrapper minus the pb-14 reserved button area,
+          so Starter / Pro / Elite all show the same white surface. */}
       <div
-        className="relative bg-white rounded-md border border-gray-100"
+        className="relative bg-white rounded-md border border-gray-100 flex-1"
         style={{ boxShadow: '0 10px 30px rgba(0, 0, 0, 0.08)' }}
       >
         <div className="px-6 pt-6 pb-6">
