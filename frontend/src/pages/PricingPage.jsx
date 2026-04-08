@@ -84,7 +84,7 @@ function PlanCard({ plan, cycle, loading, disabled, onChoose }) {
     // stretch the shorter ones to match the tallest. The wrapper is also a
     // flex column so the white card itself can grow with `flex-1`, giving
     // every white card the same (taller) height regardless of feature count.
-    <div className="relative pr-3 pb-14 h-full min-h-[540px] flex flex-col group/card">
+    <div className="relative pr-3 pb-14 h-full min-h-[500px] flex flex-col group/card">
       {/* Stack/back card — extends right + below the white card for the 3D effect */}
       <div
         aria-hidden="true"
