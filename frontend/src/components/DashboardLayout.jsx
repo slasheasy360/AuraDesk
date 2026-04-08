@@ -1,16 +1,29 @@
 import { useState, useEffect } from 'react';
 import { Outlet, NavLink, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext.jsx';
+import { LinkAccountsProvider, useLinkAccounts } from '../context/LinkAccountsContext.jsx';
 import { connectSocket, disconnectSocket } from '../services/socket.js';
 import { LayoutDashboard, Inbox, Users, FileText, Brain, LogOut, Menu, X, ChevronRight } from 'lucide-react';
 import logoUrl from '../assets/logo.svg';
 import MobileBottomNav from './MobileBottomNav.jsx';
+import LinkAccountsSheet from './LinkAccountsSheet.jsx';
 
+// Wraps the dashboard tree in the Link-Accounts provider so any nested
+// page can pop the modal via `useLinkAccounts()` without prop-drilling.
 export default function DashboardLayout() {
+  return (
+    <LinkAccountsProvider>
+      <DashboardLayoutInner />
+    </LinkAccountsProvider>
+  );
+}
+
+function DashboardLayoutInner() {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const { open: linkAccountsOpen, closeLinkAccounts } = useLinkAccounts();
 
   useEffect(() => {
     if (user?.id) {
@@ -188,6 +201,10 @@ export default function DashboardLayout() {
 
         <MobileBottomNav />
       </div>
+
+      {/* Global Link Accounts modal — single instance, opened from anywhere
+          inside the dashboard via the LinkAccounts context. */}
+      <LinkAccountsSheet open={linkAccountsOpen} onClose={closeLinkAccounts} />
     </div>
   );
 }

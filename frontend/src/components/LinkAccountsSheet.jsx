@@ -227,14 +227,39 @@ export default function LinkAccountsSheet({ open, onClose }) {
 
   const accountFor = (id) => accounts.find((a) => a.platform === id && a.status === 'active');
 
+  // ── ESC-to-close + body scroll lock while modal is open ──
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e) => {
+      if (e.key === 'Escape') onClose?.();
+    };
+    document.addEventListener('keydown', onKey);
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.removeEventListener('keydown', onKey);
+      document.body.style.overflow = prevOverflow;
+    };
+  }, [open, onClose]);
+
   if (!open) return null;
 
   const companyName = user?.companyName || 'abc_company';
   const companyLogo = user?.companyLogo;
 
   return (
-    <div className="lg:hidden fixed inset-0 z-[60] flex flex-col">
-      {/* Backdrop */}
+    // Responsive shell:
+    //   • Mobile (<lg): backdrop + bottom sheet (drag-handle, slides up)
+    //   • Desktop (lg+): backdrop + centered modal card
+    // The same component handles both — outside-click and ESC close it
+    // either way, and body scroll is locked while it's open.
+    <div
+      className="fixed inset-0 z-[60] flex flex-col lg:items-center lg:justify-center"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="link-accounts-title"
+    >
+      {/* Backdrop — also closes the modal on click */}
       <button
         type="button"
         aria-label="Close link accounts"
@@ -242,16 +267,30 @@ export default function LinkAccountsSheet({ open, onClose }) {
         className="absolute inset-0 bg-black/50"
       />
 
-      {/* Sheet */}
-      <div className="relative mt-auto bg-white rounded-t-3xl shadow-2xl max-h-[88vh] flex flex-col animate-slide-up">
-        {/* Drag handle */}
-        <div className="pt-3 pb-1 flex justify-center">
+      {/* Sheet / modal card */}
+      <div
+        className="
+          relative mt-auto lg:mt-0
+          bg-white shadow-2xl flex flex-col
+          rounded-t-3xl lg:rounded-2xl
+          max-h-[88vh] lg:max-h-[80vh]
+          w-full lg:w-[440px] lg:max-w-[92vw]
+          animate-slide-up lg:animate-none
+        "
+      >
+        {/* Mobile drag handle (hidden on desktop) */}
+        <div className="pt-3 pb-1 flex justify-center lg:hidden">
           <div className="w-10 h-1 rounded-full bg-gray-300" />
         </div>
 
-        <div className="px-5 pt-2 pb-3 flex items-center justify-between">
+        <div className="px-5 pt-2 pb-3 lg:pt-5 lg:pb-4 flex items-center justify-between">
           <div className="w-8" />
-          <h2 className="text-base font-bold text-gray-900">Link Accounts</h2>
+          <h2
+            id="link-accounts-title"
+            className="text-base lg:text-lg font-bold text-gray-900"
+          >
+            Link Accounts
+          </h2>
           <button
             type="button"
             onClick={onClose}
@@ -267,7 +306,7 @@ export default function LinkAccountsSheet({ open, onClose }) {
           </div>
         )}
 
-        <div className="flex-1 overflow-y-auto px-5 pb-8 space-y-3">
+        <div className="flex-1 overflow-y-auto px-5 pb-6 lg:pb-7 space-y-3">
           {PLATFORMS.map((p) => {
             if (isConnected(p.id)) {
               const acct = accountFor(p.id);

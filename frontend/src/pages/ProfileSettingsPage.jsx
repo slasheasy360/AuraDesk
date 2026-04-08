@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext.jsx';
+import { useLinkAccounts } from '../context/LinkAccountsContext.jsx';
 import api from '../services/api.js';
 import { UserPlus, X, Copy, Check, Trash2, Loader2 } from 'lucide-react';
 
@@ -228,6 +229,7 @@ function CompanyTab({ user, refreshUser, showSuccess, showError, canEdit }) {
 function IntegrationsTab({ showError }) {
   const [accounts, setAccounts] = useState([]);
   const [loading, setLoading] = useState(true);
+  const { openLinkAccounts } = useLinkAccounts();
 
   useEffect(() => {
     api.get('/api/accounts')
@@ -257,7 +259,13 @@ function IntegrationsTab({ showError }) {
               {acc ? (
                 <span className="flex items-center gap-1 text-xs text-emerald-600 font-semibold"><Check size={14} /> Connected</span>
               ) : (
-                <a href="/connections" className="text-xs text-primary-600 font-semibold hover:underline">Connect →</a>
+                <button
+                  type="button"
+                  onClick={openLinkAccounts}
+                  className="text-xs text-primary-600 font-semibold hover:underline"
+                >
+                  Connect →
+                </button>
               )}
             </div>
           );

@@ -11,7 +11,7 @@ import {
   RotateCw, Archive, MoreHorizontal, MoreVertical, Bot, Link2, Users, Undo2, Menu, Camera, Mic,
 } from 'lucide-react';
 import PlatformBadge, { PlatformIcon } from '../components/PlatformBadge.jsx';
-import LinkAccountsSheet from '../components/LinkAccountsSheet.jsx';
+import { useLinkAccounts } from '../context/LinkAccountsContext.jsx';
 
 // ═══════════════════════════════════════════════════════════════════
 // DEFERRED LOADING HOOK — avoids skeleton flash for fast loads
@@ -110,7 +110,7 @@ export default function InboxPage() {
   const [currentPage, setCurrentPage] = useState(1);
   const [connectedPlatforms, setConnectedPlatforms] = useState(new Set());
   // ── Mobile UI state ──
-  const [linkSheetOpen, setLinkSheetOpen] = useState(false);
+  const { openLinkAccounts } = useLinkAccounts();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const draftTimerRef = useRef(null);
   const lastSavedDraftRef = useRef('');
@@ -1020,7 +1020,7 @@ export default function InboxPage() {
               />
             </div>
             <button
-              onClick={() => navigate('/connections')}
+              onClick={openLinkAccounts}
               className="flex items-center gap-2 px-4 py-2.5 bg-[#1787FE] hover:bg-[#1377e0] text-white text-sm font-semibold rounded-full transition whitespace-nowrap shadow-lg shadow-[#1787FE]/20"
             >
               <Link2 size={16} />
@@ -1385,7 +1385,7 @@ export default function InboxPage() {
           </div>
           {/* Mobile: round icon-only Link button */}
           <button
-            onClick={() => setLinkSheetOpen(true)}
+            onClick={openLinkAccounts}
             className="lg:hidden w-10 h-10 rounded-full bg-[#1787FE] hover:bg-[#1377e0] text-white flex items-center justify-center flex-shrink-0 shadow-lg shadow-[#1787FE]/30"
             aria-label="Link account"
           >
@@ -1393,7 +1393,7 @@ export default function InboxPage() {
           </button>
           {/* Desktop: pill with label */}
           <button
-            onClick={() => navigate('/connections')}
+            onClick={openLinkAccounts}
             className="hidden lg:flex items-center gap-2 px-4 py-2.5 bg-[#1787FE] hover:bg-[#1377e0] text-white text-sm font-semibold rounded-full transition whitespace-nowrap shadow-lg shadow-[#1787FE]/20"
           >
             <Link2 size={16} />
@@ -1576,8 +1576,7 @@ export default function InboxPage() {
       </div>
       </div>
 
-      {/* Mobile Link Accounts bottom sheet */}
-      <LinkAccountsSheet open={linkSheetOpen} onClose={() => setLinkSheetOpen(false)} />
+      {/* Link Accounts modal is mounted globally in DashboardLayout */}
     </div>
   );
 }
@@ -1587,6 +1586,7 @@ export default function InboxPage() {
 // ═══════════════════════════════════════════════════════════════════
 
 function FilterPanel({ activeFilter, setActiveFilter, filterCounts, sourceFilters, toggleSourceFilter, sourceCounts, availableSourceFilters }) {
+  const { openLinkAccounts } = useLinkAccounts();
   return (
     <div className="flex flex-col h-full py-4">
       {/* Filter categories */}
@@ -1666,12 +1666,16 @@ function FilterPanel({ activeFilter, setActiveFilter, filterCounts, sourceFilter
         </div>
       )}
 
-      {/* Connect account link */}
+      {/* Connect account link — opens the global Link Accounts modal */}
       <div className="mt-4 px-6">
-        <a href="/connections" className="flex items-center gap-2 text-sm text-gray-500 hover:text-[#1787FE] transition">
+        <button
+          type="button"
+          onClick={openLinkAccounts}
+          className="flex items-center gap-2 text-sm text-gray-500 hover:text-[#1787FE] transition"
+        >
           <span className="text-lg leading-none">+</span>
           Connect account
-        </a>
+        </button>
       </div>
     </div>
   );

@@ -1,12 +1,14 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext.jsx';
+import { useLinkAccounts } from '../context/LinkAccountsContext.jsx';
 import api from '../services/api.js';
 import { Users, MessageSquare, DollarSign, Clock, Plus, Link2, FileText, Zap, Sparkles, ChevronDown } from 'lucide-react';
 
 export default function DashboardHome() {
   const { user } = useAuth();
   const navigate = useNavigate();
+  const { openLinkAccounts } = useLinkAccounts();
   const [stats, setStats] = useState({ leads: 0, messages: 0, revenue: 0, pending: 0 });
   const [conversations, setConversations] = useState([]);
 
@@ -33,7 +35,7 @@ export default function DashboardHome() {
 
   const quickActions = [
     { label: 'Add new Lead', icon: Plus, action: () => navigate('/inbox') },
-    { label: 'Link Account', icon: Link2, action: () => navigate('/connections') },
+    { label: 'Link Account', icon: Link2, action: openLinkAccounts },
     { label: 'Create Invoice', icon: FileText, action: () => {} },
     { label: 'Train AI Assistant', icon: Zap, action: () => {} },
   ];
