@@ -80,31 +80,34 @@ function PlanCard({ plan, cycle, loading, disabled, onChoose }) {
   const period = cycle === 'monthly' ? 'month' : 'year';
 
   return (
-    <div className="relative pr-3 pb-12 h-full">
+    // `min-h` enforces taller cards across all tiers; `h-full` then lets the
+    // grid stretch the shorter ones to match the tallest. Combined, these
+    // give every card the same generous height regardless of feature count.
+    <div className="relative pr-3 pb-12 h-full min-h-[440px]">
       {/* Stack/back card — extends right + below the white card for the 3D effect */}
       <div
         aria-hidden="true"
-        className="absolute top-3 left-3 right-0 bottom-0 rounded-2xl"
+        className="absolute top-3 left-3 right-0 bottom-0 rounded-md"
         style={{ backgroundColor: plan.stackColor }}
       />
 
       {/* Front white card — content only (no CTA inside) */}
       <div
-        className="relative bg-white rounded-2xl border border-gray-100"
+        className="relative bg-white rounded-md border border-gray-100"
         style={{ boxShadow: '0 10px 30px rgba(0, 0, 0, 0.08)' }}
       >
-        <div className="px-6 pt-5 pb-5">
-          <div className="mb-3">
+        <div className="px-6 pt-6 pb-6">
+          <div className="mb-4">
             <div className="flex items-baseline gap-1">
-              <span className="text-[34px] leading-none font-bold text-[#0B1E3F]">${price}</span>
+              <span className="text-[36px] leading-none font-bold text-[#0B1E3F]">${price}</span>
               <span className="text-gray-400 text-xs">/{period}</span>
             </div>
-            <h3 className="mt-1.5 text-[19px] font-bold text-[#0B1E3F]">{plan.name}</h3>
+            <h3 className="mt-2 text-[20px] font-bold text-[#0B1E3F]">{plan.name}</h3>
           </div>
 
-          <div className="border-t border-gray-200 mb-3" />
+          <div className="border-t border-gray-200 mb-4" />
 
-          <ul className="space-y-2">
+          <ul className="space-y-2.5">
             {plan.features.map((f, i) => (
               <li key={i} className="text-[12px] text-gray-500 leading-snug">
                 {f}
@@ -119,7 +122,7 @@ function PlanCard({ plan, cycle, loading, disabled, onChoose }) {
         type="button"
         onClick={() => onChoose(plan.id)}
         disabled={loading || disabled}
-        className="absolute left-3 right-0 bottom-0 px-6 py-3.5 text-white text-[11px] font-bold tracking-[0.18em] flex items-center justify-between transition disabled:opacity-60 disabled:cursor-not-allowed rounded-b-2xl"
+        className="absolute left-3 right-0 bottom-0 px-6 py-3.5 text-white text-[11px] font-bold tracking-[0.18em] flex items-center justify-between transition disabled:opacity-60 disabled:cursor-not-allowed rounded-b-md"
         style={{ background: plan.btnGradient }}
         onMouseEnter={(e) => {
           if (!loading && !disabled) e.currentTarget.style.background = plan.btnGradientHover;
@@ -290,12 +293,14 @@ export default function PricingPage() {
 
   return (
     <div
-      className="min-h-screen w-full flex items-center justify-center px-3 sm:px-6 py-3 sm:py-5"
+      className="min-h-screen w-full flex items-start justify-center px-4 sm:px-8 py-6 sm:py-8"
       style={{
         background: 'linear-gradient(180deg, #d6e4ff 0%, #e7eeff 40%, #f1f5ff 100%)',
       }}
     >
-      <div className="w-full max-w-[1140px] bg-[#f6f8fc] rounded-3xl border border-blue-100 shadow-[0_10px_50px_rgba(15,42,99,0.08)] px-5 sm:px-10 pt-5 pb-4">
+      {/* No inner wrapper card — heading and pricing grid sit directly on
+          the page background to match the reference layout. */}
+      <div className="w-full max-w-[1140px]">
         {/* Top: return-to-login link */}
         <button
           type="button"
