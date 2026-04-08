@@ -3,7 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext.jsx';
 import api from '../services/api.js';
 import { redirectToStripeCheckout } from '../services/stripe.js';
-import { ChevronLeft, ChevronRight, Info } from 'lucide-react';
+import { ChevronLeft, ChevronRight } from 'lucide-react';
 
 /* ─────────────── PLAN DATA ─────────────── */
 const PLANS = [
@@ -70,12 +70,17 @@ const PLANS = [
 /* ─────────────── PLAN CARD ─────────────── */
 // 3D-stacked card matching the Figma mock: a colored back panel sits behind
 // the white card and extends down to host the CHOOSE PLAN bar.
+//
+// The wrapper uses `h-full` so every card stretches to the tallest grid cell
+// — the white content card stays natural-height at the top and the colored
+// back panel fills the gap underneath, anchoring the CHOOSE PLAN bar at the
+// same vertical baseline across Starter / Pro / Elite.
 function PlanCard({ plan, cycle, loading, disabled, onChoose }) {
   const price = cycle === 'monthly' ? plan.monthly : plan.yearly;
   const period = cycle === 'monthly' ? 'month' : 'year';
 
   return (
-    <div className="relative pr-3 pb-14">
+    <div className="relative pr-3 pb-12 h-full">
       {/* Stack/back card — extends right + below the white card for the 3D effect */}
       <div
         aria-hidden="true"
@@ -88,20 +93,20 @@ function PlanCard({ plan, cycle, loading, disabled, onChoose }) {
         className="relative bg-white rounded-2xl border border-gray-100"
         style={{ boxShadow: '0 10px 30px rgba(0, 0, 0, 0.08)' }}
       >
-        <div className="p-7">
-          <div className="mb-5">
+        <div className="px-6 pt-5 pb-5">
+          <div className="mb-3">
             <div className="flex items-baseline gap-1">
-              <span className="text-[40px] leading-none font-bold text-[#0B1E3F]">${price}</span>
-              <span className="text-gray-400 text-sm">/{period}</span>
+              <span className="text-[34px] leading-none font-bold text-[#0B1E3F]">${price}</span>
+              <span className="text-gray-400 text-xs">/{period}</span>
             </div>
-            <h3 className="mt-2 text-[22px] font-bold text-[#0B1E3F]">{plan.name}</h3>
+            <h3 className="mt-1.5 text-[19px] font-bold text-[#0B1E3F]">{plan.name}</h3>
           </div>
 
-          <div className="border-t border-gray-200 mb-5" />
+          <div className="border-t border-gray-200 mb-3" />
 
-          <ul className="space-y-3">
+          <ul className="space-y-2">
             {plan.features.map((f, i) => (
-              <li key={i} className="text-[13px] text-gray-500 leading-snug">
+              <li key={i} className="text-[12px] text-gray-500 leading-snug">
                 {f}
               </li>
             ))}
@@ -109,12 +114,12 @@ function PlanCard({ plan, cycle, loading, disabled, onChoose }) {
         </div>
       </div>
 
-      {/* CHOOSE PLAN bar — sits on the back card, below the white card */}
+      {/* CHOOSE PLAN bar — sits on the back card, anchored to the bottom of the grid cell */}
       <button
         type="button"
         onClick={() => onChoose(plan.id)}
         disabled={loading || disabled}
-        className="absolute left-3 right-0 bottom-0 px-7 py-4 text-white text-[12px] font-bold tracking-[0.18em] flex items-center justify-between transition disabled:opacity-60 disabled:cursor-not-allowed rounded-b-2xl"
+        className="absolute left-3 right-0 bottom-0 px-6 py-3.5 text-white text-[11px] font-bold tracking-[0.18em] flex items-center justify-between transition disabled:opacity-60 disabled:cursor-not-allowed rounded-b-2xl"
         style={{ background: plan.btnGradient }}
         onMouseEnter={(e) => {
           if (!loading && !disabled) e.currentTarget.style.background = plan.btnGradientHover;
@@ -285,40 +290,40 @@ export default function PricingPage() {
 
   return (
     <div
-      className="min-h-screen w-full flex items-center justify-center px-3 sm:px-6 py-6 sm:py-10"
+      className="min-h-screen w-full flex items-center justify-center px-3 sm:px-6 py-3 sm:py-5"
       style={{
         background: 'linear-gradient(180deg, #d6e4ff 0%, #e7eeff 40%, #f1f5ff 100%)',
       }}
     >
-      <div className="w-full max-w-[1180px] bg-[#f6f8fc] rounded-3xl border border-blue-100 shadow-[0_10px_50px_rgba(15,42,99,0.08)] px-6 sm:px-12 pt-7 pb-6">
+      <div className="w-full max-w-[1140px] bg-[#f6f8fc] rounded-3xl border border-blue-100 shadow-[0_10px_50px_rgba(15,42,99,0.08)] px-5 sm:px-10 pt-5 pb-4">
         {/* Top: return-to-login link */}
         <button
           type="button"
           onClick={handleReturnToLogin}
-          className="flex items-center gap-1 text-[13px] text-gray-500 hover:text-gray-800 transition"
+          className="flex items-center gap-1 text-[12px] text-gray-500 hover:text-gray-800 transition"
         >
-          <ChevronLeft size={16} />
+          <ChevronLeft size={15} />
           <span>Return to Log in</span>
         </button>
 
         {/* Header row: title/subtitle on the left, cycle toggle on the right */}
-        <div className="mt-4 flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
+        <div className="mt-3 flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
           <div>
-            <h1 className="text-[28px] sm:text-[32px] font-extrabold text-[#0B1E3F] leading-tight tracking-tight">
+            <h1 className="text-[22px] sm:text-[26px] font-extrabold text-[#0B1E3F] leading-tight tracking-tight">
               {heading}
             </h1>
-            <p className="mt-2 text-[13px] sm:text-[14px] text-gray-500 max-w-xl">
+            <p className="mt-1 text-[12px] sm:text-[13px] text-gray-500 max-w-xl">
               {subtitle}
             </p>
           </div>
-          <div className="sm:pt-2">
+          <div className="sm:pt-1">
             <CycleToggle cycle={cycle} onChange={setCycle} />
           </div>
         </div>
 
         {/* Error message */}
         {errorMsg && (
-          <div className="mt-5 max-w-xl bg-red-50 border border-red-200 text-red-700 px-4 py-2.5 rounded-lg text-sm">
+          <div className="mt-3 max-w-xl bg-red-50 border border-red-200 text-red-700 px-4 py-2 rounded-lg text-sm">
             {errorMsg}
           </div>
         )}
@@ -326,13 +331,15 @@ export default function PricingPage() {
         {/* Trial banner — only shown to brand-new, trial-eligible users.
             Clicking this button is the ONLY way to opt into the 14-day free trial. */}
         {trialEligible && (
-          <div className="mt-6">
+          <div className="mt-4">
             <TrialBanner onStartTrial={handleStartTrial} loading={trialLoading} />
           </div>
         )}
 
-        {/* Plan cards — natural flow, items-start so cards keep their natural height */}
-        <div className="mt-9 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-7 sm:gap-9 items-start">
+        {/* Plan cards — grid stretches so every card matches the tallest one,
+            keeping the CHOOSE PLAN bars on a single baseline regardless of
+            how many features each tier lists. */}
+        <div className="mt-5 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6 sm:gap-7">
           {PLANS.map((plan) => (
             <PlanCard
               key={plan.id}
@@ -345,17 +352,9 @@ export default function PricingPage() {
           ))}
         </div>
 
-        {/* Footer row: copyright left, need-help link right */}
-        <div className="mt-10 flex items-center justify-between text-[11px] text-gray-400">
+        {/* Footer row: copyright only */}
+        <div className="mt-5 text-[11px] text-gray-400">
           <span>Copyright 2021 - 2025 AuraDesk Inc. All Rights Reserved.</span>
-          <button
-            type="button"
-            onClick={() => window.open('mailto:support@auradesk.com', '_blank')}
-            className="flex items-center gap-1.5 hover:text-gray-600 transition"
-          >
-            <Info size={13} />
-            <span>Need help?</span>
-          </button>
         </div>
       </div>
     </div>
