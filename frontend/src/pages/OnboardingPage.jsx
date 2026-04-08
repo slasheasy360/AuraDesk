@@ -563,6 +563,16 @@ export default function OnboardingPage() {
       return null;
     }
   });
+  // Read which flow the user picked on the pricing page so we can show the
+  // right confirmation message and decide where to send them next.
+  const [selectedPlanInfo] = useState(() => {
+    try {
+      const raw = localStorage.getItem('selectedPlan');
+      return raw ? JSON.parse(raw) : null;
+    } catch {
+      return null;
+    }
+  });
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const { refreshUser } = useAuth();
@@ -582,20 +592,37 @@ export default function OnboardingPage() {
     if (payment === 'success') {
       try { localStorage.setItem('paymentStatus', 'success'); } catch {}
       setPaymentBanner('success');
+      // Pull fresh user state so the dashboard route guard sees the new plan
+      // immediately when the auto-redirect fires below.
+      if (refreshUser) refreshUser();
     } else if (payment === 'cancel') {
       setPaymentBanner('cancel');
     }
     if (sp || ep || payment) setSearchParams({}, { replace: true });
-  }, [searchParams, setSearchParams]);
+  }, [searchParams, setSearchParams, refreshUser]);
   const errorInfo = errorRef.current;
 
-  // Auto-dismiss the payment banner after 6s
+  // Auto-dismiss the payment banner after 6s. For the cancel banner that's
+  // all we do; for the success banner we ALSO auto-redirect to the dashboard
+  // (handled in the next effect).
   useEffect(() => {
     if (paymentBanner === 'success' || paymentBanner === 'cancel') {
       const t = setTimeout(() => setPaymentBanner(null), 6000);
       return () => clearTimeout(t);
     }
   }, [paymentBanner]);
+
+  // After a successful payment, automatically take the user to the dashboard.
+  // We give them ~3 seconds to read the confirmation message first. The token
+  // / user is already loaded by AuthContext so this is purely a routing nudge.
+  useEffect(() => {
+    if (paymentBanner !== 'success') return;
+    const t = setTimeout(() => {
+      try { localStorage.removeItem('paymentStatus'); } catch {}
+      navigate('/', { replace: true });
+    }, 3000);
+    return () => clearTimeout(t);
+  }, [paymentBanner, navigate]);
 
   useEffect(() => {
     if (!localStorage.getItem('token')) {
@@ -648,8 +675,10 @@ export default function OnboardingPage() {
       </div>
 
       {paymentBanner === 'success' && (
-        <div className="mb-4 max-w-2xl w-full bg-green-50 border border-green-200 text-green-700 px-4 py-2.5 rounded-lg text-sm flex items-center justify-center gap-2">
-          ✅ Payment successful — your subscription is active.
+        <div className="mb-4 max-w-2xl w-full bg-green-50 border border-green-200 text-green-700 px-4 py-3 rounded-lg text-sm flex items-center justify-center gap-2">
+          {selectedPlanInfo?.withTrial
+            ? <span>Your free trial has started 🎉 — taking you to your dashboard…</span>
+            : <span>Your subscription is now active 🎉 — taking you to your dashboard…</span>}
         </div>
       )}
       {paymentBanner === 'cancel' && (

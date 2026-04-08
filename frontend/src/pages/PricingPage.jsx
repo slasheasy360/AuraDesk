@@ -12,11 +12,14 @@ const PLANS = [
     name: 'Starter',
     monthly: 29,
     yearly: 290,
-    // Stack/back-card colour for the 3D effect
+    // Stack/back-card colour for the 3D effect (kept for legacy)
     stackColor: '#1787FE',
-    // CTA gradient (top → bottom)
+    // Subscribe Now CTA gradient (top → bottom)
     btnGradient: 'linear-gradient(180deg, #2196FE 0%, #0f6fd8 100%)',
     btnGradientHover: 'linear-gradient(180deg, #1787FE 0%, #0a5ec0 100%)',
+    // Start Free Trial outline button color
+    btnBorder: '#1787FE',
+    btnBorderHoverBg: '#eff6ff',
     features: [
       '1 social inbox (IG, FB, TikTok, etc.)',
       'AI-generated replies (max 30/month)',
@@ -35,6 +38,8 @@ const PLANS = [
     stackColor: '#0B1E3F',
     btnGradient: 'linear-gradient(180deg, #13294d 0%, #0B1E3F 100%)',
     btnGradientHover: 'linear-gradient(180deg, #1a3460 0%, #13294d 100%)',
+    btnBorder: '#0B1E3F',
+    btnBorderHoverBg: '#f1f5f9',
     features: [
       '3 social inboxes',
       'Unlimited AI replies',
@@ -54,6 +59,8 @@ const PLANS = [
     stackColor: '#031428',
     btnGradient: 'linear-gradient(180deg, #0a2240 0%, #031428 100%)',
     btnGradientHover: 'linear-gradient(180deg, #102e50 0%, #0a2240 100%)',
+    btnBorder: '#031428',
+    btnBorderHoverBg: '#f1f5f9',
     features: [
       'Unlimited inboxes + platforms',
       'Multi-language AI replies',
@@ -68,26 +75,27 @@ const PLANS = [
 ];
 
 /* ─────────────── PLAN CARD ─────────────── */
-function PlanCard({ plan, cycle, loading, disabled, onChoose }) {
+function PlanCard({
+  plan,
+  cycle,
+  trialEligible,
+  trialLoading,
+  subscribeLoading,
+  disabled,
+  onStartTrial,
+  onSubscribeNow,
+}) {
   const price = cycle === 'monthly' ? plan.monthly : plan.yearly;
   const period = cycle === 'monthly' ? 'month' : 'year';
 
   return (
-    <div className="relative pr-3 pb-14">
-      {/* Stack/back card — extends right + below the white card for the 3D effect.
-          Also hosts the CHOOSE PLAN bar at the bottom. */}
+    <div className="relative">
+      {/* Front white card — natural height, content + dual CTA inside */}
       <div
-        aria-hidden="true"
-        className="absolute top-3 left-3 right-0 bottom-0 rounded-2xl"
-        style={{ backgroundColor: plan.stackColor }}
-      />
-
-      {/* Front white card — natural height, content only (no CTA inside) */}
-      <div
-        className="relative bg-white rounded-2xl border border-gray-100"
+        className="relative bg-white rounded-2xl border border-gray-100 overflow-hidden flex flex-col h-full"
         style={{ boxShadow: '0 10px 30px rgba(0, 0, 0, 0.08)' }}
       >
-        <div className="p-7">
+        <div className="p-7 pb-5 flex-1">
           <div className="mb-5">
             <div className="flex items-baseline gap-1">
               <span className="text-[40px] leading-none font-bold text-[#0B1E3F]">${price}</span>
@@ -106,27 +114,60 @@ function PlanCard({ plan, cycle, loading, disabled, onChoose }) {
             ))}
           </ul>
         </div>
-      </div>
 
-      {/* CTA — sits on the back card, below the white card */}
-      <button
-        type="button"
-        onClick={() => onChoose(plan.id)}
-        disabled={loading || disabled}
-        className="absolute left-3 right-0 bottom-0 px-7 py-4 text-white text-[12px] font-bold tracking-[0.18em] flex items-center justify-between transition disabled:opacity-60 disabled:cursor-not-allowed rounded-b-2xl"
-        style={{
-          background: plan.btnGradient,
-        }}
-        onMouseEnter={(e) => {
-          if (!loading && !disabled) e.currentTarget.style.background = plan.btnGradientHover;
-        }}
-        onMouseLeave={(e) => {
-          e.currentTarget.style.background = plan.btnGradient;
-        }}
-      >
-        <span>{loading ? 'REDIRECTING…' : 'CHOOSE PLAN'}</span>
-        <ChevronRight size={16} strokeWidth={2.5} />
-      </button>
+        {/* Dual CTA stack — Start Free Trial (if eligible) + Subscribe Now */}
+        <div className="px-7 pb-6 pt-2 space-y-2.5">
+          {trialEligible && (
+            <button
+              type="button"
+              onClick={() => onStartTrial(plan.id)}
+              disabled={trialLoading || subscribeLoading || disabled}
+              className="w-full px-5 py-3 rounded-xl text-[12px] font-bold tracking-[0.14em] flex items-center justify-center gap-2 transition disabled:opacity-60 disabled:cursor-not-allowed border-2"
+              style={{
+                borderColor: plan.btnBorder,
+                color: plan.btnBorder,
+                backgroundColor: 'white',
+              }}
+              onMouseEnter={(e) => {
+                if (!trialLoading && !subscribeLoading && !disabled) {
+                  e.currentTarget.style.backgroundColor = plan.btnBorderHoverBg;
+                }
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.backgroundColor = 'white';
+              }}
+            >
+              <span>{trialLoading ? 'REDIRECTING…' : 'START FREE TRIAL'}</span>
+              {!trialLoading && <ChevronRight size={14} strokeWidth={2.5} />}
+            </button>
+          )}
+
+          <button
+            type="button"
+            onClick={() => onSubscribeNow(plan.id)}
+            disabled={trialLoading || subscribeLoading || disabled}
+            className="w-full px-5 py-3 rounded-xl text-white text-[12px] font-bold tracking-[0.14em] flex items-center justify-center gap-2 transition disabled:opacity-60 disabled:cursor-not-allowed"
+            style={{ background: plan.btnGradient }}
+            onMouseEnter={(e) => {
+              if (!trialLoading && !subscribeLoading && !disabled) {
+                e.currentTarget.style.background = plan.btnGradientHover;
+              }
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.background = plan.btnGradient;
+            }}
+          >
+            <span>{subscribeLoading ? 'REDIRECTING…' : 'SUBSCRIBE NOW'}</span>
+            {!subscribeLoading && <ChevronRight size={14} strokeWidth={2.5} />}
+          </button>
+
+          {trialEligible && (
+            <p className="text-[10px] text-center text-gray-400 leading-snug pt-1">
+              Trial: 14 days free, then ${price}/{period}. Cancel anytime.
+            </p>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
@@ -157,176 +198,109 @@ function CycleToggle({ cycle, onChange }) {
   );
 }
 
-/* ─────────────── TRIAL BANNER ─────────────── */
-function TrialBanner({ onTryNow, loading }) {
-  return (
-    <div
-      className="rounded-2xl px-6 sm:px-8 py-5 sm:py-6 mb-8 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4"
-      style={{
-        background: 'linear-gradient(90deg, #cfe1ff 0%, #e3ecff 60%, #eef3ff 100%)',
-        border: '1px solid #c7d8f8',
-      }}
-    >
-      <div>
-        <h2 className="text-[22px] sm:text-[26px] font-extrabold text-[#0B1E3F] leading-tight">
-          14 Day Free Trial Available!
-        </h2>
-        <p className="mt-1.5 text-[13px] sm:text-[14px] text-[#1f3559]/75">
-          Start your free trial now. Billing starts after trial ends.
-        </p>
-      </div>
-      <button
-        type="button"
-        onClick={onTryNow}
-        disabled={loading}
-        className="self-start sm:self-auto px-6 py-2.5 rounded-full text-white text-[12px] font-bold tracking-[0.18em] shadow-md transition hover:shadow-lg active:scale-[0.98] disabled:opacity-60 disabled:cursor-not-allowed"
-        style={{
-          background: 'linear-gradient(90deg, #2A6FD4 0%, #1787FE 100%)',
-        }}
-      >
-        {loading ? 'REDIRECTING…' : 'TRY NOW'}
-      </button>
-    </div>
-  );
-}
-
 /* ─────────────── MAIN PAGE ─────────────── */
 export default function PricingPage() {
   const [cycle, setCycle] = useState('monthly');
-  const [loading, setLoading] = useState(null); // plan id while redirecting
-  const [trialLoading, setTrialLoading] = useState(false);
+  // Track which plan is mid-flight so the right button shows REDIRECTING…
+  // and the others lock out. Two slots so trial vs subscribe stay independent.
+  const [trialLoadingPlan, setTrialLoadingPlan] = useState(null);
+  const [subscribeLoadingPlan, setSubscribeLoadingPlan] = useState(null);
   const [errorMsg, setErrorMsg] = useState(null);
-  const [paymentCompleted, setPaymentCompleted] = useState(false);
   const { user, refreshUser, logout } = useAuth();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
-
-  // Restore payment success flag (prevents duplicate payments / re-charging)
-  useEffect(() => {
-    try {
-      if (localStorage.getItem('paymentStatus') === 'success') {
-        setPaymentCompleted(true);
-      }
-    } catch {}
-  }, []);
 
   // Handle ?payment=cancel callback from Stripe
   useEffect(() => {
     const payment = searchParams.get('payment');
     if (payment === 'cancel') {
-      setErrorMsg('Payment was cancelled. You can try again or pick a different plan.');
+      setErrorMsg('Payment was cancelled. You can try again or pick a different option.');
       setSearchParams({}, { replace: true });
     }
   }, [searchParams, setSearchParams]);
 
-  // ── Eligibility / state derivations ──
-  // User can start the free trial only if they're brand-new (plan === 'trial' but
-  // trialEndsAt is null, meaning the trial has never been started).
+  // ── Eligibility ──
+  // User can start the free trial only if they're brand-new (plan === 'trial'
+  // and trialEndsAt is null — i.e. the trial has never been started or used).
   const trialEligible = !!user && user.plan === 'trial' && !user.trialEndsAt;
   const trialExpired = !!user && (user.plan === 'expired' ||
     (user.plan === 'trial' && user.trialEndsAt && new Date(user.trialEndsAt) <= new Date()));
 
-  const alreadyPaid =
-    paymentCompleted ||
-    (user && user.subscriptionStatus === 'active' && ['starter', 'pro', 'elite'].includes(user.plan));
-
   const subtitle = trialExpired
-    ? 'Your 14-day free trial has exhausted. Subscribe to continue growing your business!'
-    : 'Subscribe to continue growing your business!';
+    ? 'Your free trial has ended. Choose a plan to keep going.'
+    : trialEligible
+      ? 'Try any plan free for 14 days, or subscribe instantly. Cancel anytime.'
+      : 'Choose a plan that fits your business.';
 
-  const heading = trialEligible ? 'Or choose a plan' : 'Choose a plan to continue';
+  const heading = trialExpired ? 'Subscribe to continue' : 'Choose a plan';
 
   // ── Handlers ──
-  // "Try Now" → Stripe Checkout in subscription mode with a 14-day trial.
-  // We default to the Starter plan (cheapest entry point) so users can sample
-  // the product without surprise billing. Stripe collects the card up-front but
-  // doesn't charge until the trial ends. After Stripe success, the user lands
-  // on /onboarding via the success_url, then proceeds to the dashboard.
-  const TRIAL_DEFAULT_PLAN = 'starter';
-  const TRIAL_DEFAULT_CYCLE = 'monthly';
-
-  const handleStartTrial = async () => {
-    if (alreadyPaid) return;
-    setErrorMsg(null);
-    setTrialLoading(true);
-    try {
-      const res = await api.post('/api/subscription/create-checkout', {
-        plan: TRIAL_DEFAULT_PLAN,
-        cycle: TRIAL_DEFAULT_CYCLE,
-        includeTrial: true,
-      });
-      try {
-        localStorage.setItem(
-          'selectedPlan',
-          JSON.stringify({ plan: TRIAL_DEFAULT_PLAN, cycle: TRIAL_DEFAULT_CYCLE, trial: true }),
-        );
-      } catch {}
-      await redirectToStripeCheckout({ url: res.data.url, sessionId: res.data.sessionId });
-    } catch (err) {
-      // If Stripe is not configured server-side (501), fall back to the no-card
-      // trial activation so local/dev environments still work.
-      if (err.response?.status === 501) {
-        try {
-          await api.post('/api/subscription/start-trial');
-          if (refreshUser) await refreshUser();
-          navigate('/onboarding');
-          return;
-        } catch (fallbackErr) {
-          console.error('Trial fallback failed:', fallbackErr);
-          setErrorMsg('Could not start trial. Please try again.');
-        }
-      } else {
-        console.error('Start trial failed:', err);
-        setErrorMsg(
-          err.response?.data?.error || err.message || 'Could not start trial. Please try again.',
-        );
-      }
-    } finally {
-      setTrialLoading(false);
-    }
-  };
-
-  const handleChoosePlan = async (planId) => {
-    if (alreadyPaid) return;
+  // The two flows differ ONLY in the includeTrial flag we send to the backend.
+  // Same Stripe Checkout endpoint, same success/cancel URLs, same DB writes via
+  // webhook. Each handler stores the user's intent in localStorage so the
+  // success page can show the correct confirmation message.
+  const startCheckout = async (planId, { withTrial }) => {
+    if (withTrial && !trialEligible) return; // safety: can't trial twice
+    const setLoading = withTrial ? setTrialLoadingPlan : setSubscribeLoadingPlan;
     setErrorMsg(null);
     setLoading(planId);
     try {
       const res = await api.post('/api/subscription/create-checkout', {
         plan: planId,
         cycle,
-        // Bundle the 14-day trial into Stripe sub if user is still trial-eligible
-        includeTrial: trialEligible,
+        includeTrial: withTrial,
       });
-      // Persist last-selected plan so we can resume after a cancel/abandon
       try {
-        localStorage.setItem('selectedPlan', JSON.stringify({ plan: planId, cycle }));
+        localStorage.setItem(
+          'selectedPlan',
+          JSON.stringify({ plan: planId, cycle, withTrial }),
+        );
       } catch {}
       await redirectToStripeCheckout({ url: res.data.url, sessionId: res.data.sessionId });
     } catch (err) {
-      // If Stripe is not configured server-side (501), fall back to manual activation
+      // If Stripe is not configured server-side (501), fall back to the
+      // local dev paths so the flow can still complete in development.
       if (err.response?.status === 501) {
         try {
-          await api.post('/api/subscription/activate', { plan: planId, cycle });
+          if (withTrial) {
+            await api.post('/api/subscription/start-trial');
+          } else {
+            await api.post('/api/subscription/activate', { plan: planId, cycle });
+          }
+          try {
+            localStorage.setItem(
+              'selectedPlan',
+              JSON.stringify({ plan: planId, cycle, withTrial }),
+            );
+            localStorage.setItem('paymentStatus', 'success');
+          } catch {}
           if (refreshUser) await refreshUser();
-          navigate('/onboarding');
+          navigate('/onboarding?payment=success');
           return;
-        } catch (activateErr) {
-          console.error('Activation failed:', activateErr);
-          setErrorMsg('Could not activate plan. Please try again.');
+        } catch (fallbackErr) {
+          console.error('Stripe-less fallback failed:', fallbackErr);
+          setErrorMsg('Could not start your plan. Please try again.');
         }
       } else {
         console.error('Checkout failed:', err);
-        setErrorMsg(err.response?.data?.error || err.message || 'Checkout failed. Please try again.');
+        setErrorMsg(
+          err.response?.data?.error || err.message || 'Checkout failed. Please try again.',
+        );
       }
     } finally {
       setLoading(null);
     }
   };
 
+  const handleStartTrial = (planId) => startCheckout(planId, { withTrial: true });
+  const handleSubscribeNow = (planId) => startCheckout(planId, { withTrial: false });
+
   const handleReturnToLogin = () => {
     if (logout) logout();
     navigate('/login');
   };
+
+  const anyLoading = !!trialLoadingPlan || !!subscribeLoadingPlan;
 
   return (
     <div className="min-h-screen w-full" style={{ backgroundColor: '#f3f5f8' }}>
@@ -340,13 +314,6 @@ export default function PricingPage() {
           <ChevronLeft size={16} />
           <span>Return to Log in</span>
         </button>
-
-        {/* Trial banner (only if eligible) */}
-        {trialEligible && (
-          <div className="mt-5">
-            <TrialBanner onTryNow={handleStartTrial} loading={trialLoading} />
-          </div>
-        )}
 
         {/* Header row: title/subtitle on the left, cycle toggle on the right */}
         <div className="mt-5 flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
@@ -363,28 +330,25 @@ export default function PricingPage() {
           </div>
         </div>
 
-        {/* Error / status messages */}
-        {alreadyPaid && (
-          <div className="mt-5 max-w-xl bg-green-50 border border-green-200 text-green-700 px-4 py-2.5 rounded-lg text-sm">
-            ✅ Your subscription is active. Redirecting…
-          </div>
-        )}
         {errorMsg && (
           <div className="mt-5 max-w-xl bg-red-50 border border-red-200 text-red-700 px-4 py-2.5 rounded-lg text-sm">
             {errorMsg}
           </div>
         )}
 
-        {/* Plan cards — natural flow, items-start so cards keep their natural height */}
-        <div className="mt-10 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6 sm:gap-8 items-start">
+        {/* Plan cards — each card carries its own pair of CTAs */}
+        <div className="mt-10 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6 sm:gap-8 items-stretch">
           {PLANS.map((plan) => (
             <PlanCard
               key={plan.id}
               plan={plan}
               cycle={cycle}
-              loading={loading === plan.id}
-              disabled={alreadyPaid || loading !== null}
-              onChoose={handleChoosePlan}
+              trialEligible={trialEligible}
+              trialLoading={trialLoadingPlan === plan.id}
+              subscribeLoading={subscribeLoadingPlan === plan.id}
+              disabled={anyLoading}
+              onStartTrial={handleStartTrial}
+              onSubscribeNow={handleSubscribeNow}
             />
           ))}
         </div>
