@@ -73,20 +73,21 @@ function PlanCard({ plan, cycle, loading, disabled, onChoose }) {
   const period = cycle === 'monthly' ? 'month' : 'year';
 
   return (
-    <div className="relative pr-3 pb-3">
-      {/* Stack/back card — slightly offset to give a 3D layered look */}
+    <div className="relative pr-3 pb-14">
+      {/* Stack/back card — extends right + below the white card for the 3D effect.
+          Also hosts the CHOOSE PLAN bar at the bottom. */}
       <div
         aria-hidden="true"
-        className="absolute top-3 right-0 bottom-0 left-3 rounded-2xl"
+        className="absolute top-3 left-3 right-0 bottom-0 rounded-2xl"
         style={{ backgroundColor: plan.stackColor }}
       />
 
-      {/* Front white card */}
+      {/* Front white card — natural height, content only (no CTA inside) */}
       <div
-        className="relative bg-white rounded-2xl border border-gray-100 flex flex-col overflow-hidden"
+        className="relative bg-white rounded-2xl border border-gray-100"
         style={{ boxShadow: '0 10px 30px rgba(0, 0, 0, 0.08)' }}
       >
-        <div className="p-7 pb-5 flex-1 flex flex-col">
+        <div className="p-7">
           <div className="mb-5">
             <div className="flex items-baseline gap-1">
               <span className="text-[40px] leading-none font-bold text-[#0B1E3F]">${price}</span>
@@ -97,7 +98,7 @@ function PlanCard({ plan, cycle, loading, disabled, onChoose }) {
 
           <div className="border-t border-gray-200 mb-5" />
 
-          <ul className="space-y-3 flex-1">
+          <ul className="space-y-3">
             {plan.features.map((f, i) => (
               <li key={i} className="text-[13px] text-gray-500 leading-snug">
                 {f}
@@ -105,27 +106,27 @@ function PlanCard({ plan, cycle, loading, disabled, onChoose }) {
             ))}
           </ul>
         </div>
-
-        {/* CTA — full-width gradient bar at the bottom of the white card */}
-        <button
-          type="button"
-          onClick={() => onChoose(plan.id)}
-          disabled={loading || disabled}
-          className="w-full px-7 py-4 text-white text-[12px] font-bold tracking-[0.18em] flex items-center justify-between transition disabled:opacity-60 disabled:cursor-not-allowed"
-          style={{
-            background: plan.btnGradient,
-          }}
-          onMouseEnter={(e) => {
-            if (!loading && !disabled) e.currentTarget.style.background = plan.btnGradientHover;
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.background = plan.btnGradient;
-          }}
-        >
-          <span>{loading ? 'REDIRECTING…' : 'CHOOSE PLAN'}</span>
-          <ChevronRight size={16} strokeWidth={2.5} />
-        </button>
       </div>
+
+      {/* CTA — sits on the back card, below the white card */}
+      <button
+        type="button"
+        onClick={() => onChoose(plan.id)}
+        disabled={loading || disabled}
+        className="absolute left-3 right-0 bottom-0 px-7 py-4 text-white text-[12px] font-bold tracking-[0.18em] flex items-center justify-between transition disabled:opacity-60 disabled:cursor-not-allowed rounded-b-2xl"
+        style={{
+          background: plan.btnGradient,
+        }}
+        onMouseEnter={(e) => {
+          if (!loading && !disabled) e.currentTarget.style.background = plan.btnGradientHover;
+        }}
+        onMouseLeave={(e) => {
+          e.currentTarget.style.background = plan.btnGradient;
+        }}
+      >
+        <span>{loading ? 'REDIRECTING…' : 'CHOOSE PLAN'}</span>
+        <ChevronRight size={16} strokeWidth={2.5} />
+      </button>
     </div>
   );
 }
@@ -294,57 +295,54 @@ export default function PricingPage() {
   };
 
   return (
-    <div
-      className="min-h-screen w-full flex flex-col px-6 sm:px-10 lg:px-16 pt-6 sm:pt-8 pb-5"
-      style={{ backgroundColor: '#f3f5f8' }}
-    >
-      {/* Top: return-to-login link */}
-      <button
-        type="button"
-        onClick={handleReturnToLogin}
-        className="flex items-center gap-1 text-[13px] text-gray-500 hover:text-gray-800 transition self-start"
-      >
-        <ChevronLeft size={16} />
-        <span>Return to Log in</span>
-      </button>
+    <div className="min-h-screen w-full" style={{ backgroundColor: '#f3f5f8' }}>
+      <div className="max-w-[1140px] mx-auto px-6 sm:px-10 pt-6 sm:pt-8 pb-5 min-h-screen flex flex-col">
+        {/* Top: return-to-login link */}
+        <button
+          type="button"
+          onClick={handleReturnToLogin}
+          className="self-start flex items-center gap-1 text-[13px] text-gray-500 hover:text-gray-800 transition"
+        >
+          <ChevronLeft size={16} />
+          <span>Return to Log in</span>
+        </button>
 
-      {/* Trial banner (only if eligible) */}
-      {trialEligible && (
-        <div className="mt-5 max-w-[1080px] mx-auto w-full">
-          <TrialBanner onTryNow={handleStartTrial} loading={trialLoading} />
-        </div>
-      )}
+        {/* Trial banner (only if eligible) */}
+        {trialEligible && (
+          <div className="mt-5">
+            <TrialBanner onTryNow={handleStartTrial} loading={trialLoading} />
+          </div>
+        )}
 
-      {/* Header row: title/subtitle on the left, cycle toggle on the right */}
-      <div className="mt-4 flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
-        <div>
-          <h1 className="text-[28px] sm:text-[34px] font-extrabold text-[#0B1E3F] leading-tight tracking-tight">
-            {heading}
-          </h1>
-          <p className="mt-2 text-[13px] sm:text-[14px] text-gray-500 max-w-xl">
-            {subtitle}
-          </p>
+        {/* Header row: title/subtitle on the left, cycle toggle on the right */}
+        <div className="mt-5 flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
+          <div>
+            <h1 className="text-[28px] sm:text-[34px] font-extrabold text-[#0B1E3F] leading-tight tracking-tight">
+              {heading}
+            </h1>
+            <p className="mt-2 text-[13px] sm:text-[14px] text-gray-500 max-w-xl">
+              {subtitle}
+            </p>
+          </div>
+          <div className="sm:pt-2">
+            <CycleToggle cycle={cycle} onChange={setCycle} />
+          </div>
         </div>
-        <div className="sm:pt-2">
-          <CycleToggle cycle={cycle} onChange={setCycle} />
-        </div>
-      </div>
 
-      {/* Error / status messages */}
-      {alreadyPaid && (
-        <div className="mt-5 max-w-xl bg-green-50 border border-green-200 text-green-700 px-4 py-2.5 rounded-lg text-sm">
-          ✅ Your subscription is active. Redirecting…
-        </div>
-      )}
-      {errorMsg && (
-        <div className="mt-5 max-w-xl bg-red-50 border border-red-200 text-red-700 px-4 py-2.5 rounded-lg text-sm">
-          {errorMsg}
-        </div>
-      )}
+        {/* Error / status messages */}
+        {alreadyPaid && (
+          <div className="mt-5 max-w-xl bg-green-50 border border-green-200 text-green-700 px-4 py-2.5 rounded-lg text-sm">
+            ✅ Your subscription is active. Redirecting…
+          </div>
+        )}
+        {errorMsg && (
+          <div className="mt-5 max-w-xl bg-red-50 border border-red-200 text-red-700 px-4 py-2.5 rounded-lg text-sm">
+            {errorMsg}
+          </div>
+        )}
 
-      {/* Plan cards */}
-      <div className="flex-1 flex items-center justify-center w-full">
-        <div className="w-full max-w-[1080px] grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6 sm:gap-8 py-8">
+        {/* Plan cards — natural flow, items-start so cards keep their natural height */}
+        <div className="mt-10 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6 sm:gap-8 items-start">
           {PLANS.map((plan) => (
             <PlanCard
               key={plan.id}
@@ -356,11 +354,11 @@ export default function PricingPage() {
             />
           ))}
         </div>
-      </div>
 
-      {/* Footer */}
-      <div className="mt-4 text-[11px] text-gray-400">
-        <span>Copyright 2021 - 2025 AuraDesk Inc. All Rights Reserved.</span>
+        {/* Footer pinned to the bottom of the viewport */}
+        <div className="mt-auto pt-10 text-[11px] text-gray-400">
+          <span>Copyright 2021 - 2025 AuraDesk Inc. All Rights Reserved.</span>
+        </div>
       </div>
     </div>
   );
