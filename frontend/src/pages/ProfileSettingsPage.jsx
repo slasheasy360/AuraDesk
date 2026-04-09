@@ -168,9 +168,13 @@ function PersonalTab({ user, refreshUser, showSuccess, showError }) {
         </button>
       </div>
       <div className="flex flex-col items-center">
-        <div className="w-32 h-32 rounded-full bg-gradient-to-br from-orange-300 to-pink-300 flex items-center justify-center text-4xl font-bold text-white">
-          {(user?.firstName || user?.name || 'A')[0]}
-        </div>
+        {user?.companyLogo ? (
+          <img src={user.companyLogo} alt="Profile" className="w-32 h-32 rounded-full object-cover border-2 border-primary-200" />
+        ) : (
+          <div className="w-32 h-32 rounded-full bg-gradient-to-br from-orange-300 to-pink-300 flex items-center justify-center text-4xl font-bold text-white">
+            {(user?.firstName || user?.name || 'A')[0]}
+          </div>
+        )}
         <p className="mt-3 text-xs text-gray-500 uppercase font-semibold tracking-wide">Profile image</p>
       </div>
       <style>{`.input{width:100%;padding:.65rem .85rem;border:1px solid #e5e7eb;border-radius:.5rem;font-size:.875rem;outline:none;background:#fff}.input:focus{border-color:#3b82f6;box-shadow:0 0 0 3px rgba(59,130,246,.1)}`}</style>
