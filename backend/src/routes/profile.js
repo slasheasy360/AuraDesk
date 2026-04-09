@@ -2,13 +2,19 @@ import { Router } from 'express';
 import bcrypt from 'bcryptjs';
 import prisma from '../utils/prisma.js';
 import { authenticate } from '../middleware/auth.js';
+import { getPresignedUrl } from '../utils/s3.js';
 
 const router = Router();
 
-const sanitize = (u) => ({
+async function resolveLogoUrl(companyLogo) {
+  if (!companyLogo || companyLogo.startsWith('http')) return companyLogo;
+  try { return await getPresignedUrl(companyLogo, 3600 * 12); } catch { return null; }
+}
+
+const sanitize = async (u) => ({
   id: u.id, email: u.email, name: u.name,
   firstName: u.firstName, lastName: u.lastName,
-  companyName: u.companyName, companyLogo: u.companyLogo, brandColor: u.brandColor,
+  companyName: u.companyName, companyLogo: await resolveLogoUrl(u.companyLogo), brandColor: u.brandColor,
   plan: u.plan, subscriptionStatus: u.subscriptionStatus,
   trialEndsAt: u.trialEndsAt, currentPeriodEnd: u.currentPeriodEnd, billingCycle: u.billingCycle,
   onboardingStep: u.onboardingStep,
@@ -29,7 +35,7 @@ router.put('/personal', authenticate, async (req, res) => {
       data.email = email;
     }
     const user = await prisma.user.update({ where: { id: req.user.id }, data });
-    res.json({ user: sanitize(user) });
+    res.json({ user: await sanitize(user) });
   } catch (err) {
     console.error('profile/personal:', err);
     res.status(500).json({ error: 'Failed to update profile' });
@@ -66,7 +72,7 @@ router.put('/company', authenticate, async (req, res) => {
     if (companyLogo !== undefined) data.companyLogo = companyLogo;
     if (brandColor !== undefined) data.brandColor = brandColor;
     const user = await prisma.user.update({ where: { id: req.user.id }, data });
-    res.json({ user: sanitize(user) });
+    res.json({ user: await sanitize(user) });
   } catch (err) {
     console.error('profile/company:', err);
     res.status(500).json({ error: 'Failed to update company' });

@@ -467,13 +467,10 @@ function BrandingStep({ onNext, savedData, onSaveData }) {
       // Branding endpoint sets onboardingCompleted = true server-side.
       await api.post('/api/onboarding/branding', form);
       onSaveData(form);
-      // updateUser writes onboardingCompleted immediately to React state AND
-      // localStorage. This is the primary update — routing sees it instantly.
-      // refreshUser() then does a full authoritative sync in the background.
-      updateUser({ onboardingCompleted: true });
-      if (refreshUser) {
-        try { await refreshUser(); } catch { /* non-fatal */ }
-      }
+      // Do NOT call updateUser({ onboardingCompleted: true }) here — that
+      // would cause the onboarding status check to redirect to '/' before
+      // the success screen (step 2) is shown. The flag is set after the
+      // user clicks "LET'S START" in the SuccessScreen.
       onNext();
     } catch (err) {
       console.error('Branding save failed:', err);
@@ -610,6 +607,7 @@ function SuccessScreen({ onFinish }) {
 /* ─────────────── MAIN ─────────────── */
 export default function OnboardingPage() {
   const [step, setStep] = useState(0); // 0=platform, 1=branding, 2=success
+  const stepRef = useRef(0); // mirror of step for use inside effects without stale closure
   const [maxStep, setMaxStep] = useState(0);
   const [brandingData, setBrandingData] = useState(null);
   // Brief success banner shown when a brand-new subscriber lands here from
@@ -653,8 +651,10 @@ export default function OnboardingPage() {
     api.get('/api/onboarding/status').then((res) => {
       // ── Hard short-circuit ──
       // The backend `onboardingCompleted` flag is the single source of
-      // truth. If it's set, the user must NEVER see the wizard again.
-      if (res.data?.onboardingCompleted) {
+      // truth. If it's set, redirect to dashboard — UNLESS we're already
+      // on the success screen (step 2), in which case let the user click
+      // "LET'S START" themselves.
+      if (res.data?.onboardingCompleted && stepRef.current < 2) {
         navigate('/', { replace: true });
         return;
       }
@@ -677,6 +677,7 @@ export default function OnboardingPage() {
   }, [navigate]);
 
   const goTo = (n) => {
+    stepRef.current = n;
     setStep(n);
     setMaxStep((m) => Math.max(m, n));
   };
