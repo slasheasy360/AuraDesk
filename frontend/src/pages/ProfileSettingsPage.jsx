@@ -66,7 +66,11 @@ export default function ProfileSettingsPage() {
               }`}
             >
               {t}
-              {t === 'Plan' && <span className="ml-1.5 text-[9px] px-1.5 py-0.5 bg-emerald-100 text-emerald-700 rounded font-bold">PRO</span>}
+              {t === 'Plan' && user?.plan && user.plan !== 'expired' && (
+                <span className="ml-1.5 text-[9px] px-1.5 py-0.5 bg-emerald-100 text-emerald-700 rounded font-bold uppercase">
+                  {user.plan === 'trial' ? 'TRIAL' : user.plan}
+                </span>
+              )}
             </button>
           ))}
         </div>
@@ -307,22 +311,46 @@ function fmtDate(dateLike) {
 function PlanTab({ user }) {
   const { refreshUser } = useAuth();
   const navigate = useNavigate();
-  const [status, setStatus] = useState(null);
+  // Seed status from the AuthContext user so the UI renders immediately
+  // even before /subscription/status responds (or if it fails).
+  const [status, setStatus] = useState(() => user ? {
+    plan: user.plan,
+    subscriptionStatus: user.subscriptionStatus,
+    isSubscribed: user.isSubscribed,
+    trialEndsAt: user.trialEndsAt,
+    currentPeriodStart: user.currentPeriodStart,
+    currentPeriodEnd: user.currentPeriodEnd,
+    cancelAtPeriodEnd: user.cancelAtPeriodEnd,
+    gracePeriodEndsAt: user.gracePeriodEndsAt,
+    billingCycle: user.billingCycle,
+    trialActive: user.plan === 'trial' && user.trialEndsAt && new Date(user.trialEndsAt) > new Date(),
+    trialDaysLeft: user.plan === 'trial' && user.trialEndsAt
+      ? Math.max(0, Math.ceil((new Date(user.trialEndsAt) - new Date()) / (1000 * 60 * 60 * 24)))
+      : 0,
+  } : null);
   const [loading, setLoading] = useState(true);
   const [actionPending, setActionPending] = useState(null); // 'cancel' | 'resume' | planId
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [confirmOpen, setConfirmOpen] = useState(false);
-  const [cycle, setCycle] = useState('monthly');
+  const [cycle, setCycle] = useState(user?.billingCycle || 'monthly');
 
   const loadStatus = () => {
     setLoading(true);
+    setError('');
     api.get('/api/subscription/status')
       .then((r) => {
         setStatus(r.data);
         if (r.data.billingCycle) setCycle(r.data.billingCycle);
       })
-      .catch(() => setError('Could not load subscription details'))
+      .catch((err) => {
+        console.error('[PlanTab] /subscription/status failed:', err.response?.status, err.message);
+        // Don't blank out the UI — keep the seeded status from the user prop.
+        // Only show an error banner if we have no data at all to display.
+        if (!status) {
+          setError('Could not load full subscription details. Showing cached data.');
+        }
+      })
       .finally(() => setLoading(false));
   };
 
