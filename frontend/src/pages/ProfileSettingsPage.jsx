@@ -1,10 +1,10 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext.jsx';
 import { useLinkAccounts } from '../context/LinkAccountsContext.jsx';
 import api from '../services/api.js';
 import { redirectToStripeCheckout } from '../services/stripe.js';
-import { UserPlus, X, Copy, Check, Trash2, Loader2, Zap } from 'lucide-react';
+import { UserPlus, X, Copy, Check, Trash2, Loader2, Zap, Upload } from 'lucide-react';
 
 const TABS = ['Personal', 'Company', 'Integrations', 'Plan', 'Team'];
 
@@ -185,12 +185,49 @@ function CompanyTab({ user, refreshUser, showSuccess, showError, canEdit }) {
     brandColor: user?.brandColor || '#3b82f6',
   });
   const [saving, setSaving] = useState(false);
+  const [logoPreview, setLogoPreview] = useState(user?.companyLogo || null);
+  const [uploading, setUploading] = useState(false);
+  const [logoKey, setLogoKey] = useState(null); // pending S3 key, saved on "Save changes"
+  const fileInputRef = useRef(null);
+
+  // Keep preview in sync if user refreshes (e.g. after save)
+  useEffect(() => {
+    setLogoPreview(user?.companyLogo || null);
+  }, [user?.companyLogo]);
+
+  const handleLogoSelect = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    // Show local preview immediately
+    const reader = new FileReader();
+    reader.onload = (ev) => setLogoPreview(ev.target.result);
+    reader.readAsDataURL(file);
+    setUploading(true);
+    try {
+      const fd = new FormData();
+      fd.append('logo', file);
+      const res = await api.post('/api/onboarding/upload-logo', fd, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
+      if (res.data.url) setLogoPreview(res.data.url);
+      if (res.data.s3Key) setLogoKey(res.data.s3Key);
+    } catch (err) {
+      console.error('Logo upload failed:', err);
+      showError('Logo upload failed. Please try again.');
+    } finally {
+      setUploading(false);
+    }
+  };
 
   const save = async () => {
     if (!canEdit) return;
     setSaving(true);
     try {
-      await api.put('/api/profile/company', form);
+      await api.put('/api/profile/company', {
+        ...form,
+        ...(logoKey ? { companyLogo: logoKey } : {}),
+      });
+      setLogoKey(null);
       await refreshUser();
       showSuccess('Company updated');
     } catch (e) {
@@ -210,20 +247,40 @@ function CompanyTab({ user, refreshUser, showSuccess, showError, canEdit }) {
           <input type="color" className="h-10 w-20 rounded border border-gray-200" disabled={!canEdit} value={form.brandColor} onChange={(e) => setForm({ ...form, brandColor: e.target.value })} />
         </Field>
         {canEdit ? (
-          <button disabled={saving} onClick={save} className="px-6 py-2.5 bg-primary-600 text-white text-sm font-semibold rounded-lg disabled:opacity-50">
+          <button disabled={saving || uploading} onClick={save} className="px-6 py-2.5 bg-primary-600 text-white text-sm font-semibold rounded-lg disabled:opacity-50">
             {saving ? 'Saving…' : 'Save changes'}
           </button>
         ) : (
           <p className="text-xs text-gray-500">You don't have permission to edit company info.</p>
         )}
       </div>
-      <div className="flex flex-col items-center">
-        {user?.companyLogo ? (
-          <img src={user.companyLogo} alt="logo" className="w-32 h-32 rounded-full object-cover" />
-        ) : (
-          <div className="w-32 h-32 rounded-full border-2 border-primary-300 flex items-center justify-center text-primary-500 text-4xl">🏢</div>
+      <div className="flex flex-col items-center gap-3">
+        <div className="relative">
+          {logoPreview ? (
+            <img src={logoPreview} alt="Company logo" className="w-32 h-32 rounded-full object-cover border-2 border-primary-200" />
+          ) : (
+            <div className="w-32 h-32 rounded-full border-2 border-primary-300 flex items-center justify-center text-primary-500 text-4xl bg-blue-50">🏢</div>
+          )}
+          {uploading && (
+            <div className="absolute inset-0 rounded-full bg-black/40 flex items-center justify-center">
+              <Loader2 size={28} className="animate-spin text-white" />
+            </div>
+          )}
+        </div>
+        <p className="text-xs text-gray-500 uppercase font-semibold tracking-wide">Company Logo</p>
+        {canEdit && (
+          <>
+            <input type="file" ref={fileInputRef} className="hidden" accept="image/*" onChange={handleLogoSelect} />
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={uploading}
+              className="flex items-center gap-1.5 px-4 py-1.5 text-xs font-semibold text-primary-600 border border-primary-300 rounded-full hover:bg-primary-50 transition disabled:opacity-50"
+            >
+              <Upload size={13} /> Upload logo
+            </button>
+          </>
         )}
-        <p className="mt-3 text-xs text-gray-500 uppercase font-semibold">Company logo</p>
       </div>
       <style>{`.input{width:100%;padding:.65rem .85rem;border:1px solid #e5e7eb;border-radius:.5rem;font-size:.875rem;outline:none;background:#fff}.input:disabled{background:#f9fafb;color:#6b7280}.input:focus{border-color:#3b82f6;box-shadow:0 0 0 3px rgba(59,130,246,.1)}`}</style>
     </div>
