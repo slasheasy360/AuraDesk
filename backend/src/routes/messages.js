@@ -475,28 +475,75 @@ router.post('/send', authenticate, upload.array('attachments', 10), async (req, 
             return res.status(400).json({ error: 'No recipient email found for this Gmail conversation' });
           }
 
+          // ── Fetch the last message for subject + threading headers ──────
+          // We read from the DB so we don't need an extra live Gmail API call.
+          // rawPayload contains the full Gmail message object including headers.
+          const lastMsg = await prisma.message.findFirst({
+            where: { conversationId: conversation.id },
+            orderBy: { sentAt: 'desc' },
+            select: { subject: true, content: true, sender: true, sentAt: true, rawPayload: true },
+          });
+
+          // ── Subject ──────────────────────────────────────────────────────
           let subject;
           if (reqSubject) {
             subject = reqSubject;
           } else {
-            const lastMsg = await prisma.message.findFirst({
-              where: { conversationId: conversation.id },
-              orderBy: { sentAt: 'desc' },
-              select: { subject: true },
-            });
-            subject = lastMsg?.subject
-              ? (lastMsg.subject.startsWith('Re:') ? lastMsg.subject : `Re: ${lastMsg.subject}`)
+            const baseSubject = lastMsg?.subject || '';
+            subject = baseSubject
+              ? (baseSubject.startsWith('Re:') ? baseSubject : `Re: ${baseSubject}`)
               : 'Re:';
           }
 
-          // Send via Gmail API (OAuth) — uses the connected Gmail account directly
+          // ── Threading headers from rawPayload ────────────────────────────
+          // Extract Message-ID and References from the stored raw Gmail payload.
+          // This is more reliable than a live API call and avoids the Neon cold-
+          // start race that can strip these headers silently.
+          let inReplyToMsgId = null;
+          let references     = null;
+
+          if (lastMsg?.rawPayload) {
+            const rawHeaders = lastMsg.rawPayload?.payload?.headers || [];
+            const getHdr = (name) =>
+              rawHeaders.find((h) => h.name?.toLowerCase() === name.toLowerCase())?.value || null;
+
+            inReplyToMsgId = getHdr('Message-ID');
+            const existingRefs = getHdr('References');
+
+            if (inReplyToMsgId) {
+              // Build the full References chain: previous chain + the parent's own ID
+              references = [existingRefs, inReplyToMsgId].filter(Boolean).join(' ');
+            }
+          }
+
+          // ── Quoted body ──────────────────────────────────────────────────
+          // Append Gmail-style quoted reply so the recipient sees conversation
+          // context. Only added when replying to an existing message.
+          let bodyToSend = content || '';
+          if (lastMsg?.content?.trim()) {
+            const dateStr = lastMsg.sentAt
+              ? new Date(lastMsg.sentAt).toLocaleString('en-US', {
+                  weekday: 'short', year: 'numeric', month: 'short', day: 'numeric',
+                  hour: 'numeric', minute: '2-digit', hour12: true,
+                })
+              : '';
+            const quotedLines = lastMsg.content.trim()
+              .split('\n')
+              .map((line) => `> ${line}`)
+              .join('\n');
+            bodyToSend =
+              `${bodyToSend}\r\n\r\nOn ${dateStr}, ${lastMsg.sender || 'Unknown'} wrote:\r\n${quotedLines}`;
+          }
+
+          // ── Send ─────────────────────────────────────────────────────────
           const gmailResult = await gmailService.sendEmail(
             conversation.connectedAccountId,
             recipientEmail,
             subject,
-            content || '',
+            bodyToSend,
             conversation.platformConversationId,
-            files
+            files,
+            { inReplyToMsgId, references },
           );
 
           console.log('[Gmail API] Email sent successfully:', {
@@ -504,6 +551,7 @@ router.post('/send', authenticate, upload.array('attachments', 10), async (req, 
             subject,
             messageId: gmailResult.id,
             threadId: gmailResult.threadId,
+            inReplyTo: inReplyToMsgId || '(none — first message in thread)',
           });
 
           platformMessageId = gmailResult.id;
@@ -548,21 +596,11 @@ router.post('/send', authenticate, upload.array('attachments', 10), async (req, 
       else contentType = 'file';
     }
 
-    // For gmail, resolve the subject to store with the message
+    // For gmail, the subject was already resolved above — reuse it here.
     let savedSubject = null;
     if (platform === 'gmail') {
-      if (reqSubject) {
-        savedSubject = reqSubject;
-      } else {
-        const lastMsg = await prisma.message.findFirst({
-          where: { conversationId: conversation.id },
-          orderBy: { sentAt: 'desc' },
-          select: { subject: true },
-        });
-        savedSubject = lastMsg?.subject
-          ? (lastMsg.subject.startsWith('Re:') ? lastMsg.subject : `Re: ${lastMsg.subject}`)
-          : 'Re:';
-      }
+      // `subject` is already the resolved value from the Gmail case above
+      savedSubject = typeof subject !== 'undefined' ? subject : null;
     }
 
     // Save message to DB

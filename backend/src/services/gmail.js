@@ -213,46 +213,66 @@ export async function fetchThread(connectedAccountId, threadId) {
   return res.data;
 }
 
-export async function sendEmail(connectedAccountId, to, subject, body, threadId, attachments = []) {
+/**
+ * Send an email via the Gmail API.
+ *
+ * @param {string}   connectedAccountId
+ * @param {string}   to
+ * @param {string}   subject
+ * @param {string}   body
+ * @param {string}   threadId   - Gmail thread ID (platformConversationId). Pass null for new threads.
+ * @param {Array}    attachments
+ * @param {object}   threadingHeaders
+ * @param {string}   threadingHeaders.inReplyToMsgId  - RFC 2822 Message-ID of the message being replied to
+ * @param {string}   threadingHeaders.references       - Full References header value (space-separated chain)
+ */
+export async function sendEmail(connectedAccountId, to, subject, body, threadId, attachments = [], threadingHeaders = {}) {
   const gmail = await getGmailClient(connectedAccountId);
 
   const account = await prisma.connectedAccount.findUnique({
     where: { id: connectedAccountId },
   });
 
+  const { inReplyToMsgId: providedInReplyTo, references: providedReferences } = threadingHeaders;
+
+  let inReplyToMsgId = providedInReplyTo || null;
+  let references     = providedReferences || null;
+
   console.log('[Gmail API] Sending email:', {
     from: account?.platformAccountId,
     to,
     subject,
     threadId: threadId || null,
+    inReplyToMsgId: inReplyToMsgId || '(fallback to live fetch)',
     attachmentCount: attachments.length,
   });
 
-  // Get the Message-ID of the last message in the thread for proper In-Reply-To threading
-  let lastMessageId = null;
-  if (threadId) {
+  // If threading headers were not supplied from the DB (e.g. brand-new thread),
+  // fall back to a live thread fetch so we still get In-Reply-To right.
+  if (!inReplyToMsgId && threadId) {
     try {
       const threadRes = await gmail.users.threads.get({
         userId: 'me',
         id: threadId,
         format: 'metadata',
-        metadataHeaders: ['Message-ID'],
+        metadataHeaders: ['Message-ID', 'References'],
       });
       const threadMessages = threadRes.data.messages || [];
       if (threadMessages.length > 0) {
-        const lastMsg = threadMessages[threadMessages.length - 1];
-        const msgIdHeader = lastMsg.payload?.headers?.find(
-          (h) => h.name.toLowerCase() === 'message-id'
-        );
-        lastMessageId = msgIdHeader?.value || null;
+        // Collect every Message-ID in the thread (for a proper References chain)
+        const allMsgIds = threadMessages
+          .map((msg) => msg.payload?.headers?.find((h) => h.name.toLowerCase() === 'message-id')?.value)
+          .filter(Boolean);
+        inReplyToMsgId = allMsgIds[allMsgIds.length - 1] || null;
+        references     = allMsgIds.join(' ') || null;
       }
     } catch (threadErr) {
       console.warn('[Gmail API] Could not fetch thread for In-Reply-To header:', threadErr.message);
-      // Continue without In-Reply-To — message still sends
+      // Continue without headers — threadId in body still keeps it in the thread
     }
   }
 
-  const raw = createRawEmail(account.platformAccountId, to, subject, body, lastMessageId, attachments);
+  const raw = createRawEmail(account.platformAccountId, to, subject, body, inReplyToMsgId, references, attachments);
 
   const requestBody = { raw };
   if (threadId) requestBody.threadId = threadId;
@@ -266,7 +286,16 @@ export async function sendEmail(connectedAccountId, to, subject, body, threadId,
   return res.data;
 }
 
-function createRawEmail(from, to, subject, body, inReplyToMessageId, attachments = []) {
+/**
+ * @param {string}      from
+ * @param {string}      to
+ * @param {string}      subject
+ * @param {string}      body
+ * @param {string|null} inReplyToMessageId  - RFC 2822 Message-ID of the direct parent message
+ * @param {string|null} references          - Full References chain (space-separated list of Message-IDs)
+ * @param {Array}       attachments
+ */
+function createRawEmail(from, to, subject, body, inReplyToMessageId, references, attachments = []) {
   const boundary = `boundary_${Date.now()}_${Math.random().toString(36).slice(2)}`;
   const hasAttachments = attachments.length > 0;
 
@@ -279,7 +308,10 @@ function createRawEmail(from, to, subject, body, inReplyToMessageId, attachments
 
   if (inReplyToMessageId) {
     headers.push(`In-Reply-To: ${inReplyToMessageId}`);
-    headers.push(`References: ${inReplyToMessageId}`);
+    // References must contain the complete ancestor chain so every email client
+    // can reconstruct the thread. Use the supplied chain if available; fall back
+    // to just the direct parent so we always set at least something.
+    headers.push(`References: ${references || inReplyToMessageId}`);
   }
 
   if (!hasAttachments) {
