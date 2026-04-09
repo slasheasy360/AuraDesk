@@ -71,12 +71,20 @@ router.get('/callback', async (req, res) => {
               type: 'auradesk:connect',
               platform: 'instagram',
               status: 'error',
-              reason: 'missing_code_or_state',
+              reason: 'cancelled',
             });
+          }
+          // Non-popup cancel — route back to the correct page so the user
+          // isn't stranded on a blank 400. Check onboardingStep so onboarding
+          // users land back on the wizard, not the connections page.
+          if (parsed.userId) {
+            const u = await prisma.user.findUnique({ where: { id: parsed.userId }, select: { onboardingStep: true } });
+            const target = (u && u.onboardingStep < 4) ? '/onboarding' : '/connections';
+            return res.redirect(`${frontendUrl}${target}?error=instagram&reason=cancelled`);
           }
         } catch { }
       }
-      return res.status(400).send('Missing code or state');
+      return res.redirect(`${frontendUrl}/connections?error=instagram&reason=cancelled`);
     }
 
     ({ userId, popup } = JSON.parse(Buffer.from(state, 'base64url').toString()));

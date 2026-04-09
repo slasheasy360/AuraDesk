@@ -76,7 +76,28 @@ export const GRACE_PERIOD_DAYS = 5;
  */
 export async function getOrCreateStripeCustomer(user) {
   if (!stripe) return null;
-  if (user.stripeCustomerId) return user.stripeCustomerId;
+
+  if (user.stripeCustomerId) {
+    // Verify the customer actually exists in the current Stripe environment.
+    // A stale ID (test↔live key swap, manual Stripe deletion) would otherwise
+    // surface as "No such customer" on every checkout attempt.
+    try {
+      const existing = await stripe.customers.retrieve(user.stripeCustomerId);
+      if (!existing.deleted) return user.stripeCustomerId;
+      // Customer was deleted inside Stripe — re-create below.
+      console.warn(
+        `[stripe] customer ${user.stripeCustomerId} is deleted in Stripe — re-creating for user ${user.id}`
+      );
+    } catch (err) {
+      // resource_missing = ID not found in this Stripe environment (e.g. test/live mismatch)
+      if (err.code !== 'resource_missing') throw err;
+      console.warn(
+        `[stripe] customer ${user.stripeCustomerId} not found in Stripe — re-creating for user ${user.id}`
+      );
+    }
+    // Clear the stale ID so the UPDATE below can write the new one.
+    await prisma.user.update({ where: { id: user.id }, data: { stripeCustomerId: null } });
+  }
 
   const customer = await stripe.customers.create({
     email: user.email,

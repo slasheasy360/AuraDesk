@@ -63,23 +63,32 @@ router.get('/callback', async (req, res) => {
     errorDescription: req.query.error_description || null,
   });
 
-  // Handle user denial
+  // Handle user denial / cancel
   if (req.query.error) {
     console.warn('[Facebook OAuth] User denied or error from Facebook:', req.query.error_description);
+    const reason = req.query.error_description || req.query.error;
     if (req.query.state) {
       try {
-        const { popup } = facebookService.decodeConnectState(req.query.state);
+        const { popup, userId } = facebookService.decodeConnectState(req.query.state);
         if (popup) {
           return sendPopupResponse({
             type: 'auradesk:connect',
             platform: 'facebook',
             status: 'error',
-            reason: req.query.error_description || req.query.error,
+            reason,
           });
+        }
+        // Redirect to the correct page based on whether the user is still in
+        // onboarding — prevents cancel from dumping them at /connections when
+        // they started the flow from the onboarding wizard.
+        if (userId) {
+          const user = await prisma.user.findUnique({ where: { id: userId }, select: { onboardingStep: true } });
+          const target = (user && user.onboardingStep < 4) ? '/onboarding' : '/connections';
+          return res.redirect(`${frontendUrl}${target}?error=facebook&reason=${encodeURIComponent(reason)}`);
         }
       } catch { }
     }
-    return res.redirect(`${frontendUrl}/connections?error=facebook&reason=${encodeURIComponent(req.query.error_description || req.query.error)}`);
+    return res.redirect(`${frontendUrl}/connections?error=facebook&reason=${encodeURIComponent(reason)}`);
   }
 
   try {

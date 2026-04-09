@@ -297,7 +297,9 @@ router.post('/create-checkout', authenticate, async (req, res) => {
     res.json({ url: session.url, sessionId: session.id });
   } catch (err) {
     console.error('[Stripe] create-checkout failed:', err);
-    res.status(500).json({ error: err.message || 'Could not create checkout session' });
+    // Never surface raw Stripe error messages (they expose internal IDs).
+    // Log the detail server-side; send a generic message to the client.
+    res.status(500).json({ error: 'Could not start checkout. Please try again or contact support.' });
   }
 });
 
