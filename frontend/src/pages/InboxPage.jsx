@@ -1844,6 +1844,25 @@ function renderChatBubble(msg, isOutbound, contact, platform) {
   const textContent = (isPlaceholder || allAttachmentsAreImages) ? '' : (msg.content || '');
   if (!textContent && !hasAttachments && !isSending) return null;
 
+  // For image-only messages, render images without the colored bubble wrapper
+  if (allAttachmentsAreImages && !textContent) {
+    return (
+      <div className={`flex items-end gap-2 ${isOutbound ? 'justify-end' : 'justify-start'}`}>
+        {!isOutbound && (
+          <ContactAvatar
+            name={contact?.name || contact?.username || msg.sender}
+            avatarUrl={contact?.avatarUrl}
+            platform={platform}
+            size={8}
+          />
+        )}
+        <div className={`max-w-[80%] sm:max-w-[65%] ${isSending ? 'opacity-70' : ''}`}>
+          <MessageAttachments attachments={msg.attachments} messageId={msg.id} isOutbound={isOutbound} />
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className={`flex items-end gap-2 ${isOutbound ? 'justify-end' : 'justify-start'}`}>
       {!isOutbound && (
