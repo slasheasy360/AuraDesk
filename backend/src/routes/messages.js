@@ -373,6 +373,7 @@ router.post('/send', authenticate, upload.array('attachments', 10), async (req, 
 
     const { platform } = conversation.connectedAccount;
     let platformMessageId = null;
+    let sentRawPayload    = null; // set by Gmail case; used when persisting the message
     const attachmentMeta = [];
 
     // Send via the correct platform API
@@ -546,12 +547,33 @@ router.post('/send', authenticate, upload.array('attachments', 10), async (req, 
             { inReplyToMsgId, references },
           );
 
+          // ── Fetch RFC 2822 Message-ID from the sent message ──────────
+          // messages.send returns the Gmail API id and threadId, but NOT the
+          // email-level Message-ID header (e.g. <CA+xxx@mail.gmail.com>).
+          // We need it so that future replies to THIS outbound message can set
+          // a correct In-Reply-To without a live API call. Store it in rawPayload.
+          try {
+            const sentFull = await gmailService.getGmailClient(conversation.connectedAccountId)
+              .then((g) => g.users.messages.get({
+                userId: 'me',
+                id: gmailResult.id,
+                format: 'metadata',
+                metadataHeaders: ['Message-ID', 'References', 'In-Reply-To'],
+              }));
+            sentRawPayload = sentFull.data;
+          } catch (fetchErr) {
+            console.warn('[Gmail API] Could not fetch sent message metadata:', fetchErr.message);
+          }
+
           console.log('[Gmail API] Email sent successfully:', {
             to: recipientEmail,
             subject,
             messageId: gmailResult.id,
             threadId: gmailResult.threadId,
             inReplyTo: inReplyToMsgId || '(none — first message in thread)',
+            rfc2822MessageId: sentRawPayload?.payload?.headers?.find(
+              (h) => h.name.toLowerCase() === 'message-id'
+            )?.value || '(not fetched)',
           });
 
           platformMessageId = gmailResult.id;
@@ -604,6 +626,10 @@ router.post('/send', authenticate, upload.array('attachments', 10), async (req, 
     }
 
     // Save message to DB
+    // For Gmail outbound messages, store the metadata payload so that future
+    // replies can read the RFC 2822 Message-ID without a live API call.
+    const rawPayloadToStore = platform === 'gmail' && sentRawPayload ? sentRawPayload : undefined;
+
     const message = await prisma.message.create({
       data: {
         conversationId: conversation.id,
@@ -614,6 +640,7 @@ router.post('/send', authenticate, upload.array('attachments', 10), async (req, 
         content: content || (attachmentMeta.length > 0 ? `[${attachmentMeta.map(a => a.filename).join(', ')}]` : ''),
         contentType,
         attachments: attachmentMeta.length > 0 ? attachmentMeta : undefined,
+        rawPayload: rawPayloadToStore,
         status: 'sent',
         sentAt: new Date(),
       },
