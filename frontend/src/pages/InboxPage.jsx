@@ -1837,8 +1837,11 @@ function MobileChatComposer({ newMessage, setNewMessage, handleSend, sending, at
 function renderChatBubble(msg, isOutbound, contact, platform) {
   const isSending = msg._optimistic || msg.status === 'sending';
   const isPlaceholder = msg.attachments?.length > 0 && msg.content && /^\[[\w\s.,_-]+\]$/.test(msg.content.trim());
-  const textContent = isPlaceholder ? '' : (msg.content || '');
   const hasAttachments = msg.attachments && Array.isArray(msg.attachments) && msg.attachments.length > 0;
+  // Suppress text content if all attachments are images — the text is just
+  // the filename echoed by Instagram/WhatsApp and clutters the image bubble.
+  const allAttachmentsAreImages = hasAttachments && msg.attachments.every(a => a.mimeType?.startsWith('image/'));
+  const textContent = (isPlaceholder || allAttachmentsAreImages) ? '' : (msg.content || '');
   if (!textContent && !hasAttachments && !isSending) return null;
 
   return (
