@@ -1244,7 +1244,7 @@ export default function InboxPage() {
                             </span>
                           </div>
                         )}
-                        {renderChatBubble(msg, isOutbound)}
+                        {renderChatBubble(msg, isOutbound, activeConversation?.contact, platform)}
                         {msg.status === 'failed' && (
                           <div className="flex justify-end items-center gap-2 mt-1 px-2">
                             <AlertCircle size={12} className="text-red-500" />
@@ -1306,44 +1306,55 @@ export default function InboxPage() {
                 }}
               />
 
-              {/* Composer — same chat-style composer for all platforms */}
-              {attachments.length > 0 && (
-                <AttachmentPreview attachments={attachments} onRemove={removeAttachment} uploadProgress={uploadProgress} />
+              {/* Composer — EmailReplyBox for Gmail, chat composer for all other platforms */}
+              {isEmailPlatform ? (
+                <EmailReplyBox
+                  ref={replyBoxRef}
+                  showReplyBox={showReplyBox}
+                  replyingTo={replyingTo}
+                  newMessage={newMessage}
+                  setNewMessage={handleNewMessageChange}
+                  handleSend={handleSend}
+                  sending={sending}
+                  attachments={attachments}
+                  onAttachClick={() => fileInputRef.current?.click()}
+                  removeAttachment={removeAttachment}
+                  uploadProgress={uploadProgress}
+                  onOpenReply={() => {
+                    const lastMsg = messages[messages.length - 1];
+                    openReplyBox(lastMsg || { subject: emailSubject });
+                  }}
+                  onClose={() => { setShowReplyBox(false); setReplyingTo(null); }}
+                />
+              ) : (
+                <>
+                  {attachments.length > 0 && (
+                    <AttachmentPreview attachments={attachments} onRemove={removeAttachment} uploadProgress={uploadProgress} />
+                  )}
+                  {/* Desktop composer */}
+                  <div className="hidden lg:block">
+                    <ChatComposer
+                      newMessage={newMessage}
+                      setNewMessage={handleNewMessageChange}
+                      handleSend={handleSend}
+                      sending={sending}
+                      attachments={attachments}
+                      onAttachClick={() => fileInputRef.current?.click()}
+                    />
+                  </div>
+                  {/* Mobile composer — dark navy with pill input */}
+                  <div className="lg:hidden">
+                    <MobileChatComposer
+                      newMessage={newMessage}
+                      setNewMessage={handleNewMessageChange}
+                      handleSend={handleSend}
+                      sending={sending}
+                      attachments={attachments}
+                      onAttachClick={() => fileInputRef.current?.click()}
+                    />
+                  </div>
+                </>
               )}
-              {/* Desktop composer */}
-              <div className="hidden lg:block">
-                <ChatComposer
-                  newMessage={newMessage}
-                  setNewMessage={handleNewMessageChange}
-                  handleSend={(e) => {
-                    if (isEmailPlatform && !replyingTo) {
-                      const lastMsg = messages[messages.length - 1];
-                      openReplyBox(lastMsg || { subject: emailSubject });
-                    }
-                    handleSend(e);
-                  }}
-                  sending={sending}
-                  attachments={attachments}
-                  onAttachClick={() => fileInputRef.current?.click()}
-                />
-              </div>
-              {/* Mobile composer — dark navy with pill input */}
-              <div className="lg:hidden">
-                <MobileChatComposer
-                  newMessage={newMessage}
-                  setNewMessage={handleNewMessageChange}
-                  handleSend={(e) => {
-                    if (isEmailPlatform && !replyingTo) {
-                      const lastMsg = messages[messages.length - 1];
-                      openReplyBox(lastMsg || { subject: emailSubject });
-                    }
-                    handleSend(e);
-                  }}
-                  sending={sending}
-                  attachments={attachments}
-                  onAttachClick={() => fileInputRef.current?.click()}
-                />
-              </div>
             </>
           ) : null}
         </div>
@@ -1811,7 +1822,7 @@ function MobileChatComposer({ newMessage, setNewMessage, handleSend, sending, at
 // CHAT BUBBLE (dark theme, matching design)
 // ═══════════════════════════════════════════════════════════════════
 
-function renderChatBubble(msg, isOutbound) {
+function renderChatBubble(msg, isOutbound, contact, platform) {
   const isSending = msg._optimistic || msg.status === 'sending';
   const isPlaceholder = msg.attachments?.length > 0 && msg.content && /^\[[\w\s.,_-]+\]$/.test(msg.content.trim());
   const textContent = isPlaceholder ? '' : (msg.content || '');
@@ -1821,7 +1832,12 @@ function renderChatBubble(msg, isOutbound) {
   return (
     <div className={`flex items-end gap-2 ${isOutbound ? 'justify-end' : 'justify-start'}`}>
       {!isOutbound && (
-        <div className="w-8 h-8 rounded-full bg-gray-200 flex-shrink-0" />
+        <ContactAvatar
+          name={contact?.name || contact?.username || msg.sender}
+          avatarUrl={contact?.avatarUrl}
+          platform={platform}
+          size={8}
+        />
       )}
       <div className={`max-w-[80%] sm:max-w-[65%] px-4 py-3 rounded-2xl text-sm ${
         isOutbound
@@ -1842,7 +1858,7 @@ function renderChatBubble(msg, isOutbound) {
 // EMAIL THREAD VIEW
 // ═══════════════════════════════════════════════════════════════════
 
-function EmailThreadView({ messages, emailSubject, collapsedMessages, toggleCollapsed, messagesEndRef }) {
+function EmailThreadView({ messages, emailSubject, collapsedMessages, toggleCollapsed, onReply, messagesEndRef }) {
   return (
     <div className="flex-1 overflow-y-auto bg-white">
       <div className="divide-y divide-gray-100">
@@ -1862,6 +1878,7 @@ function EmailThreadView({ messages, emailSubject, collapsedMessages, toggleColl
               isOutbound={isOutbound}
               isCollapsed={isCollapsed}
               onToggleCollapse={() => toggleCollapsed(msg.id)}
+              onReply={onReply}
             />
           );
         })}
@@ -1871,7 +1888,7 @@ function EmailThreadView({ messages, emailSubject, collapsedMessages, toggleColl
   );
 }
 
-function EmailMessageCard({ msg, emailSubject, isOutbound, isCollapsed, onToggleCollapse }) {
+function EmailMessageCard({ msg, emailSubject, isOutbound, isCollapsed, onToggleCollapse, onReply }) {
   const hasHtml = msg.htmlContent && msg.htmlContent.trim().length > 0;
   const sanitizedHtml = hasHtml
     ? DOMPurify.sanitize(msg.htmlContent, {
@@ -1895,19 +1912,37 @@ function EmailMessageCard({ msg, emailSubject, isOutbound, isCollapsed, onToggle
   const hasAttachments = msg.attachments && Array.isArray(msg.attachments) && msg.attachments.length > 0;
 
   return (
-    <div className="px-4 sm:px-6 py-4">
+    <div className="px-4 sm:px-6 py-4 group/email-card">
       <div
         className="flex items-start gap-3 cursor-pointer"
         onClick={onToggleCollapse}
       >
-        {/* Avatar */}
-        <div className="w-10 h-10 rounded-full bg-gray-200 flex-shrink-0" />
+        {/* Avatar — letter fallback with platform color */}
+        <ContactAvatar
+          name={senderName}
+          avatarUrl={msg.avatarUrl || null}
+          platform="gmail"
+          size={10}
+        />
 
         {/* Sender + subject/preview */}
         <div className="flex-1 min-w-0">
           <div className="flex items-center justify-between gap-2">
             <span className="text-sm font-semibold text-gray-900 truncate">{senderName}</span>
-            <span className="text-xs text-gray-500 flex-shrink-0">{timestamp}</span>
+            <div className="flex items-center gap-1 flex-shrink-0">
+              {/* Reply icon — visible on row hover */}
+              {onReply && (
+                <button
+                  type="button"
+                  onClick={(e) => { e.stopPropagation(); onReply(msg); }}
+                  className="opacity-0 group-hover/email-card:opacity-100 transition-opacity p-1 text-gray-400 hover:text-[#1787FE] rounded hover:bg-blue-50"
+                  title="Reply"
+                >
+                  <Reply size={14} />
+                </button>
+              )}
+              <span className="text-xs text-gray-500">{timestamp}</span>
+            </div>
           </div>
           {isCollapsed ? (
             <p className="text-xs text-gray-500 truncate mt-0.5">{subjectText || '(no subject)'}</p>
@@ -2223,7 +2258,7 @@ const MessageAttachments = memo(function MessageAttachments({ attachments, messa
         const isImage = mime.startsWith('image/');
         const isVideo = mime.startsWith('video/');
         const isAudio = mime.startsWith('audio/');
-        const hasSource = att.mediaId || att.fileUrl || att.attachmentId || att.localPath;
+        const hasSource = att.mediaId || att.fileUrl || att.attachmentId || att.localPath || att.s3Key;
         const previewUrl = hasSource ? getPreviewUrl(i) : null;
 
         if (isImage && previewUrl) {
@@ -2240,8 +2275,7 @@ const MessageAttachments = memo(function MessageAttachments({ attachments, messa
                   onLoad={(e) => { e.target.parentElement.classList.remove('animate-pulse', 'bg-white/5'); e.target.parentElement.style.minHeight = ''; }}
                 />
               </div>
-              <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors z-[2] rounded-lg flex items-end justify-between px-2 py-1.5">
-                <span className="text-[10px] text-white truncate opacity-0 group-hover:opacity-100 transition-opacity drop-shadow">{att.filename}</span>
+              <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors z-[2] rounded-lg flex items-end justify-end px-2 py-1.5">
                 <button
                   onClick={(e) => { e.stopPropagation(); handleDownload(att, i); }}
                   className="p-1.5 rounded-full bg-black/40 text-white opacity-0 group-hover:opacity-100 transition-opacity hover:bg-black/60"
@@ -2399,12 +2433,41 @@ function getPlatformLabel(platform) {
 
 function getPlatformAvatarStyle(platform) {
   switch (platform) {
-    case 'gmail': return 'bg-red-500/20 text-red-400';
-    case 'whatsapp': return 'bg-green-500/20 text-green-400';
-    case 'instagram': return 'bg-pink-500/20 text-pink-400';
-    case 'facebook': return 'bg-blue-500/20 text-blue-400';
-    default: return 'bg-white/10 text-gray-400';
+    case 'gmail': return 'bg-red-100 text-red-600';
+    case 'whatsapp': return 'bg-green-100 text-green-700';
+    case 'instagram': return 'bg-pink-100 text-pink-600';
+    case 'facebook': return 'bg-blue-100 text-blue-600';
+    default: return 'bg-gray-100 text-gray-500';
   }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// CONTACT AVATAR — shows profile photo or initial letter fallback
+// ═══════════════════════════════════════════════════════════════════
+
+function ContactAvatar({ name, avatarUrl, platform, size = 8, className = '' }) {
+  const [imgError, setImgError] = useState(false);
+  const initials = (name || '?').trim().charAt(0).toUpperCase();
+  const styleClass = getPlatformAvatarStyle(platform);
+  const sizeMap = { 8: 'w-8 h-8 text-xs', 10: 'w-10 h-10 text-sm' };
+  const sizeClass = sizeMap[size] || `w-${size} h-${size} text-xs`;
+
+  if (avatarUrl && !imgError) {
+    return (
+      <img
+        src={avatarUrl}
+        alt={name || 'Avatar'}
+        className={`${sizeClass} rounded-full object-cover flex-shrink-0 ${className}`}
+        onError={() => setImgError(true)}
+      />
+    );
+  }
+
+  return (
+    <div className={`${sizeClass} rounded-full flex items-center justify-center flex-shrink-0 font-semibold ${styleClass} ${className}`}>
+      {initials}
+    </div>
+  );
 }
 
 // ═══════════════════════════════════════════════════════════════════
