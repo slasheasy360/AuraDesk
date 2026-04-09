@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { X, ChevronRight, Check } from 'lucide-react';
 import api from '../services/api.js';
 import { useAuth } from '../context/AuthContext.jsx';
+import { useLinkAccounts } from '../context/LinkAccountsContext.jsx';
 
 /* ─────────────── BRAND ICONS (matching OnboardingPage) ─────────────── */
 const InstagramIcon = () => (
@@ -93,6 +94,7 @@ function getPlatformBlockReason(platformId, userPlan, activeAccounts) {
 
 export default function LinkAccountsSheet({ open, onClose }) {
   const { user } = useAuth();
+  const { notifyAccountsChanged } = useLinkAccounts();
   const [accounts, setAccounts] = useState([]);
   const [connectingPlatform, setConnectingPlatform] = useState(null);
   const [connected, setConnected] = useState(() => {
@@ -295,6 +297,7 @@ export default function LinkAccountsSheet({ open, onClose }) {
     try {
       await api.delete(`/api/accounts/${account.id}`);
       fetchAccounts();
+      notifyAccountsChanged(platformId);
     } catch (err) {
       console.error('Disconnect failed:', err);
       setConnected((prev) => ({ ...prev, [platformId]: true }));

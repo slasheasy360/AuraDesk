@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useCallback, useMemo } from 'react';
+import { createContext, useContext, useState, useCallback, useMemo, useRef } from 'react';
 
 /**
  * LinkAccountsContext
@@ -8,20 +8,35 @@ import { createContext, useContext, useState, useCallback, useMemo } from 'react
  * <LinkAccountsSheet /> itself is rendered once at the dashboard layout
  * level; pages just call `openLinkAccounts()` from this hook.
  *
- * This replaces the previous "redirect to /connections on desktop" path —
- * the modal now works on all viewports.
+ * Also exposes `notifyAccountsChanged(platform)` so the sheet can signal
+ * when a platform is disconnected, and `onAccountsChanged(fn)` so pages
+ * (e.g. InboxPage) can react immediately without a refresh.
  */
 const LinkAccountsContext = createContext(null);
 
 export function LinkAccountsProvider({ children }) {
   const [open, setOpen] = useState(false);
+  const listenersRef = useRef([]);
 
   const openLinkAccounts = useCallback(() => setOpen(true), []);
   const closeLinkAccounts = useCallback(() => setOpen(false), []);
 
+  // Register a listener; returns an unsubscribe function.
+  const onAccountsChanged = useCallback((fn) => {
+    listenersRef.current.push(fn);
+    return () => {
+      listenersRef.current = listenersRef.current.filter((l) => l !== fn);
+    };
+  }, []);
+
+  // Called by LinkAccountsSheet after a successful disconnect.
+  const notifyAccountsChanged = useCallback((platform) => {
+    listenersRef.current.forEach((fn) => fn(platform));
+  }, []);
+
   const value = useMemo(
-    () => ({ open, openLinkAccounts, closeLinkAccounts }),
-    [open, openLinkAccounts, closeLinkAccounts],
+    () => ({ open, openLinkAccounts, closeLinkAccounts, onAccountsChanged, notifyAccountsChanged }),
+    [open, openLinkAccounts, closeLinkAccounts, onAccountsChanged, notifyAccountsChanged],
   );
 
   return (

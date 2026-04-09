@@ -110,7 +110,7 @@ export default function InboxPage() {
   const [currentPage, setCurrentPage] = useState(1);
   const [connectedPlatforms, setConnectedPlatforms] = useState(new Set());
   // ── Mobile UI state ──
-  const { openLinkAccounts } = useLinkAccounts();
+  const { openLinkAccounts, onAccountsChanged } = useLinkAccounts();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const draftTimerRef = useRef(null);
   const lastSavedDraftRef = useRef('');
@@ -125,6 +125,17 @@ export default function InboxPage() {
     const timer = setInterval(() => setTick((t) => t + 1), 60000);
     return () => clearInterval(timer);
   }, []);
+
+  // ── Instant disconnect reaction ──
+  // When a platform is disconnected via the Link Accounts modal, immediately
+  // remove its conversations from the list without waiting for a page refresh.
+  useEffect(() => {
+    return onAccountsChanged((platform) => {
+      setConversations((prev) => prev.filter((c) => c.connectedAccount?.platform !== platform));
+      // If the active conversation belonged to that platform, deselect it.
+      setActiveConversation((prev) => (prev?.connectedAccount?.platform === platform ? null : prev));
+    });
+  }, [onAccountsChanged]);
 
   const messagesEndRef = useRef(null);
   const replyBoxRef = useRef(null);
