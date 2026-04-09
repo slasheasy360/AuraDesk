@@ -370,7 +370,7 @@ function BrandingStep({ onNext, savedData, onSaveData }) {
   const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
   const fileInputRef = useRef(null);
-  const { refreshUser } = useAuth();
+  const { refreshUser, updateUser } = useAuth();
 
   useEffect(() => {
     if (!savedData?.firstName) {
@@ -417,12 +417,13 @@ function BrandingStep({ onNext, savedData, onSaveData }) {
     if (!form.firstName || !form.companyName) return;
     setSaving(true);
     try {
-      // The branding endpoint sets `onboardingCompleted = true` server-side.
-      // We immediately refreshUser so the AuthContext picks up the new flag
-      // — without this, RequireActivePlan would still see the old user and
-      // could bounce a fast-clicking user back into the wizard on navigate.
+      // Branding endpoint sets onboardingCompleted = true server-side.
       await api.post('/api/onboarding/branding', form);
       onSaveData(form);
+      // updateUser writes onboardingCompleted immediately to React state AND
+      // localStorage. This is the primary update — routing sees it instantly.
+      // refreshUser() then does a full authoritative sync in the background.
+      updateUser({ onboardingCompleted: true });
       if (refreshUser) {
         try { await refreshUser(); } catch { /* non-fatal */ }
       }
@@ -570,7 +571,7 @@ export default function OnboardingPage() {
   const [showWelcome, setShowWelcome] = useState(false);
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
-  const { refreshUser } = useAuth();
+  const { refreshUser, updateUser } = useAuth();
 
   const successPlatformRef = useRef(searchParams.get('success'));
   const successPlatform = successPlatformRef.current;
@@ -634,19 +635,23 @@ export default function OnboardingPage() {
   };
 
   // Called from the SuccessScreen "LET'S START" button. Branding has
-  // already marked the user as complete server-side, so this is mostly
-  // a UI nudge — but we still hit /complete to be defensive against
-  // partial-state writes, then refresh the auth user and navigate.
+  // already set onboardingCompleted = true server-side and updateUser()
+  // has written it to React state + localStorage. The /complete call here
+  // is a defensive safety net for any partial-state edge case.
   const handleFinish = async () => {
     try {
       await api.post('/api/onboarding/complete');
-    } catch (e) {
+    } catch {
       // non-fatal — branding endpoint already flipped the flag
     }
+    // Ensure the flag is in state even if branding's updateUser was somehow
+    // skipped (e.g., user jumped directly to the success screen in an older
+    // session). refreshUser() then does a full authoritative sync.
+    updateUser({ onboardingCompleted: true });
     try {
       if (refreshUser) await refreshUser();
-    } catch (e) {
-      // non-fatal
+    } catch {
+      // non-fatal — updateUser() above is the safety net
     }
     navigate('/', { replace: true });
   };

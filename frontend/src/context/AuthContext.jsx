@@ -4,8 +4,10 @@ import api from '../services/api.js';
 const AuthContext = createContext(null);
 
 export function AuthProvider({ children }) {
-  // Hydrate user immediately from localStorage so the app renders on refresh
-  // without a loading flash or redirect to /login.
+  // Hydrate user immediately from localStorage so UI elements (name, plan badge,
+  // etc.) render without a flash on refresh. The cached value is used for
+  // display only — route guards MUST wait for the /auth/me response (see loading
+  // below) to avoid acting on stale data (e.g. onboardingCompleted: false).
   const [user, setUser] = useState(() => {
     try {
       const raw = localStorage.getItem('user');
@@ -17,13 +19,11 @@ export function AuthProvider({ children }) {
 
   const [token, setToken] = useState(localStorage.getItem('token'));
 
-  // Show the loading spinner only when we have a token but no cached user yet
-  // (i.e. first-ever load before 'user' was ever written to localStorage).
-  // If a cached user exists we render the app immediately and validate the
-  // token in the background — this eliminates the refresh-logout problem.
-  const [loading, setLoading] = useState(
-    !!localStorage.getItem('token') && !localStorage.getItem('user')
-  );
+  // loading is TRUE whenever a token exists — regardless of cached user.
+  // Route guards (ProtectedRoute, RequireActivePlan, etc.) show a spinner
+  // while loading is true, which prevents them from acting on the stale cache
+  // value and causing incorrect redirects before /auth/me responds.
+  const [loading, setLoading] = useState(!!localStorage.getItem('token'));
 
   useEffect(() => {
     if (!token) {
@@ -41,14 +41,14 @@ export function AuthProvider({ children }) {
       })
       .catch((err) => {
         if (err.response?.status === 401) {
-          // Token is genuinely invalid (expired or revoked) — wipe everything.
+          // Genuinely invalid token — wipe everything and send to login.
           localStorage.removeItem('token');
           localStorage.removeItem('user');
           setToken(null);
           setUser(null);
         }
-        // Network errors, 5xx, CORS issues: do NOT clear the token.
-        // The cached user stays active and /auth/me will retry on next load.
+        // Network errors, 5xx, CORS: keep token and cached user intact.
+        // /auth/me will retry on the next page load.
       })
       .finally(() => setLoading(false));
   }, [token]);
@@ -83,8 +83,21 @@ export function AuthProvider({ children }) {
     setUser(null);
   };
 
-  // Refresh user data from server (call after subscription/onboarding changes).
-  // Also keeps the localStorage cache in sync so the next refresh is accurate.
+  // Merge partial field updates into user state + localStorage immediately.
+  // Use this after API calls that change user fields (onboardingCompleted,
+  // plan, etc.) so routing decisions see the update without waiting for the
+  // next /auth/me round-trip. refreshUser() provides the authoritative sync.
+  const updateUser = (updates) => {
+    setUser((prev) => {
+      if (!prev) return prev;
+      const next = { ...prev, ...updates };
+      localStorage.setItem('user', JSON.stringify(next));
+      return next;
+    });
+  };
+
+  // Re-fetch the full user object from the server and sync state + cache.
+  // Call this after any server action that changes user fields.
   const refreshUser = async () => {
     try {
       const res = await api.get('/auth/me');
@@ -97,7 +110,7 @@ export function AuthProvider({ children }) {
   };
 
   return (
-    <AuthContext.Provider value={{ user, token, loading, login, register, logout, refreshUser }}>
+    <AuthContext.Provider value={{ user, token, loading, login, register, logout, refreshUser, updateUser }}>
       {children}
     </AuthContext.Provider>
   );
