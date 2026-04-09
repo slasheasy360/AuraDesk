@@ -445,7 +445,7 @@ function BrandingStep({ onNext, savedData, onSaveData }) {
       const fd = new FormData();
       fd.append('logo', file);
       const res = await api.post('/api/onboarding/upload-logo', fd, {
-        headers: { 'Content-Type': 'multipart/form-data' },
+        headers: { 'Content-Type': undefined },
       });
       if (res.data.url) {
         // Store the permanent S3 key in the form (not the expiring presigned URL).

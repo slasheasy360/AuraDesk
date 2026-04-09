@@ -97,7 +97,15 @@ app.use('/webhooks', express.raw({ type: 'application/json' }));
 app.use('/api/subscription/webhook', express.raw({ type: 'application/json' }));
 
 // Standard middleware
-app.use(cors({ origin: allowedOrigins, credentials: true }));
+const corsOptions = {
+  origin: allowedOrigins,
+  credentials: true,
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+};
+app.use(cors(corsOptions));
+// Explicitly handle pre-flight OPTIONS for all routes (required for multipart uploads)
+app.options('*', cors(corsOptions));
 app.use(express.json());
 
 // Auth routes (no /api prefix — OAuth redirects)

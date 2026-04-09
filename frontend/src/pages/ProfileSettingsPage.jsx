@@ -207,7 +207,7 @@ function CompanyTab({ user, refreshUser, showSuccess, showError, canEdit }) {
       const fd = new FormData();
       fd.append('logo', file);
       const res = await api.post('/api/onboarding/upload-logo', fd, {
-        headers: { 'Content-Type': 'multipart/form-data' },
+        headers: { 'Content-Type': undefined },
       });
       if (res.data.url) setLogoPreview(res.data.url);
       if (res.data.s3Key) setLogoKey(res.data.s3Key);
