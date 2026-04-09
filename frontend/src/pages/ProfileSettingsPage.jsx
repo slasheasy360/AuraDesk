@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useSearchParams, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext.jsx';
 import { useLinkAccounts } from '../context/LinkAccountsContext.jsx';
 import api from '../services/api.js';
-import { UserPlus, X, Copy, Check, Trash2, Loader2 } from 'lucide-react';
+import { redirectToStripeCheckout } from '../services/stripe.js';
+import { UserPlus, X, Copy, Check, Trash2, Loader2, Zap } from 'lucide-react';
 
 const TABS = ['Personal', 'Company', 'Integrations', 'Plan', 'Team'];
 
@@ -275,14 +276,15 @@ function IntegrationsTab({ showError }) {
   );
 }
 
-/* ─────────────── PLAN ─────────────── */
 /* ─────────────── PLAN / BILLING ─────────────── */
 const PLAN_LABELS = { trial: 'Trial', starter: 'Starter', pro: 'Pro', elite: 'Elite', expired: 'Expired' };
 const PLAN_PRICES = {
   starter: { monthly: 29,  yearly: 290,  features: '1 social inbox · 30 AI replies/mo · Basic dashboard' },
   pro:     { monthly: 79,  yearly: 790,  features: '3 inboxes · Unlimited AI replies · Analytics · Priority support' },
-  elite:   { monthly: 149, yearly: 1490, features: 'Unlimited inboxes · Multi-language · Team access · Premium support' },
+  elite:   { monthly: 149, yearly: 1490, features: 'Unlimited inboxes · Multi-language · Unlimited team members · Premium support' },
 };
+// Mirrors PLAN_RANK in backend/src/utils/stripe.js
+const PLAN_RANK = { trial: 0, starter: 1, pro: 2, elite: 3 };
 const STATUS_PILLS = {
   trialing:  { label: 'Trialing',  bg: 'bg-blue-100',    text: 'text-blue-700' },
   active:    { label: 'Active',    bg: 'bg-emerald-100', text: 'text-emerald-700' },
@@ -304,9 +306,10 @@ function fmtDate(dateLike) {
 
 function PlanTab({ user }) {
   const { refreshUser } = useAuth();
+  const navigate = useNavigate();
   const [status, setStatus] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [actionPending, setActionPending] = useState(null); // 'cancel' | 'resume' | plan id
+  const [actionPending, setActionPending] = useState(null); // 'cancel' | 'resume' | planId
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -354,6 +357,24 @@ function PlanTab({ user }) {
       if (refreshUser) await refreshUser();
     } catch (e) {
       setError(e.response?.data?.error || 'Could not resume subscription');
+    } finally {
+      setActionPending(null);
+    }
+  };
+
+  const handleUpgrade = async (planId) => {
+    setError(''); setSuccess(''); setActionPending(planId);
+    try {
+      const r = await api.post('/api/subscription/upgrade-plan', { plan: planId, cycle });
+      if (r.data.requiresCheckout && r.data.checkoutUrl) {
+        window.location.href = r.data.checkoutUrl;
+        return;
+      }
+      setSuccess(`Upgraded to ${PLAN_LABELS[planId]} (${cycle})! Changes take effect immediately.`);
+      await loadStatus();
+      if (refreshUser) await refreshUser();
+    } catch (e) {
+      setError(e.response?.data?.error || 'Upgrade failed. Please try again.');
     } finally {
       setActionPending(null);
     }
@@ -437,10 +458,7 @@ function PlanTab({ user }) {
         </div>
       </div>
 
-      {/* Plans overview — read-only.
-          Self-serve plan switching from settings is intentionally disabled;
-          users who want to change tiers cancel and resubscribe via /pricing.
-          The cards stay visible so users can compare what they're on. */}
+      {/* Plans overview */}
       <div>
         <div className="flex items-center justify-between mb-3 pb-2 border-b">
           <h3 className="text-sm font-semibold text-gray-700">Plans</h3>
@@ -464,6 +482,10 @@ function PlanTab({ user }) {
             const isCurrent = status?.plan === planId && status?.billingCycle === cycle && !status?.cancelAtPeriodEnd;
             const price = info[cycle];
             const period = cycle === 'monthly' ? 'mo' : 'yr';
+            const currentRank = PLAN_RANK[status?.plan] ?? 0;
+            const isUpgrade = PLAN_RANK[planId] > currentRank ||
+              (planId === status?.plan && cycle === 'yearly' && status?.billingCycle === 'monthly' && !status?.cancelAtPeriodEnd);
+            const isPending = actionPending === planId;
 
             return (
               <div
@@ -486,6 +508,22 @@ function PlanTab({ user }) {
                   )}
                 </div>
                 <p className="text-xs text-gray-500 leading-relaxed flex-1">{info.features}</p>
+                {isUpgrade && (
+                  <button
+                    onClick={() => handleUpgrade(planId)}
+                    disabled={!!actionPending}
+                    className="mt-4 w-full flex items-center justify-center gap-1.5 px-4 py-2 bg-primary-600 hover:bg-primary-700 disabled:opacity-50 text-white text-xs font-bold rounded-lg transition"
+                  >
+                    {isPending ? (
+                      <><Loader2 size={13} className="animate-spin" /> Upgrading…</>
+                    ) : (
+                      <><Zap size={13} /> Upgrade to {PLAN_LABELS[planId]}</>
+                    )}
+                  </button>
+                )}
+                {isCurrent && (
+                  <p className="mt-4 text-center text-[11px] text-primary-600 font-semibold">Your current plan</p>
+                )}
               </div>
             );
           })}
