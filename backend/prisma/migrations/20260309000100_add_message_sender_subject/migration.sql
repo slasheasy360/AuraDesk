@@ -1,4 +1,4 @@
 -- AlterTable
 ALTER TABLE "messages"
-ADD COLUMN "sender" TEXT,
-ADD COLUMN "subject" TEXT;
+ADD COLUMN IF NOT EXISTS "sender" TEXT,
+ADD COLUMN IF NOT EXISTS "subject" TEXT;
