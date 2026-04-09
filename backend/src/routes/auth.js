@@ -7,6 +7,13 @@ import { authenticate } from '../middleware/auth.js';
 import { sendMail, buildPasswordResetEmail } from '../utils/mailer.js';
 import { getOrCreateStripeCustomer } from '../utils/stripe.js';
 import { getUsageSnapshot } from '../services/planGuard.js';
+import { getPresignedUrl } from '../utils/s3.js';
+
+// If companyLogo is an S3 key (not already a URL), resolve it to a fresh presigned URL.
+async function resolveLogoUrl(companyLogo) {
+  if (!companyLogo || companyLogo.startsWith('http')) return companyLogo;
+  try { return await getPresignedUrl(companyLogo, 3600 * 12); } catch { return null; }
+}
 
 const router = Router();
 
@@ -182,6 +189,8 @@ router.get('/me', authenticate, async (req, res) => {
     console.error('[auth/me] getUsageSnapshot failed:', err.message);
   }
 
+  const companyLogoUrl = await resolveLogoUrl(user.companyLogo);
+
   res.json({
     user: {
       id: user.id, email: user.email, name: user.name,
@@ -190,7 +199,7 @@ router.get('/me', authenticate, async (req, res) => {
       trialEndsAt: user.trialEndsAt,
       onboardingStep: user.onboardingStep,
       onboardingCompleted: user.onboardingCompleted,
-      companyName: user.companyName, companyLogo: user.companyLogo,
+      companyName: user.companyName, companyLogo: companyLogoUrl,
       brandColor: user.brandColor, firstName: user.firstName,
       lastName: user.lastName, cannedResponse: user.cannedResponse,
       currentPeriodStart: user.currentPeriodStart,

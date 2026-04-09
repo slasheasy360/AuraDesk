@@ -448,7 +448,9 @@ function BrandingStep({ onNext, savedData, onSaveData }) {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
       if (res.data.url) {
-        setForm((prev) => ({ ...prev, companyLogo: res.data.url }));
+        // Store the permanent S3 key in the form (not the expiring presigned URL).
+        // The presigned URL is only used for the live preview.
+        setForm((prev) => ({ ...prev, companyLogo: res.data.s3Key || res.data.url }));
         setLogoPreview(res.data.url);
       }
     } catch (err) {

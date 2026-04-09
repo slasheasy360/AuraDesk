@@ -4,6 +4,12 @@ import prisma from '../utils/prisma.js';
 import { authenticate } from '../middleware/auth.js';
 import { uploadFile, getPresignedUrl } from '../utils/s3.js';
 
+// If companyLogo is an S3 key (not already a URL), resolve it to a fresh presigned URL.
+async function resolveLogoUrl(companyLogo) {
+  if (!companyLogo || companyLogo.startsWith('http')) return companyLogo;
+  try { return await getPresignedUrl(companyLogo, 3600 * 12); } catch { return null; }
+}
+
 const router = Router();
 
 // Logo upload — store in S3, return pre-signed URL
@@ -42,8 +48,11 @@ router.get('/status', authenticate, async (req, res) => {
     where: { userId: req.user.id, status: 'active' },
   });
 
+  const companyLogoUrl = await resolveLogoUrl(user.companyLogo);
+
   res.json({
     ...user,
+    companyLogo: companyLogoUrl,
     onboardingCompleted: user.onboardingCompleted,
     hasOrganization: !!user.companyName,
     platformsConnected: platformCount > 0,
