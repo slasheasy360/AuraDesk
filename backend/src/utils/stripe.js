@@ -25,6 +25,39 @@ export const PLANS = {
   elite:   { monthly: 14900, yearly: 149000, name: 'Elite' },
 };
 
+/**
+ * Canonical plan hierarchy. Lower index = lower tier.
+ * trial is included so upgrade-from-trial validation works correctly.
+ * Never reorder — rank comparisons depend on index position.
+ */
+export const PLAN_RANK = {
+  trial:   0,
+  starter: 1,
+  pro:     2,
+  elite:   3,
+};
+
+/**
+ * Returns true if moving from currentPlan/currentCycle → targetPlan/targetCycle
+ * is a valid upgrade. Same plan monthly→yearly is treated as an upgrade.
+ * Everything else (same plan same cycle, or lower rank) is rejected.
+ */
+export function isValidUpgrade(currentPlan, currentCycle, targetPlan, targetCycle) {
+  const currentRank = PLAN_RANK[currentPlan] ?? -1;
+  const targetRank  = PLAN_RANK[targetPlan]  ?? -1;
+
+  if (targetRank > currentRank) return true;
+
+  // Same tier but billing cycle upgrade (monthly → yearly only)
+  if (
+    targetRank === currentRank &&
+    currentCycle === 'monthly' &&
+    targetCycle  === 'yearly'
+  ) return true;
+
+  return false;
+}
+
 export const TRIAL_DAYS = 14;
 
 // Grace period after a failed invoice. Stripe will keep retrying inside this

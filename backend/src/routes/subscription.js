@@ -8,6 +8,8 @@ import {
   resolvePeriodTimestamps,
   mapStripeStatus,
   PLANS,
+  PLAN_RANK,
+  isValidUpgrade,
   TRIAL_DAYS,
   GRACE_PERIOD_DAYS,
 } from '../utils/stripe.js';
@@ -383,67 +385,138 @@ router.post('/sync-session', authenticate, async (req, res) => {
 });
 
 // ────────────────────────────────────────────────────────────────────
-// POST /api/subscription/change-plan
-// Upgrade or downgrade the active subscription.
+// POST /api/subscription/upgrade-plan
 //
-// - Upgrades: prorate immediately, customer is charged the difference now.
-// - Downgrades: prorate but defer; customer keeps current plan until the end
-//   of the current period, then transitions. (Stripe handles the actual
-//   transition automatically when the period rolls over.)
+// Upgrades an active subscription to a higher tier or from monthly→yearly.
+// Downgrades and same-plan/same-cycle selections are explicitly rejected.
 //
-// Body: { plan: 'starter'|'pro'|'elite', cycle: 'monthly'|'yearly' }
+// Two cases are handled:
+//   1. Trial user upgrading → they have no stripeSubscriptionId yet.
+//      We create a Stripe Checkout session (card needed) and return a URL.
+//   2. Paid subscriber upgrading → we update the Stripe subscription in place,
+//      bill the prorated difference immediately, and keep the billing date.
+//
+// Body:  { plan: 'starter'|'pro'|'elite', cycle: 'monthly'|'yearly' }
 // ────────────────────────────────────────────────────────────────────
-router.post('/change-plan', authenticate, async (req, res) => {
+router.post('/upgrade-plan', authenticate, async (req, res) => {
   if (!stripe) return res.status(501).json({ error: 'Stripe not configured' });
 
   const { plan: targetPlan, cycle: targetCycle = 'monthly' } = req.body;
-  if (!PLANS[targetPlan]) return res.status(400).json({ error: 'Invalid plan' });
+
+  // ── Input validation ────────────────────────────────────────────
+  if (!PLANS[targetPlan]) {
+    return res.status(400).json({ error: 'Invalid plan', validPlans: Object.keys(PLANS) });
+  }
   if (!['monthly', 'yearly'].includes(targetCycle)) {
-    return res.status(400).json({ error: 'Invalid billing cycle' });
+    return res.status(400).json({ error: 'cycle must be "monthly" or "yearly"' });
   }
 
   try {
     const user = await prisma.user.findUnique({ where: { id: req.user.id } });
-    if (!user.stripeSubscriptionId) {
-      return res.status(400).json({ error: 'No active subscription to change. Please subscribe first.' });
+    const currentPlan  = user.plan;
+    const currentCycle = user.billingCycle || 'monthly';
+
+    // ── Upgrade gate ─────────────────────────────────────────────
+    // This is the single enforcement point. All rank logic lives in stripe.js.
+    if (!isValidUpgrade(currentPlan, currentCycle, targetPlan, targetCycle)) {
+      const currentRank = PLAN_RANK[currentPlan] ?? 0;
+      const targetRank  = PLAN_RANK[targetPlan]  ?? 0;
+
+      let reason;
+      if (targetRank < currentRank) {
+        reason = `Downgrade from ${currentPlan} to ${targetPlan} is not allowed.`;
+      } else if (targetPlan === currentPlan && targetCycle === currentCycle) {
+        reason = `You are already on the ${PLANS[targetPlan].name} ${currentCycle} plan.`;
+      } else if (targetPlan === currentPlan && targetCycle === 'monthly' && currentCycle === 'yearly') {
+        reason = `Switching from yearly to monthly billing is not allowed.`;
+      } else {
+        reason = `This plan change is not permitted.`;
+      }
+
+      return res.status(400).json({
+        error: 'upgrade_only',
+        message: reason,
+        currentPlan,
+        currentCycle,
+        targetPlan,
+        targetCycle,
+      });
     }
 
-    // Pull the current subscription so we know the current plan/price + item id.
+    // ── Case 1: Trial user — no Stripe subscription yet ─────────
+    // Redirect through Checkout so a payment method is collected.
+    // The trial is NOT re-attached: they are upgrading to a paid plan now.
+    if (!user.stripeSubscriptionId || user.plan === 'trial') {
+      const customerId = await getOrCreateStripeCustomer(user);
+      if (!customerId) return res.status(501).json({ error: 'Stripe not configured' });
+
+      const base = frontendBase();
+      const interval = targetCycle === 'yearly' ? 'year' : 'month';
+
+      const session = await stripe.checkout.sessions.create({
+        customer: customerId,
+        mode: 'subscription',
+        payment_method_types: ['card'],
+        line_items: [{
+          price_data: {
+            currency: 'usd',
+            product_data: { name: `AuraDesk ${PLANS[targetPlan].name} Plan` },
+            unit_amount: PLANS[targetPlan][targetCycle],
+            recurring: { interval },
+          },
+          quantity: 1,
+        }],
+        subscription_data: {
+          metadata: { userId: user.id, plan: targetPlan, cycle: targetCycle },
+        },
+        payment_method_collection: 'always',
+        metadata: { userId: user.id, plan: targetPlan, cycle: targetCycle, includeTrial: '0' },
+        success_url: `${base}/payment/success?session_id={CHECKOUT_SESSION_ID}`,
+        cancel_url: `${base}/pricing?payment=cancel&plan=${targetPlan}&cycle=${targetCycle}`,
+      });
+
+      console.log(
+        `[Stripe] upgrade-plan (trial→paid) user=${user.id} ` +
+        `${currentPlan} → ${targetPlan} (${targetCycle})`
+      );
+
+      return res.json({
+        ok: true,
+        requiresCheckout: true,
+        checkoutUrl: session.url,
+        sessionId: session.id,
+      });
+    }
+
+    // ── Case 2: Active paid subscriber — update in place ────────
     const sub = await stripe.subscriptions.retrieve(user.stripeSubscriptionId);
     if (['canceled', 'incomplete_expired'].includes(sub.status)) {
-      return res.status(400).json({ error: 'Subscription is no longer active. Please resubscribe.' });
+      return res.status(400).json({
+        error: 'subscription_inactive',
+        message: 'Your subscription is no longer active. Please subscribe again.',
+      });
     }
 
-    // Determine if this is an upgrade or downgrade by comparing prices.
-    const currentRank = ['starter', 'pro', 'elite'].indexOf(user.plan);
-    const targetRank = ['starter', 'pro', 'elite'].indexOf(targetPlan);
-    const isUpgrade = targetRank > currentRank ||
-      (targetRank === currentRank && targetCycle === 'yearly' && user.billingCycle === 'monthly');
-
-    // Build the new price inline. Using price_data avoids requiring pre-created
-    // Stripe Products / Prices for each (plan, cycle) combination.
     const interval = targetCycle === 'yearly' ? 'year' : 'month';
-    const newPriceData = {
-      currency: 'usd',
-      product_data: { name: `AuraDesk ${PLANS[targetPlan].name} Plan` },
-      unit_amount: PLANS[targetPlan][targetCycle],
-      recurring: { interval },
-    };
 
     const updated = await stripe.subscriptions.update(user.stripeSubscriptionId, {
       items: [{
         id: sub.items.data[0].id,
-        price_data: newPriceData,
+        price_data: {
+          currency: 'usd',
+          product_data: { name: `AuraDesk ${PLANS[targetPlan].name} Plan` },
+          unit_amount: PLANS[targetPlan][targetCycle],
+          recurring: { interval },
+        },
       }],
-      // Upgrades: prorate now and bill the difference immediately.
-      // Downgrades: prorate but defer to the next cycle so the user keeps
-      // what they already paid for.
-      proration_behavior: isUpgrade ? 'always_invoice' : 'create_prorations',
-      billing_cycle_anchor: isUpgrade ? 'now' : 'unchanged',
+      // Bill the prorated difference immediately. Billing date stays the same
+      // so the customer is not surprised by a sudden renewal date change.
+      proration_behavior: 'always_invoice',
+      billing_cycle_anchor: 'unchanged',
       metadata: { ...sub.metadata, userId: user.id, plan: targetPlan, cycle: targetCycle },
     });
 
-    // Mirror the change locally — webhook will also fire and reconcile.
+    // Mirror immediately — webhook will reconcile and confirm.
     await prisma.user.update({
       where: { id: user.id },
       data: subscriptionToUserData(updated, {
@@ -452,16 +525,22 @@ router.post('/change-plan', authenticate, async (req, res) => {
       }),
     });
 
+    console.log(
+      `[Stripe] upgrade-plan user=${user.id} ` +
+      `${currentPlan}/${currentCycle} → ${targetPlan}/${targetCycle}`
+    );
+
     res.json({
       ok: true,
+      requiresCheckout: false,
       plan: targetPlan,
       cycle: targetCycle,
-      prorationApplied: isUpgrade,
-      effectiveAt: isUpgrade ? 'immediately' : 'next billing period',
+      billedNow: true,
+      effectiveAt: 'immediately',
     });
   } catch (err) {
-    console.error('[Stripe] change-plan failed:', err);
-    res.status(500).json({ error: err.message || 'Could not change plan' });
+    console.error('[Stripe] upgrade-plan failed:', err);
+    res.status(500).json({ error: err.message || 'Could not upgrade plan' });
   }
 });
 
@@ -749,16 +828,25 @@ router.post('/webhook', async (req, res) => {
 // ────────────────────────────────────────────────────────────────────
 // POST /api/subscription/activate
 // Local-dev fallback for environments without Stripe configured.
+// Still enforces upgrade-only so dev behaviour matches production.
 // ────────────────────────────────────────────────────────────────────
 router.post('/activate', authenticate, async (req, res) => {
   const { plan, cycle = 'monthly' } = req.body;
   if (!PLANS[plan]) return res.status(400).json({ error: 'Invalid plan' });
 
+  const user = await prisma.user.findUnique({ where: { id: req.user.id } });
+  if (!isValidUpgrade(user.plan, user.billingCycle || 'monthly', plan, cycle)) {
+    return res.status(400).json({
+      error: 'upgrade_only',
+      message: `Cannot move from ${user.plan} to ${plan} — upgrade-only policy.`,
+    });
+  }
+
   const periodStart = new Date();
   const periodEnd = new Date();
   periodEnd.setDate(periodEnd.getDate() + (cycle === 'yearly' ? 365 : 30));
 
-  const user = await prisma.user.update({
+  const updated = await prisma.user.update({
     where: { id: req.user.id },
     data: {
       plan,
@@ -772,9 +860,9 @@ router.post('/activate', authenticate, async (req, res) => {
   });
 
   res.json({
-    plan: user.plan,
-    subscriptionStatus: user.subscriptionStatus,
-    currentPeriodEnd: user.currentPeriodEnd,
+    plan: updated.plan,
+    subscriptionStatus: updated.subscriptionStatus,
+    currentPeriodEnd: updated.currentPeriodEnd,
   });
 });
 

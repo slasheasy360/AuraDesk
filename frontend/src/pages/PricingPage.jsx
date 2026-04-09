@@ -5,6 +5,11 @@ import api from '../services/api.js';
 import { redirectToStripeCheckout } from '../services/stripe.js';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 
+/* ─────────────── PLAN RANK ─────────────── */
+// Mirrors PLAN_RANK in backend/src/utils/stripe.js.
+// Used to determine which plans are upgrades vs current/lower for a given user.
+const PLAN_RANK = { trial: 0, starter: 1, pro: 2, elite: 3 };
+
 /* ─────────────── PLAN DATA ─────────────── */
 const PLANS = [
   {
@@ -18,7 +23,7 @@ const PLANS = [
     btnGradient: 'linear-gradient(180deg, #2196FE 0%, #0f6fd8 100%)',
     btnGradientHover: 'linear-gradient(180deg, #1787FE 0%, #0a5ec0 100%)',
     features: [
-      '1 social inbox (IG, FB, TikTok, etc.)',
+      '1 social inbox (FB or IG)',
       'AI-generated replies (max 30/month)',
       'Manual invoice creation',
       'Lead capture & tracking',
@@ -37,12 +42,13 @@ const PLANS = [
     btnGradientHover: 'linear-gradient(180deg, #1a3460 0%, #13294d 100%)',
     features: [
       '3 social inboxes',
+      'All platforms (FB, IG, WhatsApp, Gmail)',
       'Unlimited AI replies',
       'Branded invoice templates',
       'Follow-up automation (limited rules)',
       'Smart lead management',
       'Analytics dashboard (detailed)',
-      'Email, DM & WhatsApp integration',
+      'Up to 3 team members',
       'Priority support',
     ],
   },
@@ -60,7 +66,7 @@ const PLANS = [
       'Recurring invoices',
       'Custom follow-up rules',
       'Financial & performance reports',
-      'Team access (up to 3 users)',
+      'Unlimited team members',
       'Early access to new features',
       'Premium support',
     ],
@@ -71,20 +77,30 @@ const PLANS = [
 // 3D-stacked card matching the Figma mock: a colored back panel sits behind
 // the white card and extends down to host the CHOOSE PLAN bar.
 //
-// The wrapper uses `h-full` so every card stretches to the tallest grid cell
-// — the white content card stays natural-height at the top and the colored
-// back panel fills the gap underneath, anchoring the CHOOSE PLAN bar at the
-// same vertical baseline across Starter / Pro / Elite.
-function PlanCard({ plan, cycle, loading, disabled, onChoose }) {
+// planState: 'current' | 'upgrade' | 'locked'
+//   current  → user is already on this plan (show badge, disable button)
+//   upgrade  → this plan is higher than the user's current plan (show CTA)
+//   locked   → this plan is lower than the user's current plan (hide / dim)
+function PlanCard({ plan, cycle, loading, disabled, onChoose, planState }) {
   const price = cycle === 'monthly' ? plan.monthly : plan.yearly;
   const period = cycle === 'monthly' ? 'month' : 'year';
+
+  const isCurrent  = planState === 'current';
+  const isLocked   = planState === 'locked';
+
+  // Locked cards are rendered faded so the user understands they can't go back
+  const wrapperOpacity = isLocked ? 'opacity-40 pointer-events-none' : '';
+
+  let btnLabel = 'CHOOSE PLAN';
+  if (loading)   btnLabel = 'REDIRECTING…';
+  else if (isCurrent) btnLabel = 'CURRENT PLAN';
 
   return (
     // `min-h` enforces taller cards across all tiers; `h-full` lets the grid
     // stretch the shorter ones to match the tallest. The wrapper is also a
     // flex column so the white card itself can grow with `flex-1`, giving
     // every white card the same (taller) height regardless of feature count.
-    <div className="relative pr-3 pb-14 h-full min-h-[500px] flex flex-col group/card">
+    <div className={`relative pr-3 pb-14 h-full min-h-[500px] flex flex-col group/card ${wrapperOpacity}`}>
       {/* Stack/back card — extends right + below the white card for the 3D effect */}
       <div
         aria-hidden="true"
@@ -102,6 +118,12 @@ function PlanCard({ plan, cycle, loading, disabled, onChoose }) {
       >
         <div className="px-6 pt-6 pb-6">
           <div className="mb-4">
+            {/* Current plan badge */}
+            {isCurrent && (
+              <span className="inline-block mb-2 px-2.5 py-0.5 rounded-full text-[10px] font-bold tracking-[0.12em] bg-green-100 text-green-700">
+                YOUR PLAN
+              </span>
+            )}
             <div className="flex items-baseline gap-1">
               <span className="text-[36px] leading-none font-bold text-[#0B1E3F]">${price}</span>
               <span className="text-gray-400 text-xs">/{period}</span>
@@ -121,27 +143,23 @@ function PlanCard({ plan, cycle, loading, disabled, onChoose }) {
         </div>
       </div>
 
-      {/* CHOOSE PLAN bar — anchored to the bottom of the grid cell.
-          Default state: no button background, the colored back panel shows
-          through directly so it reads as plain text. On hover, a gradient
-          overlay fades in to give it the full button treatment.
-          The hover overlay is a sibling absolute layer so the background
-          can transition smoothly via opacity (CSS doesn't transition
-          background-image gradients reliably). */}
+      {/* CHOOSE PLAN / CURRENT PLAN / UPGRADE bar */}
       <button
         type="button"
-        onClick={() => onChoose(plan.id)}
-        disabled={loading || disabled}
+        onClick={() => !isCurrent && !isLocked && onChoose(plan.id)}
+        disabled={loading || disabled || isCurrent || isLocked}
         className="absolute left-3 right-0 bottom-0 px-6 py-3.5 text-white text-[11px] font-bold tracking-[0.18em] flex items-center justify-between transition disabled:opacity-60 disabled:cursor-not-allowed rounded-b-md overflow-hidden"
       >
-        {/* Hover-only gradient overlay */}
-        <span
-          aria-hidden="true"
-          className="absolute inset-0 opacity-0 group-hover/card:opacity-100 transition-opacity duration-200 ease-out rounded-b-md"
-          style={{ background: plan.btnGradientHover }}
-        />
-        <span className="relative z-10">{loading ? 'REDIRECTING…' : 'CHOOSE PLAN'}</span>
-        <ChevronRight size={16} strokeWidth={2.5} className="relative z-10" />
+        {/* Hover-only gradient overlay (only shown on upgradable plans) */}
+        {!isCurrent && !isLocked && (
+          <span
+            aria-hidden="true"
+            className="absolute inset-0 opacity-0 group-hover/card:opacity-100 transition-opacity duration-200 ease-out rounded-b-md"
+            style={{ background: plan.btnGradientHover }}
+          />
+        )}
+        <span className="relative z-10">{btnLabel}</span>
+        {!isCurrent && <ChevronRight size={16} strokeWidth={2.5} className="relative z-10" />}
       </button>
     </div>
   );
@@ -233,39 +251,81 @@ export default function PricingPage() {
   }, [searchParams, setSearchParams]);
 
   // ── Eligibility / state derivations ──
-  // User can start the free trial only if they're brand-new (plan === 'trial'
-  // with trialEndsAt null — i.e. trial has never been activated/used).
   const trialEligible = !!user && user.plan === 'trial' && !user.trialEndsAt;
   const trialExpired = !!user && (user.plan === 'expired' ||
     (user.plan === 'trial' && user.trialEndsAt && new Date(user.trialEndsAt) <= new Date()));
 
+  // User is an active paid subscriber if they're on a paid plan with active status.
+  const isActivePaidSubscriber = !!user &&
+    ['starter', 'pro', 'elite'].includes(user.plan) &&
+    ['active', 'trialing', 'past_due'].includes(user.subscriptionStatus);
+
+  const userPlanRank  = PLAN_RANK[user?.plan] ?? 0;
+  const userPlanCycle = user?.billingCycle || 'monthly';
+
+  // Per-card state: 'current' | 'upgrade' | 'locked'
+  const getPlanState = (planId) => {
+    if (!user) return 'upgrade';
+    const cardRank = PLAN_RANK[planId] ?? 0;
+    if (cardRank < userPlanRank)  return 'locked';
+    if (cardRank === userPlanRank) {
+      // Same tier: if showing yearly and user is on monthly, it's still an upgrade
+      if (cycle === 'yearly' && userPlanCycle === 'monthly') return 'upgrade';
+      return 'current';
+    }
+    return 'upgrade';
+  };
+
   const heading = 'Choose a plan to continue';
   const subtitle = trialExpired
-    ? 'Your 14-day free trial has exhausted. Subscribe to continue growing your business!'
+    ? 'Your 14-day free trial has expired. Subscribe to continue growing your business!'
     : trialEligible
       ? 'Start with a 14-day free trial, or subscribe directly. Cancel anytime.'
-      : 'Subscribe to continue growing your business!';
+      : isActivePaidSubscriber
+        ? 'Upgrade your plan at any time. Unused time is prorated and credited immediately.'
+        : 'Subscribe to continue growing your business!';
 
   // ── Handlers ──
-  // Two distinct flows, each setting `includeTrial` explicitly:
-  //   • CHOOSE PLAN  → includeTrial: false → billed immediately (Subscribe Now)
-  //   • Trial banner → includeTrial: true  → 14 days free, then billed
-  // The backend re-validates the flag and refuses to apply a trial unless
-  // the user is genuinely trial-eligible.
+  // Routing logic:
+  //   • Active paid subscriber clicking a card  → POST /upgrade-plan (in-place or checkout)
+  //   • Any other user clicking a card          → POST /create-checkout (new subscription)
+  //   • Trial banner                            → POST /create-checkout (includeTrial: true)
   const startCheckout = async ({ planId, withTrial }) => {
     setErrorMsg(null);
     if (withTrial) setTrialLoading(true);
     else setLoading(planId);
+
     try {
-      const res = await api.post('/api/subscription/create-checkout', {
+      let res;
+
+      if (!withTrial && isActivePaidSubscriber) {
+        // Upgrade path for existing paid subscribers
+        res = await api.post('/api/subscription/upgrade-plan', {
+          plan: planId,
+          cycle,
+        });
+
+        if (res.data.requiresCheckout) {
+          // Trial→paid or inactive subscription — redirect to Stripe Checkout
+          await redirectToStripeCheckout({ url: res.data.checkoutUrl, sessionId: res.data.sessionId });
+        } else {
+          // In-place upgrade completed — refresh user and go to dashboard
+          if (refreshUser) await refreshUser();
+          navigate('/dashboard');
+        }
+        return;
+      }
+
+      // New subscriber or trial flow
+      res = await api.post('/api/subscription/create-checkout', {
         plan: planId,
         cycle: withTrial ? TRIAL_DEFAULT_CYCLE : cycle,
         includeTrial: withTrial,
       });
       await redirectToStripeCheckout({ url: res.data.url, sessionId: res.data.sessionId });
+
     } catch (err) {
-      // 501 = Stripe not configured server-side. Fall back to the local-dev
-      // shortcut so the flow still completes in development without Stripe.
+      // 501 = Stripe not configured server-side (local dev fallback)
       if (err.response?.status === 501) {
         try {
           if (withTrial) {
@@ -281,10 +341,9 @@ export default function PricingPage() {
           setErrorMsg('Could not start your plan. Please try again.');
         }
       } else {
-        console.error('Checkout failed:', err);
-        setErrorMsg(
-          err.response?.data?.error || err.message || 'Checkout failed. Please try again.',
-        );
+        const serverMsg = err.response?.data?.message || err.response?.data?.error;
+        console.error('Plan action failed:', err);
+        setErrorMsg(serverMsg || err.message || 'Something went wrong. Please try again.');
       }
     } finally {
       if (withTrial) setTrialLoading(false);
@@ -364,6 +423,7 @@ export default function PricingPage() {
               loading={loading === plan.id}
               disabled={loading !== null || trialLoading}
               onChoose={handleChoosePlan}
+              planState={getPlanState(plan.id)}
             />
           ))}
         </div>
