@@ -715,7 +715,7 @@ export default function OnboardingPage() {
       )}
 
       <div className="bg-white rounded-2xl shadow-[0_2px_24px_rgba(15,42,99,0.06)] border border-blue-100/60 p-6 sm:p-10 md:p-12 w-full max-w-2xl">
-        {step < 2 && <StepIndicator current={step} maxStep={maxStep} onStepClick={goTo} />}
+        <StepIndicator current={step} maxStep={maxStep} onStepClick={goTo} />
         {step === 0 && <PlatformStep onNext={() => goTo(1)} successPlatform={successPlatform} errorInfo={errorInfo} />}
         {step === 1 && (
           <BrandingStep
