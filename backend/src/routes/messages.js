@@ -477,12 +477,10 @@ router.post('/send', authenticate, upload.array('attachments', 10), async (req, 
           }
 
           // ── Fetch the last message for subject + threading headers ──────
-          // We read from the DB so we don't need an extra live Gmail API call.
-          // rawPayload contains the full Gmail message object including headers.
           const lastMsg = await prisma.message.findFirst({
             where: { conversationId: conversation.id },
             orderBy: { sentAt: 'desc' },
-            select: { subject: true, content: true, sender: true, sentAt: true, rawPayload: true },
+            select: { platformMessageId: true, subject: true, content: true, sender: true, sentAt: true, rawPayload: true },
           });
 
           // ── Subject ──────────────────────────────────────────────────────
@@ -491,15 +489,14 @@ router.post('/send', authenticate, upload.array('attachments', 10), async (req, 
             subject = reqSubject;
           } else {
             const baseSubject = lastMsg?.subject || '';
-            subject = baseSubject
-              ? (baseSubject.startsWith('Re:') ? baseSubject : `Re: ${baseSubject}`)
-              : 'Re:';
+            // Strip leading Re:/RE:/re: (case-insensitive) before adding our own
+            const stripped = baseSubject.replace(/^re:\s*/i, '').trim();
+            subject = stripped ? `Re: ${stripped}` : 'Re:';
           }
 
-          // ── Threading headers from rawPayload ────────────────────────────
-          // Extract Message-ID and References from the stored raw Gmail payload.
-          // This is more reliable than a live API call and avoids the Neon cold-
-          // start race that can strip these headers silently.
+          // ── Threading headers ────────────────────────────────────────────
+          // Step 1: Try rawPayload fast path — Message-ID is stored for all
+          //         inbound messages and most outbound messages.
           let inReplyToMsgId = null;
           let references     = null;
 
@@ -512,8 +509,35 @@ router.post('/send', authenticate, upload.array('attachments', 10), async (req, 
             const existingRefs = getHdr('References');
 
             if (inReplyToMsgId) {
-              // Build the full References chain: previous chain + the parent's own ID
               references = [existingRefs, inReplyToMsgId].filter(Boolean).join(' ');
+            }
+          }
+
+          // Step 2: rawPayload can be null for outbound messages when Gmail
+          // hasn't indexed them yet at the time we tried to fetch the metadata
+          // (race condition). Fall back to a live thread fetch — this guarantees
+          // In-Reply-To is always set, which is required for proper threading on
+          // the recipient's email client.
+          if (!inReplyToMsgId && conversation.platformConversationId) {
+            try {
+              const gmailForFallback = await gmailService.getGmailClient(conversation.connectedAccountId);
+              const threadRes = await gmailForFallback.users.threads.get({
+                userId: 'me',
+                id: conversation.platformConversationId,
+                format: 'metadata',
+                metadataHeaders: ['Message-ID', 'References'],
+              });
+              const threadMsgs = threadRes.data.messages || [];
+              if (threadMsgs.length > 0) {
+                const allIds = threadMsgs
+                  .map((m) => m.payload?.headers?.find((h) => h.name.toLowerCase() === 'message-id')?.value)
+                  .filter(Boolean);
+                inReplyToMsgId = allIds[allIds.length - 1] || null;
+                references     = allIds.join(' ') || null;
+                console.log('[Gmail] Threading from live thread fetch:', { inReplyToMsgId, msgCount: threadMsgs.length });
+              }
+            } catch (threadFetchErr) {
+              console.warn('[Gmail] Live thread fetch for In-Reply-To failed:', threadFetchErr.message);
             }
           }
 
@@ -548,21 +572,30 @@ router.post('/send', authenticate, upload.array('attachments', 10), async (req, 
           );
 
           // ── Fetch RFC 2822 Message-ID from the sent message ──────────
-          // messages.send returns the Gmail API id and threadId, but NOT the
-          // email-level Message-ID header (e.g. <CA+xxx@mail.gmail.com>).
-          // We need it so that future replies to THIS outbound message can set
-          // a correct In-Reply-To without a live API call. Store it in rawPayload.
+          // messages.send returns only the Gmail API id and threadId, not the
+          // email-level Message-ID header. We fetch it and store in rawPayload
+          // so future replies can extract In-Reply-To without an extra API call.
+          // Gmail sometimes takes a moment to index a newly sent message, so we
+          // retry once with a short delay if the first attempt fails.
           try {
-            const sentFull = await gmailService.getGmailClient(conversation.connectedAccountId)
-              .then((g) => g.users.messages.get({
-                userId: 'me',
-                id: gmailResult.id,
-                format: 'metadata',
-                metadataHeaders: ['Message-ID', 'References', 'In-Reply-To'],
-              }));
+            const gmailForMeta = await gmailService.getGmailClient(conversation.connectedAccountId);
+            const fetchMeta = () => gmailForMeta.users.messages.get({
+              userId: 'me',
+              id: gmailResult.id,
+              format: 'metadata',
+              metadataHeaders: ['Message-ID', 'References', 'In-Reply-To'],
+            });
+            let sentFull;
+            try {
+              sentFull = await fetchMeta();
+            } catch {
+              // Gmail may not have indexed the message yet — wait and retry once
+              await new Promise((r) => setTimeout(r, 1500));
+              sentFull = await fetchMeta();
+            }
             sentRawPayload = sentFull.data;
           } catch (fetchErr) {
-            console.warn('[Gmail API] Could not fetch sent message metadata:', fetchErr.message);
+            console.warn('[Gmail API] Could not fetch sent message metadata (non-fatal):', fetchErr.message);
           }
 
           console.log('[Gmail API] Email sent successfully:', {

@@ -247,31 +247,6 @@ export async function sendEmail(connectedAccountId, to, subject, body, threadId,
     attachmentCount: attachments.length,
   });
 
-  // If threading headers were not supplied from the DB (e.g. brand-new thread),
-  // fall back to a live thread fetch so we still get In-Reply-To right.
-  if (!inReplyToMsgId && threadId) {
-    try {
-      const threadRes = await gmail.users.threads.get({
-        userId: 'me',
-        id: threadId,
-        format: 'metadata',
-        metadataHeaders: ['Message-ID', 'References'],
-      });
-      const threadMessages = threadRes.data.messages || [];
-      if (threadMessages.length > 0) {
-        // Collect every Message-ID in the thread (for a proper References chain)
-        const allMsgIds = threadMessages
-          .map((msg) => msg.payload?.headers?.find((h) => h.name.toLowerCase() === 'message-id')?.value)
-          .filter(Boolean);
-        inReplyToMsgId = allMsgIds[allMsgIds.length - 1] || null;
-        references     = allMsgIds.join(' ') || null;
-      }
-    } catch (threadErr) {
-      console.warn('[Gmail API] Could not fetch thread for In-Reply-To header:', threadErr.message);
-      // Continue without headers — threadId in body still keeps it in the thread
-    }
-  }
-
   const raw = createRawEmail(account.platformAccountId, to, subject, body, inReplyToMsgId, references, attachments);
 
   const requestBody = { raw };
