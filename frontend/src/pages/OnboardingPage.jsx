@@ -102,8 +102,35 @@ function PrimaryButton({ children, ...props }) {
   );
 }
 
+// Mirror of backend/src/config/plans.js — keep in sync.
+const PLAN_LIMITS = {
+  trial:   { maxConnections: 1, allowedPlatforms: ['facebook', 'instagram'], exclusivePlatforms: true },
+  starter: { maxConnections: 1, allowedPlatforms: ['facebook', 'instagram'], exclusivePlatforms: true },
+  pro:     { maxConnections: 3, allowedPlatforms: ['facebook', 'instagram', 'whatsapp', 'gmail'], exclusivePlatforms: false },
+  elite:   { maxConnections: 4, allowedPlatforms: ['facebook', 'instagram', 'whatsapp', 'gmail'], exclusivePlatforms: false },
+};
+
+function getPlatformBlockReason(platformId, userPlan, activeAccounts) {
+  const limits = PLAN_LIMITS[userPlan] || PLAN_LIMITS.trial;
+  if (!limits.allowedPlatforms.includes(platformId)) {
+    return 'Not available on your plan. Upgrade to Pro to connect.';
+  }
+  const activeCount = activeAccounts.filter((a) => a.status === 'active').length;
+  if (limits.exclusivePlatforms && activeCount > 0) {
+    const existing = activeAccounts.find((a) => a.status === 'active');
+    if (existing && existing.platform !== platformId) {
+      return 'You must disconnect the currently connected platform before connecting a new one.';
+    }
+  }
+  if (activeCount >= limits.maxConnections) {
+    return `You've reached your ${limits.maxConnections}-connection limit. Upgrade to connect more.`;
+  }
+  return null;
+}
+
 /* ─────────────── STEP 1: CONNECT PLATFORM ─────────────── */
 function PlatformStep({ onNext, successPlatform, errorInfo }) {
+  const { user } = useAuth();
   const [errMsg, setErrMsg] = useState(errorInfo?.platform ? errorInfo : null);
   useEffect(() => {
     if (errMsg) {
@@ -267,6 +294,12 @@ function PlatformStep({ onNext, successPlatform, errorInfo }) {
   };
 
   const handleConnect = async (platformId) => {
+    // Plan-gate check before starting OAuth
+    const blockReason = getPlatformBlockReason(platformId, user?.plan, accounts);
+    if (blockReason) {
+      setErrMsg({ platform: platformId, reason: blockReason });
+      return;
+    }
     if (platformId === 'whatsapp') {
       launchWhatsAppSignup();
       return;
@@ -340,18 +373,30 @@ function PlatformStep({ onNext, successPlatform, errorInfo }) {
               </div>
             );
           }
+          const blockReason = getPlatformBlockReason(p.id, user?.plan, accounts);
+          const isBlocked = !!blockReason;
           return (
-            <button
-              key={p.id}
-              onClick={() => handleConnect(p.id)}
-              className="w-full flex items-center justify-between bg-[#EAF2FF] hover:bg-[#dbe8ff] rounded-full px-5 py-3 transition-all duration-300"
-            >
-              <div className="flex items-center gap-3">
-                {ICONS[p.id]}
-                <span className="font-medium text-sm text-gray-800">Connect {p.name}</span>
-              </div>
-              <ChevronRight size={18} className="text-gray-400" />
-            </button>
+            <div key={p.id} className="flex flex-col gap-1">
+              <button
+                onClick={() => handleConnect(p.id)}
+                disabled={isBlocked}
+                title={blockReason || undefined}
+                className={`w-full flex items-center justify-between rounded-full px-5 py-3 transition-all duration-300
+                  ${isBlocked
+                    ? 'bg-gray-100 opacity-50 cursor-not-allowed'
+                    : 'bg-[#EAF2FF] hover:bg-[#dbe8ff]'
+                  }`}
+              >
+                <div className="flex items-center gap-3">
+                  {ICONS[p.id]}
+                  <span className="font-medium text-sm text-gray-800">Connect {p.name}</span>
+                </div>
+                <ChevronRight size={18} className="text-gray-400" />
+              </button>
+              {isBlocked && (
+                <p className="text-xs text-gray-500 px-5">{blockReason}</p>
+              )}
+            </div>
           );
         })}
       </div>

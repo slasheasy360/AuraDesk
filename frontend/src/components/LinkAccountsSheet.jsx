@@ -68,7 +68,7 @@ const PLATFORMS = [
 // Mirror of backend/src/config/plans.js — keep in sync.
 const PLAN_LIMITS = {
   trial:   { maxConnections: 1, allowedPlatforms: ['facebook', 'instagram'], exclusivePlatforms: true },
-  starter: { maxConnections: 2, allowedPlatforms: ['facebook', 'instagram'], exclusivePlatforms: false },
+  starter: { maxConnections: 1, allowedPlatforms: ['facebook', 'instagram'], exclusivePlatforms: true },
   pro:     { maxConnections: 3, allowedPlatforms: ['facebook', 'instagram', 'whatsapp', 'gmail'], exclusivePlatforms: false },
   elite:   { maxConnections: 4, allowedPlatforms: ['facebook', 'instagram', 'whatsapp', 'gmail'], exclusivePlatforms: false },
 };
@@ -82,7 +82,7 @@ function getPlatformBlockReason(platformId, userPlan, activeAccounts) {
   if (limits.exclusivePlatforms && activeCount > 0) {
     const existing = activeAccounts.find((a) => a.status === 'active');
     if (existing && existing.platform !== platformId) {
-      return `Trial allows only 1 platform. Disconnect ${existing.platform} first or upgrade.`;
+      return 'You must disconnect the currently connected platform before connecting a new one.';
     }
   }
   if (activeCount >= limits.maxConnections) {

@@ -49,9 +49,9 @@ export const PLAN_LIMITS = Object.freeze({
   },
   starter: {
     label: 'Starter',
-    maxConnections: 2,
+    maxConnections: 1,
     allowedPlatforms: [PLATFORMS.FACEBOOK, PLATFORMS.INSTAGRAM],
-    exclusivePlatforms: false,
+    exclusivePlatforms: true,
     teamSeats: 1,
     aiRepliesPerCycle: 30,
     features: { invoices: true, analytics: 'basic' },
