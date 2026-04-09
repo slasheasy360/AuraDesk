@@ -499,15 +499,20 @@ router.post('/upgrade-plan', authenticate, async (req, res) => {
 
     const interval = targetCycle === 'yearly' ? 'year' : 'month';
 
+    // stripe.subscriptions.update does NOT accept price_data.product_data —
+    // only a price ID or price_data.product (existing product ID) is allowed.
+    // Create the price first, then reference it by ID.
+    const newPrice = await stripe.prices.create({
+      currency: 'usd',
+      product_data: { name: `AuraDesk ${PLANS[targetPlan].name} Plan` },
+      unit_amount: PLANS[targetPlan][targetCycle],
+      recurring: { interval },
+    });
+
     const updated = await stripe.subscriptions.update(user.stripeSubscriptionId, {
       items: [{
         id: sub.items.data[0].id,
-        price_data: {
-          currency: 'usd',
-          product_data: { name: `AuraDesk ${PLANS[targetPlan].name} Plan` },
-          unit_amount: PLANS[targetPlan][targetCycle],
-          recurring: { interval },
-        },
+        price: newPrice.id,
       }],
       // Bill the prorated difference immediately. Billing date stays the same
       // so the customer is not surprised by a sudden renewal date change.
