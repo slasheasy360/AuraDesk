@@ -7,7 +7,7 @@ import { getPresignedUrl } from '../utils/s3.js';
 const router = Router();
 
 async function resolveLogoUrl(companyLogo) {
-  if (!companyLogo || companyLogo.startsWith('http')) return companyLogo;
+  if (!companyLogo || companyLogo.startsWith('http') || companyLogo.startsWith('data:')) return companyLogo;
   try { return await getPresignedUrl(companyLogo, 3600 * 12); } catch { return null; }
 }
 

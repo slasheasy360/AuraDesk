@@ -209,8 +209,9 @@ function CompanyTab({ user, refreshUser, showSuccess, showError, canEdit }) {
       const res = await api.post('/api/onboarding/upload-logo', fd, {
         headers: { 'Content-Type': undefined },
       });
+      // s3Key is null when S3 isn't configured (data URL fallback)
       if (res.data.url) setLogoPreview(res.data.url);
-      if (res.data.s3Key) setLogoKey(res.data.s3Key);
+      setLogoKey(res.data.s3Key || res.data.url);
     } catch (err) {
       console.error('Logo upload failed:', err);
       showError('Logo upload failed. Please try again.');

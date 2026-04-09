@@ -11,7 +11,7 @@ import { getPresignedUrl } from '../utils/s3.js';
 
 // If companyLogo is an S3 key (not already a URL), resolve it to a fresh presigned URL.
 async function resolveLogoUrl(companyLogo) {
-  if (!companyLogo || companyLogo.startsWith('http')) return companyLogo;
+  if (!companyLogo || companyLogo.startsWith('http') || companyLogo.startsWith('data:')) return companyLogo;
   try { return await getPresignedUrl(companyLogo, 3600 * 12); } catch { return null; }
 }
 

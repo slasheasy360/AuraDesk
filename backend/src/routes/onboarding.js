@@ -6,7 +6,7 @@ import { uploadFile, getPresignedUrl } from '../utils/s3.js';
 
 // If companyLogo is an S3 key (not already a URL), resolve it to a fresh presigned URL.
 async function resolveLogoUrl(companyLogo) {
-  if (!companyLogo || companyLogo.startsWith('http')) return companyLogo;
+  if (!companyLogo || companyLogo.startsWith('http') || companyLogo.startsWith('data:')) return companyLogo;
   try { return await getPresignedUrl(companyLogo, 3600 * 12); } catch { return null; }
 }
 
@@ -62,22 +62,30 @@ router.get('/status', authenticate, async (req, res) => {
 
 // ── Upload logo ──
 router.post('/upload-logo', authenticate, logoUpload.single('logo'), async (req, res) => {
-  if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+  try {
+    if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
 
-  const ext = req.file.originalname ? '.' + req.file.originalname.split('.').pop() : '.png';
-  const s3Key = `logos/logo-${req.user.id}-${Date.now()}${ext}`;
+    const s3Configured = !!(process.env.S3_UPLOADS_BUCKET && process.env.AWS_ACCESS_KEY_ID);
 
-  await uploadFile(req.file.buffer, s3Key, req.file.mimetype);
+    if (s3Configured) {
+      // S3 path: store key, return presigned URL
+      const ext = req.file.originalname ? '.' + req.file.originalname.split('.').pop() : '.png';
+      const s3Key = `logos/logo-${req.user.id}-${Date.now()}${ext}`;
+      await uploadFile(req.file.buffer, s3Key, req.file.mimetype);
+      await prisma.user.update({ where: { id: req.user.id }, data: { companyLogo: s3Key } });
+      const url = await getPresignedUrl(s3Key, 3600 * 12);
+      return res.json({ url, s3Key });
+    }
 
-  // Store the S3 key as the logo reference
-  await prisma.user.update({
-    where: { id: req.user.id },
-    data: { companyLogo: s3Key },
-  });
+    // Fallback: store as base64 data URL directly in DB (no S3 required)
+    const dataUrl = `data:${req.file.mimetype};base64,${req.file.buffer.toString('base64')}`;
+    await prisma.user.update({ where: { id: req.user.id }, data: { companyLogo: dataUrl } });
+    return res.json({ url: dataUrl, s3Key: null });
 
-  // Return a pre-signed URL for immediate display
-  const url = await getPresignedUrl(s3Key);
-  res.json({ url, s3Key });
+  } catch (err) {
+    console.error('[upload-logo] error:', err);
+    res.status(500).json({ error: 'Logo upload failed. Please try again.' });
+  }
 });
 
 // ── Branding (organization setup) ──
