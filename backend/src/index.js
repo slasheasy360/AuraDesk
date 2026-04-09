@@ -114,8 +114,8 @@ app.get('/health', async (req, res) => {
     res.json({
       status: 'ok',
       db: 'ok',
-      version: 'ses-integration-1',
-      deployedFrom: 'kundan_dev-ses',
+      version: 'custom-domain-1',
+      deployedFrom: 'kundan_dev-custom-domain',
       timestamp: new Date().toISOString(),
     });
   } catch (err) {
