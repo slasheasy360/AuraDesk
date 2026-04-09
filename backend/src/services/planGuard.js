@@ -45,7 +45,7 @@ export const ENFORCEMENT_MODES = Object.freeze({
 });
 
 export function getEnforcementMode() {
-  const raw = (process.env.PLAN_ENFORCEMENT_MODE || 'log').toLowerCase();
+  const raw = (process.env.PLAN_ENFORCEMENT_MODE || 'enforce').toLowerCase();
   if (raw === 'enforce' || raw === 'on' || raw === 'strict') return ENFORCEMENT_MODES.ENFORCE;
   if (raw === 'off' || raw === 'disabled') return ENFORCEMENT_MODES.OFF;
   return ENFORCEMENT_MODES.LOG;

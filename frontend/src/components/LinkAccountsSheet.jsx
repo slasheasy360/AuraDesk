@@ -65,6 +65,32 @@ const PLATFORMS = [
   { id: 'instagram', name: 'Instagram' },
 ];
 
+// Mirror of backend/src/config/plans.js — keep in sync.
+const PLAN_LIMITS = {
+  trial:   { maxConnections: 1, allowedPlatforms: ['facebook', 'instagram'], exclusivePlatforms: true },
+  starter: { maxConnections: 2, allowedPlatforms: ['facebook', 'instagram'], exclusivePlatforms: false },
+  pro:     { maxConnections: 3, allowedPlatforms: ['facebook', 'instagram', 'whatsapp', 'gmail'], exclusivePlatforms: false },
+  elite:   { maxConnections: 4, allowedPlatforms: ['facebook', 'instagram', 'whatsapp', 'gmail'], exclusivePlatforms: false },
+};
+
+function getPlatformBlockReason(platformId, userPlan, activeAccounts) {
+  const limits = PLAN_LIMITS[userPlan] || PLAN_LIMITS.trial;
+  if (!limits.allowedPlatforms.includes(platformId)) {
+    return 'Not available on your plan. Upgrade to connect.';
+  }
+  const activeCount = activeAccounts.filter((a) => a.status === 'active').length;
+  if (limits.exclusivePlatforms && activeCount > 0) {
+    const existing = activeAccounts.find((a) => a.status === 'active');
+    if (existing && existing.platform !== platformId) {
+      return `Trial allows only 1 platform. Disconnect ${existing.platform} first or upgrade.`;
+    }
+  }
+  if (activeCount >= limits.maxConnections) {
+    return `You've reached your ${limits.maxConnections}-connection limit. Upgrade to connect more.`;
+  }
+  return null; // can connect
+}
+
 export default function LinkAccountsSheet({ open, onClose }) {
   const { user } = useAuth();
   const [accounts, setAccounts] = useState([]);
@@ -396,28 +422,39 @@ export default function LinkAccountsSheet({ open, onClose }) {
               );
             }
             const isConnecting = connectingPlatform === p.id;
+            const blockReason = getPlatformBlockReason(p.id, user?.plan, accounts);
+            const isBlocked = !!blockReason;
             return (
-              <button
-                key={p.id}
-                type="button"
-                onClick={() => handleConnect(p.id)}
-                disabled={isConnecting}
-                className="w-full flex items-center justify-between bg-[#EAF2FF] hover:bg-[#dbe8ff] rounded-full px-4 py-3 transition disabled:opacity-70 disabled:cursor-not-allowed"
-              >
-                <div className="flex items-center gap-3">
-                  {ICONS[p.id]}
-                  <span className="font-medium text-sm text-gray-800">
-                    {isConnecting ? 'Connecting...' : `Connect ${p.name}`}
-                  </span>
-                </div>
-                {isConnecting ? (
-                  <span className="inline-flex h-4 w-4 items-center justify-center">
-                    <span className="h-4 w-4 animate-spin rounded-full border-2 border-gray-400 border-t-transparent" />
-                  </span>
-                ) : (
-                  <ChevronRight size={18} className="text-gray-400" />
+              <div key={p.id} className="flex flex-col gap-1">
+                <button
+                  type="button"
+                  onClick={() => !isBlocked && handleConnect(p.id)}
+                  disabled={isConnecting || isBlocked}
+                  title={blockReason || undefined}
+                  className={`w-full flex items-center justify-between rounded-full px-4 py-3 transition
+                    ${isBlocked
+                      ? 'bg-gray-100 opacity-50 cursor-not-allowed'
+                      : 'bg-[#EAF2FF] hover:bg-[#dbe8ff] disabled:opacity-70 disabled:cursor-not-allowed'
+                    }`}
+                >
+                  <div className="flex items-center gap-3">
+                    {ICONS[p.id]}
+                    <span className="font-medium text-sm text-gray-800">
+                      {isConnecting ? 'Connecting...' : `Connect ${p.name}`}
+                    </span>
+                  </div>
+                  {isConnecting ? (
+                    <span className="inline-flex h-4 w-4 items-center justify-center">
+                      <span className="h-4 w-4 animate-spin rounded-full border-2 border-gray-400 border-t-transparent" />
+                    </span>
+                  ) : (
+                    <ChevronRight size={18} className="text-gray-400" />
+                  )}
+                </button>
+                {isBlocked && (
+                  <p className="text-xs text-gray-500 px-4">{blockReason}</p>
                 )}
-              </button>
+              </div>
             );
           })}
         </div>
