@@ -35,8 +35,7 @@ router.get('/', (req, res) => {
 
 // Start Instagram OAuth (authenticated API call)
 router.get('/start', authenticate, async (req, res) => {
-  // Phase 1: log-only plan guard (never blocks).
-  try { await assertCanConnectPlatform(req.user, 'instagram', { context: 'instagram/start' }); } catch (_) {}
+  try { await assertCanConnectPlatform(req.user, 'instagram', { context: 'instagram/start' }); } catch (_) { }
   const popup = String(req.query.popup || '') === '1';
   const state = Buffer.from(JSON.stringify({ userId: req.user.id, popup })).toString('base64url');
   const url = instagramService.getLoginUrl(state);
