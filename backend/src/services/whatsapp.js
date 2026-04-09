@@ -1,5 +1,4 @@
 import axios from 'axios';
-import fs from 'fs';
 import FormData from 'form-data';
 import prisma from '../utils/prisma.js';
 import { encrypt, decrypt } from '../utils/encryption.js';
@@ -188,9 +187,10 @@ export async function sendMedia(connectedAccountId, toPhoneNumber, file) {
   const accessToken = decrypt(authToken.accessTokenEncrypted);
 
   // Step 1: Upload media to WhatsApp
+  // multer uses memoryStorage so file.buffer is available; file.path does not exist.
   const form = new FormData();
   form.append('messaging_product', 'whatsapp');
-  form.append('file', fs.createReadStream(file.path), {
+  form.append('file', file.buffer, {
     filename: file.originalname,
     contentType: file.mimetype,
   });

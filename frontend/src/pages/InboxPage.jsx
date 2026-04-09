@@ -2322,7 +2322,9 @@ const MessageAttachments = memo(function MessageAttachments({ attachments, messa
         const hasSource = att.mediaId || att.fileUrl || att.attachmentId || att.localPath || att.s3Key;
         const previewUrl = hasSource ? getPreviewUrl(i) : null;
 
-        if (isImage && previewUrl) {
+        if (isImage) {
+          // Always show image-only preview; never fall through to the filename card.
+          if (!previewUrl) return null;
           return (
             <div key={i} className="relative rounded-lg overflow-hidden max-w-[280px] group cursor-pointer"
               onClick={() => window.open(previewUrl, '_blank')}
@@ -2492,7 +2494,22 @@ function getPlatformLabel(platform) {
   }
 }
 
-function getPlatformAvatarStyle(platform) {
+// Generate a deterministic color from a name so every sender always gets the same color.
+const AVATAR_COLORS = [
+  'bg-red-100 text-red-600', 'bg-blue-100 text-blue-700',
+  'bg-green-100 text-green-700', 'bg-purple-100 text-purple-600',
+  'bg-orange-100 text-orange-600', 'bg-teal-100 text-teal-600',
+  'bg-pink-100 text-pink-600', 'bg-indigo-100 text-indigo-600',
+];
+function getNameAvatarColor(name) {
+  if (!name) return AVATAR_COLORS[0];
+  let hash = 0;
+  for (let i = 0; i < name.length; i++) hash = name.charCodeAt(i) + ((hash << 5) - hash);
+  return AVATAR_COLORS[Math.abs(hash) % AVATAR_COLORS.length];
+}
+
+function getPlatformAvatarStyle(platform, name) {
+  if (name) return getNameAvatarColor(name);
   switch (platform) {
     case 'gmail': return 'bg-red-100 text-red-600';
     case 'whatsapp': return 'bg-green-100 text-green-700';
@@ -2509,7 +2526,7 @@ function getPlatformAvatarStyle(platform) {
 function ContactAvatar({ name, avatarUrl, platform, size = 8, className = '' }) {
   const [imgError, setImgError] = useState(false);
   const initials = (name || '?').trim().charAt(0).toUpperCase();
-  const styleClass = getPlatformAvatarStyle(platform);
+  const styleClass = getPlatformAvatarStyle(platform, name);
   const sizeMap = { 8: 'w-8 h-8 text-xs', 10: 'w-10 h-10 text-sm' };
   const sizeClass = sizeMap[size] || `w-${size} h-${size} text-xs`;
 
