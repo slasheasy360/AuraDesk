@@ -3,6 +3,7 @@ import { authenticate } from '../middleware/auth.js';
 import * as facebookService from '../services/facebook.js';
 import { syncFacebookMessages } from '../services/facebook.sync.js';
 import prisma from '../utils/prisma.js';
+import { assertCanConnectPlatform } from '../services/planGuard.js';
 
 const router = Router();
 const DEFAULT_FRONTEND_URL = 'https://aura-desk.vercel.app';
@@ -23,6 +24,9 @@ router.get('/', authenticate, (req, res) => {
 // Start Facebook OAuth for page connection (authenticated)
 router.get('/start', authenticate, async (req, res) => {
   try {
+    // Phase 1: log-only plan guard. Never blocks — surfaces violations to
+    // logs so we can audit real user impact before flipping to enforce.
+    try { await assertCanConnectPlatform(req.user, 'facebook', { context: 'facebook/start' }); } catch (_) {}
     const popup = String(req.query.popup || '') === '1';
     const state = facebookService.encodeConnectState(req.user.id, { popup });
     const url = facebookService.getLoginUrl(state);

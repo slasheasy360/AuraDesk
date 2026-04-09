@@ -18,6 +18,8 @@ import leadRoutes from './routes/leads.js';
 import invoiceRoutes from './routes/invoices.js';
 import profileRoutes from './routes/profile.js';
 import teamRoutes from './routes/team.js';
+import planRoutes from './routes/plan.js';
+import aiRoutes from './routes/ai.js';
 import metaWebhook from './webhooks/meta.js';
 import gmailWebhook from './webhooks/gmail.js';
 import { renewExpiringWatches, reRegisterAllWatches } from './services/gmail.js';
@@ -120,6 +122,12 @@ app.use('/api/subscription', subscriptionRoutes);
 app.use('/api/onboarding',   onboardingRoutes);
 app.use('/api/profile',      profileRoutes);
 app.use('/api/team',         teamRoutes);
+// Plan usage + limits — always accessible so the UI can render counters
+// and upgrade prompts regardless of subscription status.
+app.use('/api/plan',         planRoutes);
+// AI reply generation — gated by requireActiveSubscription inside the
+// route itself so we can return a proper plan-limit JSON on quota hits.
+app.use('/api/ai',           aiRoutes);
 
 // Alias: GET /api/user/onboarding-status
 // Mirrors /api/onboarding/status. Kept as a thin alias because some clients

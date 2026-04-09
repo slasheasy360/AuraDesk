@@ -6,6 +6,7 @@ import prisma from '../utils/prisma.js';
 import { authenticate } from '../middleware/auth.js';
 import { sendMail, buildPasswordResetEmail } from '../utils/mailer.js';
 import { getOrCreateStripeCustomer } from '../utils/stripe.js';
+import { getUsageSnapshot } from '../services/planGuard.js';
 
 const router = Router();
 
@@ -171,6 +172,16 @@ router.get('/me', authenticate, async (req, res) => {
     user.subscriptionStatus = 'expired';
   }
 
+  // Snapshot plan limits + current usage so the frontend can render plan
+  // UI (connection counters, seat counts, AI quota bars) without a second
+  // round-trip. Failure here is non-fatal — we still return the user.
+  let planSnapshot = null;
+  try {
+    planSnapshot = await getUsageSnapshot(user);
+  } catch (err) {
+    console.error('[auth/me] getUsageSnapshot failed:', err.message);
+  }
+
   res.json({
     user: {
       id: user.id, email: user.email, name: user.name,
@@ -188,6 +199,9 @@ router.get('/me', authenticate, async (req, res) => {
       gracePeriodEndsAt: user.gracePeriodEndsAt,
       billingCycle: user.billingCycle,
       role: user.role, inviterUserId: user.inviterUserId,
+      // Embedded plan data (single source of truth from backend/src/config/plans.js)
+      planLimits: planSnapshot?.limits || null,
+      planUsage: planSnapshot?.usage || null,
     },
   });
 });

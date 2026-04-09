@@ -5,6 +5,7 @@ import jwt from 'jsonwebtoken';
 import prisma from '../utils/prisma.js';
 import { authenticate } from '../middleware/auth.js';
 import { sendMail, buildInviteEmail } from '../utils/mailer.js';
+import { assertCanInviteTeamMember } from '../services/planGuard.js';
 
 const router = Router();
 
@@ -69,6 +70,10 @@ router.post('/invite', authenticate, async (req, res) => {
     if (existingInvite && existingInvite.status === 'pending' && existingInvite.expiresAt > new Date()) {
       return res.status(409).json({ error: 'Invite already pending for this email', invite: existingInvite });
     }
+
+    // Phase 1: log-only team seat guard. Never blocks — audits violations
+    // so we can see which workspaces are over-seat before enforcement.
+    try { await assertCanInviteTeamMember(me, { context: 'team/invite' }); } catch (_) {}
 
     const token = crypto.randomBytes(24).toString('hex');
     const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 days
@@ -181,6 +186,11 @@ router.post('/accept', async (req, res) => {
     if (exists) return res.status(409).json({ error: 'Account already exists' });
 
     const owner = await prisma.user.findUnique({ where: { id: invite.inviterId } });
+
+    // Phase 1: log-only guard at accept time. Owner may have downgraded
+    // since the invite was sent, so re-check against their CURRENT plan.
+    // The invite being accepted is excluded from the pending count.
+    try { await assertCanInviteTeamMember(owner, { context: 'team/accept', acceptingInviteId: invite.id }); } catch (_) {}
 
     const passwordHash = await bcrypt.hash(password, 12);
     const fullName = `${firstName || ''} ${lastName || ''}`.trim() || invite.email.split('@')[0];

@@ -2,6 +2,7 @@ import { Router } from 'express';
 import axios from 'axios';
 import { authenticate } from '../middleware/auth.js';
 import * as whatsappService from '../services/whatsapp.js';
+import { assertCanConnectPlatform } from '../services/planGuard.js';
 
 const router = Router();
 const GRAPH_API = 'https://graph.facebook.com/v20.0';
@@ -9,6 +10,8 @@ const GRAPH_API = 'https://graph.facebook.com/v20.0';
 // Handle WhatsApp Embedded Signup result from frontend
 router.post('/connect', authenticate, async (req, res) => {
   try {
+    // Phase 1: log-only plan guard (never blocks).
+    try { await assertCanConnectPlatform(req.user, 'whatsapp', { context: 'whatsapp/connect' }); } catch (_) {}
     const { wabaId, phoneNumberId, accessToken } = req.body;
     if (!wabaId || !phoneNumberId || !accessToken) {
       return res.status(400).json({ error: 'Missing required fields: wabaId, phoneNumberId, accessToken' });
@@ -34,6 +37,8 @@ router.post('/connect', authenticate, async (req, res) => {
 // Exchange authorization code from Embedded Signup for access token, then connect
 router.post('/exchange', authenticate, async (req, res) => {
   try {
+    // Phase 1: log-only plan guard (never blocks).
+    try { await assertCanConnectPlatform(req.user, 'whatsapp', { context: 'whatsapp/exchange' }); } catch (_) {}
     const { code, waba_id, phone_number_id } = req.body;
     if (!code) {
       return res.status(400).json({ error: 'No authorization code received' });

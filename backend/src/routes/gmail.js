@@ -8,6 +8,7 @@ import * as gmailService from '../services/gmail.js';
 import * as gmailSyncService from '../services/gmail.service.js';
 import prisma from '../utils/prisma.js';
 import { getOrCreateStripeCustomer } from '../utils/stripe.js';
+import { assertCanConnectPlatform } from '../services/planGuard.js';
 
 const router = Router();
 
@@ -27,7 +28,9 @@ router.get('/', (req, res) => {
 });
 
 // GET /auth/gmail/start — Gmail channel connection (authenticated, returns JSON)
-router.get('/start', authenticate, (req, res) => {
+router.get('/start', authenticate, async (req, res) => {
+  // Phase 1: log-only plan guard (never blocks).
+  try { await assertCanConnectPlatform(req.user, 'gmail', { context: 'gmail/start' }); } catch (_) {}
   const popup = String(req.query.popup || '') === '1';
   const state = Buffer.from(JSON.stringify({ userId: req.user.id, mode: 'connect', popup })).toString('base64url');
   const url = gmailService.getAuthUrl(state);

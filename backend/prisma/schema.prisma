@@ -35,6 +35,19 @@ model User {
   gracePeriodEndsAt DateTime?   @map("grace_period_ends_at")
   billingCycle      BillingCycle? @map("billing_cycle")
 
+  // ── Plan limits / usage (Phase 1 — log-only enforcement) ──
+  // `aiRepliesUsed` counts AI replies consumed in the CURRENT billing cycle.
+  // Reset to 0 whenever `currentPeriodStart` rolls forward (handled in the
+  // Stripe webhook + lazy-reset inside planGuard.assertAndConsumeAiReply).
+  // `aiRepliesCycleStart` is the anchor timestamp for the current window,
+  // used to detect whether a reset is needed without a separate cron job.
+  // `planOverrides` is an optional JSON blob that shallow-merges on top of
+  // PLAN_LIMITS[plan] — reserved for enterprise deals. NULL on all normal
+  // users; safe to leave unset.
+  aiRepliesUsed        Int       @default(0)  @map("ai_replies_used")
+  aiRepliesCycleStart  DateTime? @map("ai_replies_cycle_start")
+  planOverrides        Json?     @map("plan_overrides")
+
   // ── Onboarding ──
   // `onboardingStep` is a UI breadcrumb for the multi-step wizard.
   // `onboardingCompleted` is the canonical "is this user fully onboarded"
@@ -61,8 +74,32 @@ model User {
   leads             Lead[]
   invoices          Invoice[]
   sentInvites       TeamInvite[] @relation("InviterInvites")
+  aiReplyUsage      AiReplyUsage[]
 
   @@map("users")
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// AI reply usage audit log
+// ───────────────────────────────────────────────────────────────────
+// One row per AI reply consumed. Backs the monthly quota counter on
+// User.aiRepliesUsed but also preserves a durable history for audit,
+// refund, and analytics. Scoped to the WORKSPACE OWNER's userId — team
+// members share the owner's quota. Cascade delete so closing an account
+// cleans up naturally.
+// ═══════════════════════════════════════════════════════════════════
+model AiReplyUsage {
+  id             String    @id @default(uuid())
+  userId         String    @map("user_id")
+  platform       Platform?
+  conversationId String?   @map("conversation_id")
+  cost           Int       @default(1)
+  createdAt      DateTime  @default(now()) @map("created_at")
+
+  user           User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@map("ai_reply_usage")
 }
 
 enum UserRole {

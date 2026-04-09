@@ -4,6 +4,7 @@ import { authenticate } from '../middleware/auth.js';
 import * as instagramService from '../services/instagram.js';
 import { syncInstagramMessages } from '../services/instagram.sync.js';
 import prisma from '../utils/prisma.js';
+import { assertCanConnectPlatform } from '../services/planGuard.js';
 
 const router = Router();
 
@@ -33,7 +34,9 @@ router.get('/', (req, res) => {
 });
 
 // Start Instagram OAuth (authenticated API call)
-router.get('/start', authenticate, (req, res) => {
+router.get('/start', authenticate, async (req, res) => {
+  // Phase 1: log-only plan guard (never blocks).
+  try { await assertCanConnectPlatform(req.user, 'instagram', { context: 'instagram/start' }); } catch (_) {}
   const popup = String(req.query.popup || '') === '1';
   const state = Buffer.from(JSON.stringify({ userId: req.user.id, popup })).toString('base64url');
   const url = instagramService.getLoginUrl(state);
