@@ -206,4 +206,11 @@ server.listen(PORT, () => {
       console.error('[Startup] Gmail watch re-registration failed:', err.message);
     });
   }, 10000);
+
+  // Keep Neon free tier awake — ping DB every 4 minutes to prevent cold starts
+  setInterval(async () => {
+    try {
+      await prisma.$queryRaw`SELECT 1`;
+    } catch { /* silent — next real query will reconnect */ }
+  }, 4 * 60 * 1000);
 });
