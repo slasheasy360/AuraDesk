@@ -7,6 +7,7 @@ import {
   PlanLimitError,
 } from '../services/planGuard.js';
 import prisma from '../utils/prisma.js';
+import { searchSimilarFaqs } from '../services/embeddings.js';
 
 const router = Router();
 
@@ -48,9 +49,9 @@ router.post('/generate-reply', authenticate, requireActiveSubscription, async (r
   }
 
   try {
-    // 2. Fetch FAQs + settings + user info
-    const [faqs, settings, user] = await Promise.all([
-      prisma.faq.findMany({ where: { userId: req.user.id }, take: 30 }),
+    // 2. Fetch settings + user info + semantic FAQ search in parallel
+    const [relevantFaqs, settings, user] = await Promise.all([
+      searchSimilarFaqs(req.user.id, prompt, 5),
       prisma.aiSettings.findUnique({ where: { userId: req.user.id } }),
       prisma.user.findUnique({
         where: { id: req.user.id },
@@ -62,10 +63,14 @@ router.post('/generate-reply', authenticate, requireActiveSubscription, async (r
     const toneList = tones.length > 0 ? tones.join(', ') : 'friendly';
     const companyName = user?.companyName || 'our company';
 
-    // 3. Build FAQ context
-    const faqContext = faqs.length > 0
-      ? faqs.map((f, i) => `${i + 1}. Q: ${f.question}\n   A: ${f.answer}`).join('\n\n')
+    // 3. Build FAQ context from top semantic matches only
+    // Filter out low-relevance results (similarity < 0.5)
+    const goodMatches = relevantFaqs.filter(f => Number(f.similarity) >= 0.5);
+    const faqContext = goodMatches.length > 0
+      ? goodMatches.map((f, i) => `${i + 1}. Q: ${f.question}\n   A: ${f.answer}`).join('\n\n')
       : null;
+
+    console.log(`[AI] Vector search found ${relevantFaqs.length} results, ${goodMatches.length} above threshold for user ${req.user.id}`);
 
     const systemPrompt = [
       `You are a helpful customer support AI assistant for ${companyName}.`,

@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { authenticate } from '../middleware/auth.js';
 import prisma from '../utils/prisma.js';
+import { storeFaqEmbedding } from '../services/embeddings.js';
 
 const router = Router();
 
@@ -27,6 +28,12 @@ router.post('/faqs', authenticate, async (req, res) => {
       })
     )
   );
+
+  // Generate embeddings asynchronously — don't block the response
+  created.forEach(faq => {
+    storeFaqEmbedding(faq.id, faq.question, faq.answer);
+  });
+
   res.status(201).json({ faqs: created });
 });
 
@@ -42,6 +49,10 @@ router.put('/faqs/:id', authenticate, async (req, res) => {
     where: { id: req.params.id },
     data: { question, answer, category },
   });
+
+  // Re-embed since content changed
+  storeFaqEmbedding(updated.id, updated.question, updated.answer);
+
   res.json({ faq: updated });
 });
 
@@ -53,6 +64,14 @@ router.delete('/faqs/:id', authenticate, async (req, res) => {
   if (!faq) return res.status(404).json({ error: 'FAQ not found' });
   await prisma.faq.delete({ where: { id: req.params.id } });
   res.json({ success: true });
+});
+
+// ── POST /api/ai-training/faqs/backfill ──────────────────────────────
+// One-time endpoint to embed all existing FAQs that have no embedding yet
+router.post('/faqs/backfill', authenticate, async (req, res) => {
+  const { backfillEmbeddings } = await import('../services/embeddings.js');
+  backfillEmbeddings().catch(err => console.error('[Backfill]', err.message));
+  res.json({ message: 'Backfill started in background' });
 });
 
 // ── GET /api/ai-training/settings ────────────────────────────────────
