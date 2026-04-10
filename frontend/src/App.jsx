@@ -20,6 +20,7 @@ import InvoiceDetailPage from './pages/InvoiceDetailPage.jsx';
 import PublicInvoicePage from './pages/PublicInvoicePage.jsx';
 import ProfileSettingsPage from './pages/ProfileSettingsPage.jsx';
 import AcceptInvitePage from './pages/AcceptInvitePage.jsx';
+import AITrainingPage from './pages/AITrainingPage.jsx';
 
 function FullPageSkeleton() {
   return (
@@ -215,7 +216,7 @@ export default function App() {
         <Route path="invoices/new" element={<CreateInvoicePage />} />
         <Route path="invoices/:id" element={<InvoiceDetailPage />} />
         <Route path="settings" element={<ProfileSettingsPage />} />
-        <Route path="ai-training" element={<div className="flex items-center justify-center h-full text-gray-400"><p className="text-lg">AI Training — Coming Soon</p></div>} />
+        <Route path="ai-training" element={<AITrainingPage />} />
       </Route>
 
       {/* Catch-all */}

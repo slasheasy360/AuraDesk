@@ -75,8 +75,38 @@ model User {
   invoices          Invoice[]
   sentInvites       TeamInvite[] @relation("InviterInvites")
   aiReplyUsage      AiReplyUsage[]
+  aiSettings        AiSettings?
+  faqs              Faq[]
 
   @@map("users")
+}
+
+model AiSettings {
+  id          String   @id @default(uuid())
+  userId      String   @unique @map("user_id")
+  tones       Json     @default("[]")
+  automations Json     @default("[]")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("ai_settings")
+}
+
+model Faq {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  question  String
+  answer    String
+  category  String   @default("general")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("faqs")
 }
 
 // ═══════════════════════════════════════════════════════════════════

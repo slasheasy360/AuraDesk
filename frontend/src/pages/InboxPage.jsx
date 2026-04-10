@@ -577,6 +577,38 @@ export default function InboxPage() {
     }
   }, [saveDraft]);
 
+  // ── AI Respond state ────────────────────────────────────────────────
+  const [aiSuggestion, setAiSuggestion] = useState(null);
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiError, setAiError] = useState(null);
+
+  const handleAiRespond = useCallback(async () => {
+    const activeId = conversationIdRef.current;
+    if (!activeId || aiLoading) return;
+    // Find the last inbound message to use as the prompt
+    const lastInbound = [...messages].reverse().find(m => m.direction === 'inbound');
+    const prompt = lastInbound?.content || newMessage.trim();
+    if (!prompt) return;
+
+    setAiLoading(true);
+    setAiError(null);
+    setAiSuggestion(null);
+    try {
+      const res = await api.post('/api/ai/generate-reply', {
+        conversationId: activeId,
+        prompt,
+        platform: activeConversationRef.current?.connectedAccount?.platform,
+      });
+      setAiSuggestion(res.data.reply);
+    } catch (err) {
+      const msg = err.response?.data?.error || 'AI generation failed';
+      setAiError(msg);
+      setTimeout(() => setAiError(null), 4000);
+    } finally {
+      setAiLoading(false);
+    }
+  }, [aiLoading, messages, newMessage]);
+
   useEffect(() => () => { if (draftTimerRef.current) clearTimeout(draftTimerRef.current); }, []);
 
   // ═══════════════════════════════════════════════════════════════════
@@ -1354,6 +1386,12 @@ export default function InboxPage() {
                       sending={sending}
                       attachments={attachments}
                       onAttachClick={() => fileInputRef.current?.click()}
+                      onAiRespond={handleAiRespond}
+                      aiLoading={aiLoading}
+                      aiSuggestion={aiSuggestion}
+                      aiError={aiError}
+                      onAiUse={(text) => { handleNewMessageChange(text); setAiSuggestion(null); }}
+                      onAiDismiss={() => setAiSuggestion(null)}
                     />
                   </div>
                   {/* Mobile composer — dark navy with pill input */}
@@ -1365,6 +1403,8 @@ export default function InboxPage() {
                       sending={sending}
                       attachments={attachments}
                       onAttachClick={() => fileInputRef.current?.click()}
+                      onAiRespond={handleAiRespond}
+                      aiLoading={aiLoading}
                     />
                   </div>
                 </>
@@ -1709,18 +1749,86 @@ function FilterPanel({ activeFilter, setActiveFilter, filterCounts, sourceFilter
 // CHAT COMPOSER (dark theme, matching design)
 // ═══════════════════════════════════════════════════════════════════
 
-function ChatComposer({ newMessage, setNewMessage, handleSend, sending, attachments, onAttachClick }) {
+function ChatComposer({
+  newMessage, setNewMessage, handleSend, sending, attachments, onAttachClick,
+  onAiRespond, aiLoading, aiSuggestion, aiError, onAiUse, onAiDismiss,
+}) {
   const hasContent = newMessage.trim() || attachments.length > 0;
+  const [autoSend, setAutoSend] = useState(false);
+
+  const handleUseSuggestion = () => {
+    if (autoSend) {
+      onAiUse(aiSuggestion);
+      // Trigger send after state update
+      setTimeout(() => {
+        document.getElementById('chat-send-btn')?.click();
+      }, 50);
+    } else {
+      onAiUse(aiSuggestion);
+    }
+  };
 
   return (
-    <div className="border-t border-gray-100 bg-white px-4 sm:px-6 py-3">
+    <div className="border-t border-gray-100 bg-white px-4 sm:px-6 py-3 space-y-2">
+      {/* AI Suggestion Box */}
+      {(aiSuggestion || aiLoading || aiError) && (
+        <div className="rounded-xl border-2 border-dashed border-[#1787FE]/40 bg-blue-50/60 px-4 py-3 relative">
+          {aiLoading && (
+            <div className="flex items-center gap-2 text-sm text-gray-500">
+              <Sparkles size={14} className="text-[#1787FE] animate-pulse" />
+              Generating AI reply...
+            </div>
+          )}
+          {aiError && (
+            <div className="text-sm text-red-500">{aiError}</div>
+          )}
+          {aiSuggestion && (
+            <>
+              <p className="text-sm text-gray-800 leading-relaxed pr-24">{aiSuggestion}</p>
+              <div className="absolute top-2 right-2 flex flex-col gap-1.5 items-end">
+                <button
+                  onClick={() => { navigator.clipboard.writeText(aiSuggestion); }}
+                  className="px-3 py-1.5 text-xs font-semibold border border-gray-300 bg-white rounded-lg hover:bg-gray-50 transition whitespace-nowrap"
+                >
+                  Copy Text
+                </button>
+                <button
+                  onClick={handleUseSuggestion}
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-[#1787FE] text-white rounded-lg hover:bg-[#1377e0] transition whitespace-nowrap"
+                >
+                  Auto-Send
+                  <Send size={11} />
+                </button>
+                <label className="flex items-center gap-1 text-xs text-gray-500 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={autoSend}
+                    onChange={e => setAutoSend(e.target.checked)}
+                    className="w-3 h-3"
+                  />
+                  Always
+                </label>
+              </div>
+              <button
+                onClick={onAiDismiss}
+                className="absolute bottom-2 right-2 text-gray-300 hover:text-gray-500 transition"
+              >
+                <X size={13} />
+              </button>
+            </>
+          )}
+        </div>
+      )}
+
       <form onSubmit={handleSend} className="flex items-center gap-3">
         {/* AI Respond pill */}
         <button
           type="button"
-          className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-[#1787FE] bg-blue-50 hover:bg-blue-100 rounded-full transition whitespace-nowrap"
+          onClick={onAiRespond}
+          disabled={aiLoading}
+          className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-[#1787FE] bg-blue-50 hover:bg-blue-100 rounded-full transition whitespace-nowrap disabled:opacity-50"
         >
-          <Sparkles size={14} />
+          <Sparkles size={14} className={aiLoading ? 'animate-pulse' : ''} />
           AI Respond
         </button>
 
@@ -1755,6 +1863,7 @@ function ChatComposer({ newMessage, setNewMessage, handleSend, sending, attachme
 
         {/* Send */}
         <button
+          id="chat-send-btn"
           type="submit"
           disabled={!hasContent || sending}
           className="flex items-center gap-2 px-5 py-2.5 bg-[#1787FE] hover:bg-[#1377e0] text-white text-sm font-semibold rounded-xl transition disabled:opacity-40 disabled:cursor-not-allowed"
@@ -1771,7 +1880,7 @@ function ChatComposer({ newMessage, setNewMessage, handleSend, sending, attachme
 // MOBILE CHAT COMPOSER — dark navy bottom bar matching mockup
 // ═══════════════════════════════════════════════════════════════════
 
-function MobileChatComposer({ newMessage, setNewMessage, handleSend, sending, attachments, onAttachClick }) {
+function MobileChatComposer({ newMessage, setNewMessage, handleSend, sending, attachments, onAttachClick, onAiRespond, aiLoading }) {
   const hasContent = newMessage.trim() || attachments.length > 0;
 
   return (
@@ -1798,14 +1907,15 @@ function MobileChatComposer({ newMessage, setNewMessage, handleSend, sending, at
           />
         </div>
 
-        {/* AI Send button — white circle */}
+        {/* AI Respond button */}
         <button
-          type="submit"
-          disabled={!hasContent || sending}
+          type="button"
+          onClick={onAiRespond}
+          disabled={aiLoading}
           className="w-10 h-10 rounded-full bg-white flex items-center justify-center flex-shrink-0 disabled:opacity-50 transition"
-          aria-label="Send"
+          aria-label="AI Respond"
         >
-          <Sparkles size={18} className="text-[#1787FE]" />
+          <Sparkles size={18} className={`text-[#1787FE] ${aiLoading ? 'animate-pulse' : ''}`} />
         </button>
 
         {/* Camera */}
