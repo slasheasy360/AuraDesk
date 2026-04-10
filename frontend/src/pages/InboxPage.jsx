@@ -1052,6 +1052,8 @@ export default function InboxPage() {
             toggleSourceFilter={toggleSourceFilter}
             sourceCounts={sourceCounts}
             availableSourceFilters={availableSourceFilters}
+            conversationId={conversationId}
+            navigate={navigate}
           />
         </div>
 
@@ -1437,6 +1439,8 @@ export default function InboxPage() {
           toggleSourceFilter={toggleSourceFilter}
           sourceCounts={sourceCounts}
           availableSourceFilters={availableSourceFilters}
+          conversationId={null}
+          navigate={navigate}
         />
       </div>
 
@@ -1450,12 +1454,6 @@ export default function InboxPage() {
             onChange={toggleSelectAll}
             className="w-4 h-4 rounded border-gray-300 bg-white text-[#1787FE] focus:ring-[#1787FE] focus:ring-offset-0 cursor-pointer"
           />
-          <button onClick={() => fetchConversations()} className="p-1.5 text-gray-500 hover:text-gray-700 transition rounded" title="Refresh">
-            <RotateCw size={16} />
-          </button>
-          <button className="p-1.5 text-[#1787FE] hover:text-[#1377e0] transition rounded" title="AI">
-            <Sparkles size={16} />
-          </button>
         </div>
 
         {/* Message rows */}
@@ -1608,7 +1606,7 @@ export default function InboxPage() {
 // FILTER PANEL COMPONENT
 // ═══════════════════════════════════════════════════════════════════
 
-function FilterPanel({ activeFilter, setActiveFilter, filterCounts, sourceFilters, toggleSourceFilter, sourceCounts, availableSourceFilters }) {
+function FilterPanel({ activeFilter, setActiveFilter, filterCounts, sourceFilters, toggleSourceFilter, sourceCounts, availableSourceFilters, conversationId, navigate }) {
   const { openLinkAccounts } = useLinkAccounts();
   return (
     <div className="flex flex-col h-full py-4">
@@ -1620,7 +1618,10 @@ function FilterPanel({ activeFilter, setActiveFilter, filterCounts, sourceFilter
           return (
             <button
               key={key}
-              onClick={() => setActiveFilter(key)}
+              onClick={() => {
+                setActiveFilter(key);
+                if (conversationId) navigate('/inbox');
+              }}
               className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-sm transition ${
                 isActive
                   ? 'bg-[#1787FE] text-white shadow-lg shadow-[#1787FE]/20'
