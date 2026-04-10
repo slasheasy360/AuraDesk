@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import Anthropic from '@anthropic-ai/sdk';
+import OpenAI from 'openai';
 import { authenticate, requireActiveSubscription } from '../middleware/auth.js';
 import {
   assertAndConsumeAiReply,
@@ -10,7 +10,7 @@ import prisma from '../utils/prisma.js';
 
 const router = Router();
 
-const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 /**
  * POST /api/ai/generate-reply
@@ -79,15 +79,17 @@ router.post('/generate-reply', authenticate, requireActiveSubscription, async (r
       '- If no FAQ is relevant, acknowledge warmly and offer to help further',
     ].filter(Boolean).join('\n');
 
-    // 4. Call Claude
-    const response = await anthropic.messages.create({
-      model: 'claude-haiku-4-5-20251001',
+    // 4. Call OpenAI
+    const response = await openai.chat.completions.create({
+      model: 'gpt-4o-mini',
       max_tokens: 300,
-      system: systemPrompt,
-      messages: [{ role: 'user', content: prompt }],
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: prompt },
+      ],
     });
 
-    const text = response.content[0]?.text?.trim()
+    const text = response.choices[0]?.message?.content?.trim()
       || "I'd be happy to help with that! Could you provide a bit more detail?";
 
     return res.json({
