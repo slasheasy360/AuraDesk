@@ -71,7 +71,10 @@ export async function handleEmbeddedSignup(userId, wabaId, phoneNumberId, userAc
   // Subscribe webhook to WABA for this tenant (non-fatal — can be configured manually in Meta dashboard)
   try {
     await axios.post(`${GRAPH_API}/${wabaId}/subscribed_apps`, null, {
-      params: { access_token: userAccessToken },
+      params: {
+        access_token: userAccessToken,
+        subscribed_fields: 'messages',
+      },
     });
     console.log('[WhatsApp] Webhook subscription successful for WABA:', wabaId);
   } catch (err) {

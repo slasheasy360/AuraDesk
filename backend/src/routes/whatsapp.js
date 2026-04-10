@@ -3,6 +3,7 @@ import axios from 'axios';
 import { authenticate } from '../middleware/auth.js';
 import * as whatsappService from '../services/whatsapp.js';
 import { assertCanConnectPlatform } from '../services/planGuard.js';
+import prisma from '../utils/prisma.js';
 
 const router = Router();
 const GRAPH_API = 'https://graph.facebook.com/v20.0';
@@ -292,6 +293,36 @@ router.post('/connect-env', authenticate, async (req, res) => {
     }
     const detail = err.response?.data?.error?.message || err.message;
     res.status(500).json({ error: `Failed to connect WhatsApp: ${detail}` });
+  }
+});
+
+// Re-subscribe webhook for an existing WhatsApp account (fixes missing messages after initial connect)
+router.post('/resubscribe', authenticate, async (req, res) => {
+  try {
+    const GRAPH = 'https://graph.facebook.com/v21.0';
+    const systemToken = process.env.WHATSAPP_SYSTEM_USER_TOKEN;
+    if (!systemToken) {
+      return res.status(400).json({ error: 'WHATSAPP_SYSTEM_USER_TOKEN not configured on server' });
+    }
+
+    const waAccount = await prisma.whatsappAccount.findFirst({
+      where: { connectedAccount: { userId: req.user.id, status: 'active' } },
+    });
+
+    if (!waAccount) {
+      return res.status(404).json({ error: 'No active WhatsApp account found' });
+    }
+
+    await axios.post(`${GRAPH}/${waAccount.wabaId}/subscribed_apps`, null, {
+      headers: { Authorization: `Bearer ${systemToken}` },
+      params: { subscribed_fields: 'messages' },
+    });
+
+    console.log('[WhatsApp] Re-subscription successful for WABA:', waAccount.wabaId);
+    res.json({ success: true, wabaId: waAccount.wabaId });
+  } catch (err) {
+    console.error('WhatsApp resubscribe error:', err.response?.data || err.message);
+    res.status(500).json({ error: err.response?.data?.error?.message || err.message });
   }
 });
 
