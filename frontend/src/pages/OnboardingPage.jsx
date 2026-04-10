@@ -285,8 +285,7 @@ function PlatformStep({ onNext, successPlatform, errorInfo }) {
         scope: 'whatsapp_business_messaging,business_management,whatsapp_business_management',
         extras: {
           feature: 'whatsapp_embedded_signup',
-          version: 4,
-          featureType: 'whatsapp_business_app_onboarding',
+          version: 2,
           setup: {},
         },
       }
