@@ -1371,6 +1371,12 @@ export default function InboxPage() {
                     openReplyBox(lastMsg || { subject: emailSubject });
                   }}
                   onClose={() => { setShowReplyBox(false); setReplyingTo(null); }}
+                  onAiRespond={handleAiRespond}
+                  aiLoading={aiLoading}
+                  aiSuggestion={aiSuggestion}
+                  aiError={aiError}
+                  onAiUse={(text) => { handleNewMessageChange(text); setAiSuggestion(null); }}
+                  onAiDismiss={() => setAiSuggestion(null)}
                 />
               ) : (
                 <>
@@ -2231,7 +2237,7 @@ function EmailAttachments({ attachments, messageId }) {
 // ═══════════════════════════════════════════════════════════════════
 
 const EmailReplyBox = forwardRef(function EmailReplyBox(
-  { showReplyBox, replyingTo, newMessage, setNewMessage, handleSend, sending, attachments, onAttachClick, removeAttachment, uploadProgress, onOpenReply, onClose },
+  { showReplyBox, replyingTo, newMessage, setNewMessage, handleSend, sending, attachments, onAttachClick, removeAttachment, uploadProgress, onOpenReply, onClose, onAiRespond, aiLoading, aiSuggestion, aiError, onAiUse, onAiDismiss },
   ref
 ) {
   const hasContent = newMessage.trim() || attachments.length > 0;
@@ -2261,7 +2267,48 @@ const EmailReplyBox = forwardRef(function EmailReplyBox(
 
   return (
     <div ref={ref} className="border-t border-gray-100 bg-white px-4 sm:px-6 py-4">
-      <div className="max-w-3xl mx-auto">
+      <div className="max-w-3xl mx-auto space-y-3">
+        {/* AI Suggestion Box */}
+        {(aiSuggestion || aiLoading || aiError) && (
+          <div className="rounded-xl border-2 border-dashed border-[#1787FE]/40 bg-blue-50/60 px-4 py-3 relative">
+            {aiLoading && (
+              <div className="flex items-center gap-2 text-sm text-gray-500">
+                <Sparkles size={14} className="text-[#1787FE] animate-pulse" />
+                Generating AI reply...
+              </div>
+            )}
+            {aiError && <div className="text-sm text-red-500">{aiError}</div>}
+            {aiSuggestion && (
+              <>
+                <p className="text-sm text-gray-800 leading-relaxed pr-24">{aiSuggestion}</p>
+                <div className="absolute top-2 right-2 flex flex-col gap-1.5 items-end">
+                  <button
+                    type="button"
+                    onClick={() => navigator.clipboard.writeText(aiSuggestion)}
+                    className="px-3 py-1.5 text-xs font-semibold border border-gray-300 bg-white rounded-lg hover:bg-gray-50 transition whitespace-nowrap"
+                  >
+                    Copy Text
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onAiUse(aiSuggestion)}
+                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-[#1787FE] text-white rounded-lg hover:bg-[#1377e0] transition whitespace-nowrap"
+                  >
+                    Use Reply
+                    <Send size={11} />
+                  </button>
+                </div>
+                <button
+                  type="button"
+                  onClick={onAiDismiss}
+                  className="absolute bottom-2 right-2 text-gray-300 hover:text-gray-500 transition"
+                >
+                  <X size={13} />
+                </button>
+              </>
+            )}
+          </div>
+        )}
         <form onSubmit={handleSend}>
           <div className="border border-gray-200 rounded-xl overflow-hidden shadow-sm focus-within:border-[#1787FE] focus-within:ring-1 focus-within:ring-[#1787FE] transition bg-white">
 
@@ -2349,6 +2396,16 @@ const EmailReplyBox = forwardRef(function EmailReplyBox(
                   title="Attach files"
                 >
                   <Paperclip size={16} />
+                </button>
+                <button
+                  type="button"
+                  onClick={onAiRespond}
+                  disabled={aiLoading}
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-[#1787FE] bg-blue-50 hover:bg-blue-100 rounded-full transition disabled:opacity-50 whitespace-nowrap"
+                  title="Generate AI reply"
+                >
+                  <Sparkles size={13} className={aiLoading ? 'animate-pulse' : ''} />
+                  AI Respond
                 </button>
               </div>
               <div className="flex items-center gap-2">
