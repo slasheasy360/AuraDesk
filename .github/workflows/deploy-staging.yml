@@ -9,11 +9,11 @@ permissions:
   contents: read
 
 env:
-  AWS_REGION: us-east-1
+  AWS_REGION: eu-north-1
   ECR_REPOSITORY: auradesk-backend
   ECS_CLUSTER: auradesk-staging
   ECS_SERVICE: auradesk-backend-staging
-  FRONTEND_BUCKET: auradesk-frontend-staging
+  FRONTEND_BUCKET: auradesk-frontend-staging-650679031303
 
 jobs:
   deploy-frontend:
@@ -87,7 +87,7 @@ jobs:
             --cluster ${{ env.ECS_CLUSTER }} \
             --task-definition auradesk-migrate-staging \
             --launch-type FARGATE \
-            --network-configuration "awsvpcConfiguration={subnets=[${{ secrets.PRIVATE_SUBNET_IDS }}],securityGroups=[${{ secrets.ECS_SG_ID }}],assignPublicIp=DISABLED}" \
+            --network-configuration "awsvpcConfiguration={subnets=[${{ secrets.PUBLIC_SUBNET_IDS }}],securityGroups=[${{ secrets.ECS_SG_ID }}],assignPublicIp=ENABLED}" \
             --overrides '{
               "containerOverrides": [{
                 "name": "migrate",
