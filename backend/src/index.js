@@ -1,5 +1,15 @@
 import 'dotenv/config';
+import { execSync } from 'child_process';
 import express from 'express';
+
+// Run pending migrations before the server starts.
+// Safe to call on every boot — no-ops when DB is up to date.
+try {
+  execSync('npx prisma migrate deploy', { stdio: 'inherit' });
+} catch (err) {
+  console.error('[Startup] prisma migrate deploy failed:', err.message);
+  process.exit(1);
+}
 import cors from 'cors';
 import http from 'http';
 import { Server } from 'socket.io';
