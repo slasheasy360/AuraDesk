@@ -1,5 +1,6 @@
 import axios from 'axios';
 import fs from 'fs';
+import { Readable } from 'stream';
 import FormData from 'form-data';
 import prisma from '../utils/prisma.js';
 import { encrypt, decrypt } from '../utils/encryption.js';
@@ -222,19 +223,40 @@ export async function sendMessage(connectedAccountId, recipientId, text) {
 
   const pageToken = decrypt(authToken.accessTokenEncrypted);
 
-  const res = await axios.post(
-    `${GRAPH_API}/me/messages`,
-    {
-      recipient: { id: recipientId },
-      messaging_type: 'RESPONSE',
-      message: { text },
-    },
-    {
-      params: { access_token: pageToken },
-    }
-  );
+  // Check token expiry and warn if near/past expiry
+  if (authToken.expiresAt && new Date(authToken.expiresAt) < new Date()) {
+    console.warn('[Instagram] Page token may be expired, expiresAt:', authToken.expiresAt);
+  }
 
-  return res.data;
+  console.log('[Instagram] Sending message to IGSID:', recipientId?.slice(-6), '| connectedAccountId:', connectedAccountId);
+
+  try {
+    const res = await axios.post(
+      `${GRAPH_API}/me/messages`,
+      {
+        recipient: { id: recipientId },
+        messaging_type: 'RESPONSE',
+        message: { text },
+      },
+      {
+        params: { access_token: pageToken },
+      }
+    );
+    console.log('[Instagram] Message sent successfully, message_id:', res.data.message_id);
+    return res.data;
+  } catch (err) {
+    const igError = err.response?.data?.error;
+    if (igError) {
+      console.error('[Instagram] API error sending message:', {
+        code: igError.code,
+        type: igError.type,
+        message: igError.message,
+        error_subcode: igError.error_subcode,
+        fbtrace_id: igError.fbtrace_id,
+      });
+    }
+    throw err;
+  }
 }
 
 export async function sendAttachment(connectedAccountId, recipientId, file) {
@@ -251,22 +273,40 @@ export async function sendAttachment(connectedAccountId, recipientId, file) {
   else if (file.mimetype.startsWith('video/')) type = 'video';
   else if (file.mimetype.startsWith('audio/')) type = 'audio';
 
+  console.log('[Instagram] Sending attachment:', { type, filename: file.originalname, recipientId: recipientId?.slice(-6) });
+
   const form = new FormData();
   form.append('recipient', JSON.stringify({ id: recipientId }));
   form.append('messaging_type', 'RESPONSE');
   form.append('message', JSON.stringify({
     attachment: { type, payload: { is_reusable: false } },
   }));
-  form.append('filedata', fs.createReadStream(file.path), {
+  const fileStream = file.path
+    ? fs.createReadStream(file.path)
+    : Readable.from(file.buffer || []);
+  form.append('filedata', fileStream, {
     filename: file.originalname,
     contentType: file.mimetype,
   });
 
-  const res = await axios.post(`${GRAPH_API}/me/messages`, form, {
-    params: { access_token: pageToken },
-    headers: form.getHeaders(),
-    maxContentLength: 26214400,
-  });
-
-  return res.data;
+  try {
+    const res = await axios.post(`${GRAPH_API}/me/messages`, form, {
+      params: { access_token: pageToken },
+      headers: form.getHeaders(),
+      maxContentLength: 26214400,
+    });
+    console.log('[Instagram] Attachment sent successfully, message_id:', res.data.message_id);
+    return res.data;
+  } catch (err) {
+    const igError = err.response?.data?.error;
+    if (igError) {
+      console.error('[Instagram] API error sending attachment:', {
+        code: igError.code,
+        type: igError.type,
+        message: igError.message,
+        fbtrace_id: igError.fbtrace_id,
+      });
+    }
+    throw err;
+  }
 }

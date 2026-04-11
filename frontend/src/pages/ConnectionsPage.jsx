@@ -1,8 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { useSearchParams } from 'react-router-dom';
 import api from '../services/api.js';
 import { PlatformIcon } from '../components/PlatformBadge.jsx';
-import { Link2, CheckCircle, XCircle, Trash2, Loader2, AlertCircle } from 'lucide-react';
+import { Link2, CheckCircle, Trash2, Loader2, AlertCircle } from 'lucide-react';
 
 const platforms = [
   {
@@ -51,24 +50,10 @@ export default function ConnectionsPage() {
   const [accounts, setAccounts] = useState([]);
   const [loading, setLoading] = useState(true);
   const syncTriggeredRef = useRef(false);
-  const [searchParams] = useSearchParams();
-  const successPlatform = searchParams.get('success');
-  const errorPlatform = searchParams.get('error');
-  const errorReason = searchParams.get('reason');
-
   // Per-platform loading and error states
   const [connectingPlatform, setConnectingPlatform] = useState(null);
   const [platformError, setPlatformError] = useState(null); // { platformId, message }
   const [disconnecting, setDisconnecting] = useState(null); // accountId being disconnected
-
-  // Auto-dismiss success/error banners after 5s
-  const [showBanner, setShowBanner] = useState(true);
-  useEffect(() => {
-    if (successPlatform || errorPlatform) {
-      const timer = setTimeout(() => setShowBanner(false), 5000);
-      return () => clearTimeout(timer);
-    }
-  }, [successPlatform, errorPlatform]);
 
   // Auto-dismiss per-platform error after 5s
   useEffect(() => {
@@ -97,7 +82,7 @@ export default function ConnectionsPage() {
       .catch((err) => {
         console.error('Failed to sync Gmail messages:', err);
       });
-  }, [accounts, loading, successPlatform]);
+  }, [accounts, loading]);
 
   const fetchAccounts = useCallback(async () => {
     try {
@@ -108,6 +93,58 @@ export default function ConnectionsPage() {
     } finally {
       setLoading(false);
     }
+  }, []);
+
+  const openAuthPopup = useCallback(async (platformId) => {
+    const endpoint = platforms.find((p) => p.id === platformId)?.authEndpoint;
+    if (!endpoint) throw new Error('Missing OAuth endpoint');
+
+    const res = await api.get(endpoint, { params: { popup: 1 } });
+    const url = res.data?.url;
+    if (!url) throw new Error('Missing OAuth URL');
+
+    const popup = window.open(
+      url,
+      `auradesk-${platformId}-connect`,
+      'width=520,height=700,menubar=0,toolbar=0,location=0,status=0,scrollbars=1'
+    );
+
+    if (!popup) throw new Error('Popup blocked. Please allow popups and try again.');
+
+    const apiOrigin = new URL(api.defaults.baseURL || window.location.origin).origin;
+
+    return new Promise((resolve, reject) => {
+      const timeoutId = setTimeout(() => {
+        cleanup();
+        reject(new Error('Connection timed out. Please try again.'));
+      }, 2 * 60 * 1000);
+
+      const pollId = setInterval(() => {
+        if (popup.closed) {
+          cleanup();
+          reject(new Error('Connection window was closed.'));
+        }
+      }, 600);
+
+      const onMessage = (event) => {
+        if (![window.location.origin, apiOrigin].includes(event.origin)) return;
+        const data = event.data;
+        if (!data || data.type !== 'auradesk:connect') return;
+        if (data.platform !== platformId) return;
+        cleanup();
+        if (data.status === 'success') resolve(data);
+        else reject(new Error(data.reason || 'Connection failed.'));
+      };
+
+      const cleanup = () => {
+        clearTimeout(timeoutId);
+        clearInterval(pollId);
+        window.removeEventListener('message', onMessage);
+        try { popup.close(); } catch {}
+      };
+
+      window.addEventListener('message', onMessage);
+    });
   }, []);
 
   async function handleConnect(platform) {
@@ -259,8 +296,7 @@ export default function ConnectionsPage() {
           scope: 'whatsapp_business_messaging,business_management,whatsapp_business_management',
           extras: {
             feature: 'whatsapp_embedded_signup',
-            version: 4,
-            featureType: 'whatsapp_business_app_onboarding',
+            version: 2,
             setup: {},
           },
         }
@@ -269,13 +305,14 @@ export default function ConnectionsPage() {
     }
 
     try {
-      const res = await api.get(platform.authEndpoint);
-      window.location.href = res.data.url;
+      await openAuthPopup(platform.id);
+      await fetchAccounts();
+      setConnectingPlatform(null);
     } catch (err) {
-      console.error('Failed to start OAuth:', err);
+      console.error(`Connect ${platform.id} failed:`, err);
       setPlatformError({
         platformId: platform.id,
-        message: err.response?.data?.error || `Failed to start ${platform.name} connection.`,
+        message: err.message || 'Failed to connect account.',
       });
       setConnectingPlatform(null);
     }
@@ -312,25 +349,6 @@ export default function ConnectionsPage() {
             <p className="text-gray-500 text-xs sm:text-sm">Connect your messaging platforms to AuraDesk</p>
           </div>
         </div>
-
-        {/* Success/Error banners from OAuth redirect */}
-        {showBanner && successPlatform && (
-          <div className="bg-green-50 border border-green-200 text-green-700 px-4 py-3 rounded-lg mb-4 sm:mb-6 flex items-center gap-2 text-sm animate-in fade-in">
-            <CheckCircle size={18} className="flex-shrink-0" />
-            <span><span className="capitalize font-medium">{successPlatform}</span> connected successfully!</span>
-          </div>
-        )}
-        {showBanner && errorPlatform && (
-          <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg mb-4 sm:mb-6 flex items-center gap-2 text-sm">
-            <XCircle size={18} className="flex-shrink-0" />
-            <span>
-              {errorReason
-                ? errorReason
-                : <>Failed to connect <span className="capitalize font-medium">{errorPlatform}</span>. Please try again.</>
-              }
-            </span>
-          </div>
-        )}
 
         {/* Loading skeleton */}
         {loading ? (

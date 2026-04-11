@@ -15,6 +15,65 @@ import axios from 'axios';
 
 const router = Router();
 
+function getMetaParticipantIds(rawPayload = {}) {
+  const senderId = rawPayload.sender?.id || rawPayload.from?.id || null;
+  const recipientId = rawPayload.recipient?.id || rawPayload.to?.data?.[0]?.id || null;
+  return { senderId, recipientId };
+}
+
+async function resolveMetaRecipientId(conversation, platform) {
+  if (conversation.contact?.platformUserId) return conversation.contact.platformUserId;
+
+  const lastMsg = await prisma.message.findFirst({
+    where: { conversationId: conversation.id, rawPayload: { not: null } },
+    orderBy: { sentAt: 'desc' },
+    select: { rawPayload: true },
+  });
+
+  const { senderId, recipientId } = getMetaParticipantIds(lastMsg?.rawPayload || {});
+  const accountId = conversation.connectedAccount?.platformAccountId || null;
+  let otherId = null;
+
+  if (accountId) {
+    if (senderId && senderId !== accountId) otherId = senderId;
+    if (recipientId && recipientId !== accountId) otherId = recipientId;
+  }
+
+  if (!otherId) {
+    if (senderId && recipientId && senderId !== recipientId) {
+      otherId = senderId;
+    }
+  }
+
+  if (!otherId) return null;
+
+  const contact = await prisma.contact.upsert({
+    where: {
+      userId_platform_platformUserId: {
+        userId: conversation.connectedAccount.userId,
+        platform,
+        platformUserId: otherId,
+      },
+    },
+    update: {},
+    create: {
+      userId: conversation.connectedAccount.userId,
+      platform,
+      platformUserId: otherId,
+      name: `${platform.toUpperCase()} User ${otherId.slice(-4)}`,
+    },
+  });
+
+  if (!conversation.contactId) {
+    await prisma.conversation.update({
+      where: { id: conversation.id },
+      data: { contactId: contact.id },
+    });
+  }
+
+  return otherId;
+}
+
 // Get smart inbox messages across all connected platforms
 router.get('/', authenticate, async (req, res) => {
   try {
@@ -314,16 +373,21 @@ router.post('/send', authenticate, upload.array('attachments', 10), async (req, 
 
     const { platform } = conversation.connectedAccount;
     let platformMessageId = null;
+    let sentRawPayload    = null; // set by Gmail case; used when persisting the message
     const attachmentMeta = [];
 
     // Send via the correct platform API
     try {
       switch (platform) {
         case 'facebook': {
+          const recipientPsid = await resolveMetaRecipientId(conversation, 'facebook');
+          if (!recipientPsid) {
+            return res.status(400).json({ error: 'No Facebook recipient found for this conversation' });
+          }
           if (content) {
             const result = await facebookService.sendMessage(
               conversation.connectedAccountId,
-              conversation.platformConversationId,
+              recipientPsid,
               content
             );
             platformMessageId = result.message_id;
@@ -331,7 +395,7 @@ router.post('/send', authenticate, upload.array('attachments', 10), async (req, 
           for (const file of files) {
             const result = await facebookService.sendAttachment(
               conversation.connectedAccountId,
-              conversation.platformConversationId,
+              recipientPsid,
               file
             );
             const meta = {
@@ -349,7 +413,10 @@ router.post('/send', authenticate, upload.array('attachments', 10), async (req, 
           break;
         }
         case 'instagram': {
-          const igRecipientId = conversation.contact?.platformUserId || conversation.platformConversationId;
+          const igRecipientId = await resolveMetaRecipientId(conversation, 'instagram');
+          if (!igRecipientId) {
+            return res.status(400).json({ error: 'No Instagram recipient found for this conversation' });
+          }
           if (content) {
             const result = await instagramService.sendMessage(
               conversation.connectedAccountId,
@@ -409,29 +476,140 @@ router.post('/send', authenticate, upload.array('attachments', 10), async (req, 
             return res.status(400).json({ error: 'No recipient email found for this Gmail conversation' });
           }
 
+          // ── Fetch the last message for subject + threading headers ──────
+          const lastMsg = await prisma.message.findFirst({
+            where: { conversationId: conversation.id },
+            orderBy: { sentAt: 'desc' },
+            select: { platformMessageId: true, subject: true, content: true, sender: true, sentAt: true, rawPayload: true },
+          });
+
+          // ── Subject ──────────────────────────────────────────────────────
           let subject;
           if (reqSubject) {
             subject = reqSubject;
           } else {
-            const lastMsg = await prisma.message.findFirst({
-              where: { conversationId: conversation.id },
-              orderBy: { sentAt: 'desc' },
-              select: { subject: true },
-            });
-            subject = lastMsg?.subject
-              ? (lastMsg.subject.startsWith('Re:') ? lastMsg.subject : `Re: ${lastMsg.subject}`)
-              : 'Re:';
+            const baseSubject = lastMsg?.subject || '';
+            // Strip leading Re:/RE:/re: (case-insensitive) before adding our own
+            const stripped = baseSubject.replace(/^re:\s*/i, '').trim();
+            subject = stripped ? `Re: ${stripped}` : 'Re:';
           }
 
-          const result = await gmailService.sendEmail(
+          // ── Threading headers ────────────────────────────────────────────
+          // Step 1: Try rawPayload fast path — Message-ID is stored for all
+          //         inbound messages and most outbound messages.
+          let inReplyToMsgId = null;
+          let references     = null;
+
+          if (lastMsg?.rawPayload) {
+            const rawHeaders = lastMsg.rawPayload?.payload?.headers || [];
+            const getHdr = (name) =>
+              rawHeaders.find((h) => h.name?.toLowerCase() === name.toLowerCase())?.value || null;
+
+            inReplyToMsgId = getHdr('Message-ID');
+            const existingRefs = getHdr('References');
+
+            if (inReplyToMsgId) {
+              references = [existingRefs, inReplyToMsgId].filter(Boolean).join(' ');
+            }
+          }
+
+          // Step 2: rawPayload can be null for outbound messages when Gmail
+          // hasn't indexed them yet at the time we tried to fetch the metadata
+          // (race condition). Fall back to a live thread fetch — this guarantees
+          // In-Reply-To is always set, which is required for proper threading on
+          // the recipient's email client.
+          if (!inReplyToMsgId && conversation.platformConversationId) {
+            try {
+              const gmailForFallback = await gmailService.getGmailClient(conversation.connectedAccountId);
+              const threadRes = await gmailForFallback.users.threads.get({
+                userId: 'me',
+                id: conversation.platformConversationId,
+                format: 'metadata',
+                metadataHeaders: ['Message-ID', 'References'],
+              });
+              const threadMsgs = threadRes.data.messages || [];
+              if (threadMsgs.length > 0) {
+                const allIds = threadMsgs
+                  .map((m) => m.payload?.headers?.find((h) => h.name.toLowerCase() === 'message-id')?.value)
+                  .filter(Boolean);
+                inReplyToMsgId = allIds[allIds.length - 1] || null;
+                references     = allIds.join(' ') || null;
+                console.log('[Gmail] Threading from live thread fetch:', { inReplyToMsgId, msgCount: threadMsgs.length });
+              }
+            } catch (threadFetchErr) {
+              console.warn('[Gmail] Live thread fetch for In-Reply-To failed:', threadFetchErr.message);
+            }
+          }
+
+          // ── Quoted body ──────────────────────────────────────────────────
+          // Append Gmail-style quoted reply so the recipient sees conversation
+          // context. Only added when replying to an existing message.
+          let bodyToSend = content || '';
+          if (lastMsg?.content?.trim()) {
+            const dateStr = lastMsg.sentAt
+              ? new Date(lastMsg.sentAt).toLocaleString('en-US', {
+                  weekday: 'short', year: 'numeric', month: 'short', day: 'numeric',
+                  hour: 'numeric', minute: '2-digit', hour12: true,
+                })
+              : '';
+            const quotedLines = lastMsg.content.trim()
+              .split('\n')
+              .map((line) => `> ${line}`)
+              .join('\n');
+            bodyToSend =
+              `${bodyToSend}\r\n\r\nOn ${dateStr}, ${lastMsg.sender || 'Unknown'} wrote:\r\n${quotedLines}`;
+          }
+
+          // ── Send ─────────────────────────────────────────────────────────
+          const gmailResult = await gmailService.sendEmail(
             conversation.connectedAccountId,
             recipientEmail,
             subject,
-            content || '',
+            bodyToSend,
             conversation.platformConversationId,
-            files
+            files,
+            { inReplyToMsgId, references },
           );
-          platformMessageId = result.id;
+
+          // ── Fetch RFC 2822 Message-ID from the sent message ──────────
+          // messages.send returns only the Gmail API id and threadId, not the
+          // email-level Message-ID header. We fetch it and store in rawPayload
+          // so future replies can extract In-Reply-To without an extra API call.
+          // Gmail sometimes takes a moment to index a newly sent message, so we
+          // retry once with a short delay if the first attempt fails.
+          try {
+            const gmailForMeta = await gmailService.getGmailClient(conversation.connectedAccountId);
+            const fetchMeta = () => gmailForMeta.users.messages.get({
+              userId: 'me',
+              id: gmailResult.id,
+              format: 'metadata',
+              metadataHeaders: ['Message-ID', 'References', 'In-Reply-To'],
+            });
+            let sentFull;
+            try {
+              sentFull = await fetchMeta();
+            } catch {
+              // Gmail may not have indexed the message yet — wait and retry once
+              await new Promise((r) => setTimeout(r, 1500));
+              sentFull = await fetchMeta();
+            }
+            sentRawPayload = sentFull.data;
+          } catch (fetchErr) {
+            console.warn('[Gmail API] Could not fetch sent message metadata (non-fatal):', fetchErr.message);
+          }
+
+          console.log('[Gmail API] Email sent successfully:', {
+            to: recipientEmail,
+            subject,
+            messageId: gmailResult.id,
+            threadId: gmailResult.threadId,
+            inReplyTo: inReplyToMsgId || '(none — first message in thread)',
+            rfc2822MessageId: sentRawPayload?.payload?.headers?.find(
+              (h) => h.name.toLowerCase() === 'message-id'
+            )?.value || '(not fetched)',
+          });
+
+          platformMessageId = gmailResult.id;
 
           for (const file of files) {
             const meta = {
@@ -473,24 +651,18 @@ router.post('/send', authenticate, upload.array('attachments', 10), async (req, 
       else contentType = 'file';
     }
 
-    // For gmail, resolve the subject to store with the message
+    // For gmail, the subject was already resolved above — reuse it here.
     let savedSubject = null;
     if (platform === 'gmail') {
-      if (reqSubject) {
-        savedSubject = reqSubject;
-      } else {
-        const lastMsg = await prisma.message.findFirst({
-          where: { conversationId: conversation.id },
-          orderBy: { sentAt: 'desc' },
-          select: { subject: true },
-        });
-        savedSubject = lastMsg?.subject
-          ? (lastMsg.subject.startsWith('Re:') ? lastMsg.subject : `Re: ${lastMsg.subject}`)
-          : 'Re:';
-      }
+      // `subject` is already the resolved value from the Gmail case above
+      savedSubject = typeof subject !== 'undefined' ? subject : null;
     }
 
     // Save message to DB
+    // For Gmail outbound messages, store the metadata payload so that future
+    // replies can read the RFC 2822 Message-ID without a live API call.
+    const rawPayloadToStore = platform === 'gmail' && sentRawPayload ? sentRawPayload : undefined;
+
     const message = await prisma.message.create({
       data: {
         conversationId: conversation.id,
@@ -501,6 +673,7 @@ router.post('/send', authenticate, upload.array('attachments', 10), async (req, 
         content: content || (attachmentMeta.length > 0 ? `[${attachmentMeta.map(a => a.filename).join(', ')}]` : ''),
         contentType,
         attachments: attachmentMeta.length > 0 ? attachmentMeta : undefined,
+        rawPayload: rawPayloadToStore,
         status: 'sent',
         sentAt: new Date(),
       },

@@ -1,5 +1,15 @@
 import 'dotenv/config';
+import { execSync } from 'child_process';
 import express from 'express';
+
+// Run pending migrations before the server starts.
+// Safe to call on every boot — no-ops when DB is up to date.
+try {
+  execSync('npx prisma migrate deploy', { stdio: 'inherit' });
+} catch (err) {
+  console.error('[Startup] prisma migrate deploy failed:', err.message);
+  process.exit(1);
+}
 import cors from 'cors';
 import http from 'http';
 import { Server } from 'socket.io';
@@ -16,10 +26,26 @@ import subscriptionRoutes from './routes/subscription.js';
 import onboardingRoutes from './routes/onboarding.js';
 import leadRoutes from './routes/leads.js';
 import invoiceRoutes from './routes/invoices.js';
+import profileRoutes from './routes/profile.js';
+import teamRoutes from './routes/team.js';
+import planRoutes from './routes/plan.js';
+import aiRoutes from './routes/ai.js';
+import aiTrainingRoutes from './routes/ai-training.js';
 import metaWebhook from './webhooks/meta.js';
 import gmailWebhook from './webhooks/gmail.js';
 import { renewExpiringWatches, reRegisterAllWatches } from './services/gmail.js';
 import prisma from './utils/prisma.js';
+import { authenticate, requireActiveSubscription } from './middleware/auth.js';
+
+// Routes that handle paid product features. Gating them at mount-time means
+// every endpoint inside automatically inherits the subscription check.
+// Routes that must stay accessible WITHOUT a paid subscription:
+//   - /auth/*               (login, register, forgot password)
+//   - /api/profile          (user must always be able to update their profile)
+//   - /api/subscription     (user must always be able to manage billing)
+//   - /api/onboarding       (must run during the trial / onboarding window)
+//   - /api/team             (workspace owner manages team independently)
+const requirePaidAccess = [authenticate, requireActiveSubscription];
 import { sendEmail } from './utils/email.js';
 import { sendWelcomeEmail } from './emails/senders/sendWelcomeEmail.js';
 
@@ -84,7 +110,15 @@ app.use('/webhooks', express.raw({ type: 'application/json' }));
 app.use('/api/subscription/webhook', express.raw({ type: 'application/json' }));
 
 // Standard middleware
-app.use(cors({ origin: allowedOrigins, credentials: true }));
+const corsOptions = {
+  origin: allowedOrigins,
+  credentials: true,
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+};
+app.use(cors(corsOptions));
+// Explicitly handle pre-flight OPTIONS for all routes (required for multipart uploads)
+app.options('*', cors(corsOptions));
 app.use(express.json());
 
 // Auth routes (no /api prefix — OAuth redirects)
@@ -94,14 +128,54 @@ app.use('/auth/facebook', facebookRoutes);
 app.use('/auth/instagram', instagramRoutes);
 app.use('/auth/whatsapp', whatsappRoutes);
 
-// API routes
-app.use('/api/conversations', conversationRoutes);
-app.use('/api/messages', messageRoutes);
-app.use('/api/accounts', accountRoutes);
+// API routes — gated routes require an active paid plan / live trial
+app.use('/api/conversations', requirePaidAccess, conversationRoutes);
+app.use('/api/messages',      requirePaidAccess, messageRoutes);
+app.use('/api/accounts',      requirePaidAccess, accountRoutes);
+app.use('/api/leads',         requirePaidAccess, leadRoutes);
+// Invoices: NOT mounted with the gate because /api/invoices/public/:slug
+// must stay reachable for unauthenticated invoice viewers. The gate is
+// applied per-handler inside the route file via requireActiveSubscription.
+app.use('/api/invoices',      invoiceRoutes);
+
+// Open routes — accessible regardless of subscription status
 app.use('/api/subscription', subscriptionRoutes);
-app.use('/api/onboarding', onboardingRoutes);
-app.use('/api/leads', leadRoutes);
-app.use('/api/invoices', invoiceRoutes);
+app.use('/api/onboarding',   onboardingRoutes);
+app.use('/api/profile',      profileRoutes);
+app.use('/api/team',         teamRoutes);
+// Plan usage + limits — always accessible so the UI can render counters
+// and upgrade prompts regardless of subscription status.
+app.use('/api/plan',         planRoutes);
+// AI reply generation — gated by requireActiveSubscription inside the
+// route itself so we can return a proper plan-limit JSON on quota hits.
+app.use('/api/ai',           aiRoutes);
+app.use('/api/ai-training',  authenticate, aiTrainingRoutes);
+
+// Alias: GET /api/user/onboarding-status
+// Mirrors /api/onboarding/status. Kept as a thin alias because some clients
+// expect the user-namespaced path. Returns the same canonical shape:
+//   { onboardingCompleted, hasOrganization, platformsConnected, ... }
+app.get('/api/user/onboarding-status', authenticate, async (req, res) => {
+  const user = await prisma.user.findUnique({
+    where: { id: req.user.id },
+    select: {
+      onboardingStep: true,
+      onboardingCompleted: true,
+      companyName: true,
+    },
+  });
+  if (!user) return res.status(404).json({ error: 'User not found' });
+  const platformCount = await prisma.connectedAccount.count({
+    where: { userId: req.user.id, status: 'active' },
+  });
+  res.json({
+    onboardingCompleted: user.onboardingCompleted,
+    hasOrganization: !!user.companyName,
+    platformsConnected: platformCount > 0,
+    platformCount,
+    onboardingStep: user.onboardingStep,
+  });
+});
 
 // Webhook routes
 app.use('/webhooks/meta', metaWebhook);
@@ -190,4 +264,11 @@ server.listen(PORT, () => {
       console.error('[Startup] Gmail watch re-registration failed:', err.message);
     });
   }, 10000);
+
+  // Keep Neon free tier awake — ping DB every 4 minutes to prevent cold starts
+  setInterval(async () => {
+    try {
+      await prisma.$queryRaw`SELECT 1`;
+    } catch { /* silent — next real query will reconnect */ }
+  }, 4 * 60 * 1000);
 });

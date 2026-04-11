@@ -7,6 +7,8 @@ import { authenticate } from '../middleware/auth.js';
 import * as gmailService from '../services/gmail.js';
 import * as gmailSyncService from '../services/gmail.service.js';
 import prisma from '../utils/prisma.js';
+import { getOrCreateStripeCustomer } from '../utils/stripe.js';
+import { assertCanConnectPlatform } from '../services/planGuard.js';
 
 const router = Router();
 
@@ -26,8 +28,11 @@ router.get('/', (req, res) => {
 });
 
 // GET /auth/gmail/start — Gmail channel connection (authenticated, returns JSON)
-router.get('/start', authenticate, (req, res) => {
-  const state = Buffer.from(JSON.stringify({ userId: req.user.id, mode: 'connect' })).toString('base64url');
+router.get('/start', authenticate, async (req, res) => {
+  // Phase 1: log-only plan guard (never blocks).
+  try { await assertCanConnectPlatform(req.user, 'gmail', { context: 'gmail/start' }); } catch (_) {}
+  const popup = String(req.query.popup || '') === '1';
+  const state = Buffer.from(JSON.stringify({ userId: req.user.id, mode: 'connect', popup })).toString('base64url');
   const url = gmailService.getAuthUrl(state);
   res.json({ url });
 });
@@ -35,13 +40,14 @@ router.get('/start', authenticate, (req, res) => {
 // GET /auth/gmail/connect — Gmail channel connection via browser redirect
 router.get('/connect', (req, res) => {
   const { token } = req.query;
+  const popup = String(req.query.popup || '') === '1';
   if (!token) {
     return res.redirect(`${getFrontendUrl()}/login?error=auth_required`);
   }
 
   try {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    const state = Buffer.from(JSON.stringify({ userId: decoded.userId, mode: 'connect' })).toString('base64url');
+    const state = Buffer.from(JSON.stringify({ userId: decoded.userId, mode: 'connect', popup })).toString('base64url');
     const url = gmailService.getAuthUrl(state);
     res.redirect(url);
   } catch {
@@ -52,21 +58,73 @@ router.get('/connect', (req, res) => {
 // GET /auth/gmail/callback — handles BOTH login and channel connection
 router.get('/callback', async (req, res) => {
   const frontendUrl = getFrontendUrl();
+  const sendPopupResponse = (payload) => {
+    const json = JSON.stringify(payload);
+    const html = `<!doctype html><html><head><meta charset="utf-8"/></head><body>
+      <script>
+        try {
+          if (window.opener) {
+            window.opener.postMessage(${json}, "${frontendUrl}");
+          }
+        } catch (e) {}
+        window.close();
+      </script>
+    </body></html>`;
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    return res.status(200).send(html);
+  };
   let mode = 'login';
+  let connectUserId = null;
+  let popup = false;
 
-  const redirectWithError = (errorCode) => {
-    const target = mode === 'connect' ? `${frontendUrl}/connections` : `${frontendUrl}/login`;
+  const resolveConnectTarget = async () => {
+    if (!connectUserId) return `${frontendUrl}/connections`;
+    try {
+      const u = await prisma.user.findUnique({ where: { id: connectUserId }, select: { onboardingStep: true } });
+      return u && u.onboardingStep < 4 ? `${frontendUrl}/onboarding` : `${frontendUrl}/connections`;
+    } catch {
+      return `${frontendUrl}/connections`;
+    }
+  };
+
+  const redirectWithError = async (errorCode) => {
+    const target = mode === 'connect' ? await resolveConnectTarget() : `${frontendUrl}/login`;
     return res.redirect(`${target}?error=${encodeURIComponent(errorCode)}`);
   };
 
   try {
     const { code, state } = req.query;
     if (!code || !state) {
-      return redirectWithError('missing_code_or_state');
+      // Google sends state back even on cancel. Parse it so we know whether
+      // the user was in login vs connect mode and can redirect correctly.
+      if (state) {
+        try {
+          const parsed = JSON.parse(Buffer.from(state, 'base64url').toString());
+          mode = parsed.mode || 'login';
+          connectUserId = parsed.userId || null;
+          popup = Boolean(parsed.popup);
+          if (popup) {
+            return sendPopupResponse({
+              type: 'auradesk:connect',
+              platform: 'gmail',
+              status: 'error',
+              reason: 'cancelled',
+            });
+          }
+          // Connect-mode cancel: resolve onboarding vs connections target and
+          // use the platform-named ?error= param so OnboardingPage can display it.
+          if (mode === 'connect') {
+            const target = await resolveConnectTarget();
+            return res.redirect(`${target}?error=gmail&reason=cancelled`);
+          }
+        } catch { }
+      }
+      return redirectWithError('cancelled');
     }
 
     const stateData = JSON.parse(Buffer.from(state, 'base64url').toString());
     mode = stateData.mode || 'login';
+    popup = Boolean(stateData.popup);
 
     if (stateData.mode === 'login') {
       // === LOGIN FLOW ===
@@ -99,12 +157,33 @@ router.get('/callback', async (req, res) => {
         });
       }
 
+      // Provision Stripe customer eagerly (non-fatal). Without this, Google-login
+      // users never get a customer created at signup and rely entirely on the
+      // lazy fallback in create-checkout — which fails if a stale ID exists.
+      try {
+        await getOrCreateStripeCustomer(user);
+      } catch (e) {
+        console.warn(`[auth/google] Stripe customer creation deferred for ${user.email}: ${e.message}`);
+      }
+
+      // Decide where to send the user after login — same logic as email login in
+      // LoginPage.jsx so Google users aren't bypassing the pricing page.
+      const hasActivePlan =
+        (['starter', 'pro', 'elite'].includes(user.plan)) ||
+        (user.plan === 'trial' && user.trialEndsAt && new Date() < new Date(user.trialEndsAt));
+      const next = !hasActivePlan
+        ? '/pricing'
+        : !user.onboardingCompleted
+          ? '/onboarding'
+          : '/inbox';
+
       // Issue JWT and redirect to frontend dashboard
       const token = jwt.sign({ userId: user.id }, process.env.JWT_SECRET, { expiresIn: '7d' });
-      res.redirect(`${frontendUrl}/dashboard?token=${token}`);
+      res.redirect(`${frontendUrl}/dashboard?token=${token}&next=${encodeURIComponent(next)}`);
     } else {
       // === CHANNEL CONNECTION FLOW ===
       const { userId } = stateData;
+      connectUserId = userId;
       if (!userId) {
         return redirectWithError('missing_user_id');
       }
@@ -125,6 +204,14 @@ router.get('/callback', async (req, res) => {
       }
 
       // Redirect to onboarding if user hasn't completed it, otherwise connections page
+      if (popup) {
+        return sendPopupResponse({
+          type: 'auradesk:connect',
+          platform: 'gmail',
+          status: 'success',
+        });
+      }
+
       const user = await prisma.user.findUnique({ where: { id: userId }, select: { onboardingStep: true } });
       const redirectPath = (user && user.onboardingStep < 4) ? '/onboarding' : '/connections';
       res.redirect(`${frontendUrl}${redirectPath}?success=gmail`);
@@ -132,9 +219,26 @@ router.get('/callback', async (req, res) => {
   } catch (err) {
     console.error('Gmail callback error:', err);
     if (err.code === 'DUPLICATE_ACCOUNT') {
-      return res.redirect(`${frontendUrl}/connections?error=gmail&reason=${encodeURIComponent(err.message)}`);
+      const target = await resolveConnectTarget();
+      if (popup) {
+        return sendPopupResponse({
+          type: 'auradesk:connect',
+          platform: 'gmail',
+          status: 'error',
+          reason: err.message,
+        });
+      }
+      return res.redirect(`${target}?error=gmail&reason=${encodeURIComponent(err.message)}`);
     }
-    redirectWithError('google_auth_failed');
+    if (popup) {
+      return sendPopupResponse({
+        type: 'auradesk:connect',
+        platform: 'gmail',
+        status: 'error',
+        reason: 'google_auth_failed',
+      });
+    }
+    await redirectWithError('google_auth_failed');
   }
 });
 

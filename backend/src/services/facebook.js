@@ -1,5 +1,6 @@
 import axios from 'axios';
 import fs from 'fs';
+import { Readable } from 'stream';
 import FormData from 'form-data';
 import prisma from '../utils/prisma.js';
 import { encrypt, decrypt } from '../utils/encryption.js';
@@ -32,8 +33,8 @@ function getFacebookRedirectUri() {
   return process.env.FACEBOOK_REDIRECT_URI || DEFAULT_FACEBOOK_REDIRECT_URI;
 }
 
-export function encodeConnectState(userId) {
-  return Buffer.from(JSON.stringify({ userId, mode: 'connect' })).toString('base64url');
+export function encodeConnectState(userId, options = {}) {
+  return Buffer.from(JSON.stringify({ userId, mode: 'connect', ...options })).toString('base64url');
 }
 
 export function decodeConnectState(state) {
@@ -158,7 +159,7 @@ export async function handleCallbackWithToken(shortLivedToken, userId) {
   if (!pages || pages.length === 0) {
     throw new Error(
       'No Facebook Pages found. Make sure: (1) You are admin of a Facebook Page, (2) Your Meta app has pages_show_list permission, (3) You granted page access during OAuth. Raw response: ' +
-        JSON.stringify(pagesRes.data)
+      JSON.stringify(pagesRes.data)
     );
   }
 
@@ -300,19 +301,60 @@ export async function sendMessage(connectedAccountId, recipientPsid, text) {
 
   const pageAccessToken = decrypt(authToken.accessTokenEncrypted);
 
-  const res = await axios.post(
-    `${GRAPH_API}/me/messages`,
-    {
-      recipient: { id: recipientPsid },
-      messaging_type: 'RESPONSE',
-      message: { text },
-    },
-    {
-      params: { access_token: pageAccessToken },
-    }
-  );
+  // Check token expiry and warn if near/past expiry
+  if (authToken.expiresAt && new Date(authToken.expiresAt) < new Date()) {
+    console.warn('[Facebook] Page token may be expired, expiresAt:', authToken.expiresAt);
+  }
 
-  return res.data;
+  console.log('[Facebook] Sending message to PSID:', recipientPsid?.slice(-6), '| connectedAccountId:', connectedAccountId);
+
+  try {
+    const res = await axios.post(
+      `${GRAPH_API}/me/messages`,
+      {
+        recipient: { id: recipientPsid },
+        messaging_type: 'RESPONSE',
+        message: { text },
+      },
+      {
+        params: { access_token: pageAccessToken },
+      }
+    );
+    console.log('[Facebook] Message sent successfully, message_id:', res.data.message_id);
+    return res.data;
+  } catch (err) {
+    const fbError = err.response?.data?.error;
+    if (fbError) {
+      console.error('[Facebook] API error sending message:', {
+        code: fbError.code,
+        type: fbError.type,
+        message: fbError.message,
+        error_subcode: fbError.error_subcode,
+        fbtrace_id: fbError.fbtrace_id,
+      });
+
+      // Error code 10 / subcode 2018109 = outside 24-hour messaging window.
+      // Retry with HUMAN_AGENT tag which extends the window to 7 days.
+      if (fbError.code === 10 || fbError.error_subcode === 2018109) {
+        console.log('[Facebook] Outside standard messaging window — retrying with HUMAN_AGENT tag');
+        const retryRes = await axios.post(
+          `${GRAPH_API}/me/messages`,
+          {
+            recipient: { id: recipientPsid },
+            messaging_type: 'MESSAGE_TAG',
+            tag: 'HUMAN_AGENT',
+            message: { text },
+          },
+          {
+            params: { access_token: pageAccessToken },
+          }
+        );
+        console.log('[Facebook] HUMAN_AGENT message sent, message_id:', retryRes.data.message_id);
+        return retryRes.data;
+      }
+    }
+    throw err;
+  }
 }
 
 export async function sendAttachment(connectedAccountId, recipientPsid, file) {
@@ -329,24 +371,42 @@ export async function sendAttachment(connectedAccountId, recipientPsid, file) {
   else if (file.mimetype.startsWith('video/')) type = 'video';
   else if (file.mimetype.startsWith('audio/')) type = 'audio';
 
+  console.log('[Facebook] Sending attachment:', { type, filename: file.originalname, recipientPsid: recipientPsid?.slice(-6) });
+
   const form = new FormData();
   form.append('recipient', JSON.stringify({ id: recipientPsid }));
   form.append('messaging_type', 'RESPONSE');
   form.append('message', JSON.stringify({
     attachment: { type, payload: { is_reusable: false } },
   }));
-  form.append('filedata', fs.createReadStream(file.path), {
+  const fileStream = file.path
+    ? fs.createReadStream(file.path)
+    : Readable.from(file.buffer || []);
+  form.append('filedata', fileStream, {
     filename: file.originalname,
     contentType: file.mimetype,
   });
 
-  const res = await axios.post(`${GRAPH_API}/me/messages`, form, {
-    params: { access_token: pageAccessToken },
-    headers: form.getHeaders(),
-    maxContentLength: 26214400,
-  });
-
-  return res.data;
+  try {
+    const res = await axios.post(`${GRAPH_API}/me/messages`, form, {
+      params: { access_token: pageAccessToken },
+      headers: form.getHeaders(),
+      maxContentLength: 26214400,
+    });
+    console.log('[Facebook] Attachment sent successfully, message_id:', res.data.message_id);
+    return res.data;
+  } catch (err) {
+    const fbError = err.response?.data?.error;
+    if (fbError) {
+      console.error('[Facebook] API error sending attachment:', {
+        code: fbError.code,
+        type: fbError.type,
+        message: fbError.message,
+        fbtrace_id: fbError.fbtrace_id,
+      });
+    }
+    throw err;
+  }
 }
 
 export async function getUserProfile(pageAccessToken, psid) {

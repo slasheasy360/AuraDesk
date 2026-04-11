@@ -8,9 +8,10 @@ import {
   Smile, X, FileText, Image as ImageIcon, Reply, ChevronDown,
   ChevronUp, Download, UploadCloud, Play, Music, File as FileIcon, AlertCircle, RefreshCw,
   Star, Inbox, Clock, Sparkles, FileEdit, Trash2, ChevronLeft, ChevronRight,
-  RotateCw, Archive, MoreHorizontal, Bot, Link2, Users, Undo2,
+  RotateCw, Archive, MoreHorizontal, MoreVertical, Bot, Link2, Users, Undo2, Menu, Camera, Mic,
 } from 'lucide-react';
 import PlatformBadge, { PlatformIcon } from '../components/PlatformBadge.jsx';
+import { useLinkAccounts } from '../context/LinkAccountsContext.jsx';
 
 // ═══════════════════════════════════════════════════════════════════
 // DEFERRED LOADING HOOK — avoids skeleton flash for fast loads
@@ -108,6 +109,9 @@ export default function InboxPage() {
   const [selectedMessages, setSelectedMessages] = useState(new Set());
   const [currentPage, setCurrentPage] = useState(1);
   const [connectedPlatforms, setConnectedPlatforms] = useState(new Set());
+  // ── Mobile UI state ──
+  const { openLinkAccounts, onAccountsChanged } = useLinkAccounts();
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const draftTimerRef = useRef(null);
   const lastSavedDraftRef = useRef('');
 
@@ -121,6 +125,17 @@ export default function InboxPage() {
     const timer = setInterval(() => setTick((t) => t + 1), 60000);
     return () => clearInterval(timer);
   }, []);
+
+  // ── Instant disconnect reaction ──
+  // When a platform is disconnected via the Link Accounts modal, immediately
+  // remove its conversations from the list without waiting for a page refresh.
+  useEffect(() => {
+    return onAccountsChanged((platform) => {
+      setConversations((prev) => prev.filter((c) => c.connectedAccount?.platform !== platform));
+      // If the active conversation belonged to that platform, deselect it.
+      setActiveConversation((prev) => (prev?.connectedAccount?.platform === platform ? null : prev));
+    });
+  }, [onAccountsChanged]);
 
   const messagesEndRef = useRef(null);
   const replyBoxRef = useRef(null);
@@ -562,6 +577,38 @@ export default function InboxPage() {
     }
   }, [saveDraft]);
 
+  // ── AI Respond state ────────────────────────────────────────────────
+  const [aiSuggestion, setAiSuggestion] = useState(null);
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiError, setAiError] = useState(null);
+
+  const handleAiRespond = useCallback(async () => {
+    const activeId = conversationIdRef.current;
+    if (!activeId || aiLoading) return;
+    // Find the last inbound message to use as the prompt
+    const lastInbound = [...messages].reverse().find(m => m.direction === 'inbound');
+    const prompt = lastInbound?.content || newMessage.trim();
+    if (!prompt) return;
+
+    setAiLoading(true);
+    setAiError(null);
+    setAiSuggestion(null);
+    try {
+      const res = await api.post('/api/ai/generate-reply', {
+        conversationId: activeId,
+        prompt,
+        platform: activeConversationRef.current?.connectedAccount?.platform,
+      });
+      setAiSuggestion(res.data.reply);
+    } catch (err) {
+      const msg = err.response?.data?.error || 'AI generation failed';
+      setAiError(msg);
+      setTimeout(() => setAiError(null), 4000);
+    } finally {
+      setAiLoading(false);
+    }
+  }, [aiLoading, messages, newMessage]);
+
   useEffect(() => () => { if (draftTimerRef.current) clearTimeout(draftTimerRef.current); }, []);
 
   // ═══════════════════════════════════════════════════════════════════
@@ -640,10 +687,11 @@ export default function InboxPage() {
         messageCache.current.set(activeId, null);
         setUploadProgress(null);
         clearDraft(activeId);
-        if (!isEmail) {
-          setShowReplyBox(false);
-          setReplyingTo(null);
-        }
+        // Close the reply box and clear replyingTo on all platforms after a
+        // successful send. For Gmail this keeps the UX tight (the reply
+        // is now visible in the thread list above).
+        setShowReplyBox(false);
+        setReplyingTo(null);
       } catch (err) {
         const isRetryable = !err.response || err.response.status >= 500 || err.code === 'ECONNABORTED';
         if (isRetryable && attempt < MAX_RETRIES) {
@@ -1000,9 +1048,34 @@ export default function InboxPage() {
 
   if (conversationId) {
     return (
-      <div className="flex h-full bg-[#0c1a2e]">
+      <div className="flex flex-col h-full bg-[#0B1628] p-0 lg:p-5 gap-0 lg:gap-4 overflow-hidden">
+        {/* Page header — desktop only on conversation view (mobile uses chat header) */}
+        <div className="hidden lg:flex items-center justify-between gap-3 flex-shrink-0">
+          <h1 className="text-2xl sm:text-3xl font-bold text-white">Smart Inbox</h1>
+          <div className="flex items-center gap-3 flex-1 sm:flex-none justify-end">
+            <div className="relative flex-1 sm:w-72">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-white/40" size={16} />
+              <input
+                type="text"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search inbox"
+                className="w-full pl-9 pr-4 py-2.5 bg-[#0F1D33] border border-white/5 rounded-full text-sm text-white placeholder-white/40 focus:border-[#1787FE] focus:ring-1 focus:ring-[#1787FE] outline-none transition"
+              />
+            </div>
+            <button
+              onClick={openLinkAccounts}
+              className="flex items-center gap-2 px-4 py-2.5 bg-[#1787FE] hover:bg-[#1377e0] text-white text-sm font-semibold rounded-full transition whitespace-nowrap shadow-lg shadow-[#1787FE]/20"
+            >
+              <Link2 size={16} />
+              <span className="hidden sm:inline">LINK ACCOUNT</span>
+            </button>
+          </div>
+        </div>
+
+        <div className="flex flex-1 min-h-0 bg-white lg:rounded-2xl border-0 lg:border lg:border-gray-200 overflow-hidden lg:shadow-xl">
         {/* Filter panel — hidden on mobile when viewing conversation */}
-        <div className="hidden lg:flex w-64 flex-shrink-0 flex-col bg-[#0f1d33] border-r border-white/5">
+        <div className="hidden lg:flex w-[260px] flex-shrink-0 flex-col border-r border-gray-100">
           <FilterPanel
             activeFilter={activeFilter}
             setActiveFilter={setActiveFilter}
@@ -1011,12 +1084,14 @@ export default function InboxPage() {
             toggleSourceFilter={toggleSourceFilter}
             sourceCounts={sourceCounts}
             availableSourceFilters={availableSourceFilters}
+            conversationId={conversationId}
+            navigate={navigate}
           />
         </div>
 
         {/* Conversation area */}
         <div
-          className="flex-1 flex flex-col bg-[#0f1d33] rounded-tl-2xl"
+          className="flex-1 flex flex-col min-w-0"
           onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
           onDragLeave={() => setDragOver(false)}
           onDrop={handleDrop}
@@ -1034,18 +1109,18 @@ export default function InboxPage() {
           {conversationId && !activeConversation && messagesError ? (
             /* Error state — all retries exhausted */
             <>
-              <div className="border-b border-white/10 px-4 sm:px-6 py-3 flex items-center gap-3 bg-[#0f1d33]">
-                <button onClick={handleBackToList} className="text-gray-400 hover:text-white transition flex-shrink-0">
+              <div className="border-b border-gray-100 px-4 sm:px-6 py-3 flex items-center gap-3 bg-white">
+                <button onClick={handleBackToList} className="text-gray-500 hover:text-gray-800 transition flex-shrink-0">
                   <ArrowLeft size={20} />
                 </button>
-                <span className="text-sm text-gray-400">Conversation</span>
+                <span className="text-sm text-gray-500">Conversation</span>
               </div>
               <div className="flex-1 flex flex-col items-center justify-center text-center px-6">
-                <AlertCircle size={40} className="text-red-400 mb-3" />
-                <p className="text-sm font-medium text-gray-300 mb-1">{messagesError}</p>
+                <AlertCircle size={40} className="text-red-500 mb-3" />
+                <p className="text-sm font-medium text-gray-700 mb-1">{messagesError}</p>
                 <button
                   onClick={() => fetchMessages(conversationId, true)}
-                  className="mt-3 px-4 py-2 bg-primary-500 hover:bg-primary-600 text-white text-sm rounded-lg transition flex items-center gap-2"
+                  className="mt-3 px-4 py-2 bg-[#1787FE] hover:bg-[#1377e0] text-white text-sm rounded-lg transition flex items-center gap-2"
                 >
                   <RefreshCw size={14} />
                   Retry
@@ -1055,50 +1130,118 @@ export default function InboxPage() {
           ) : conversationId && !activeConversation ? (
             /* Loading skeleton */
             <>
-              <div className="border-b border-white/10 px-4 sm:px-6 py-3 flex items-center gap-3 bg-[#0f1d33]">
-                <button onClick={handleBackToList} className="text-gray-400 hover:text-white transition flex-shrink-0">
+              <div className="border-b border-gray-100 px-4 sm:px-6 py-3 flex items-center gap-3 bg-white">
+                <button onClick={handleBackToList} className="text-gray-500 hover:text-gray-800 transition flex-shrink-0">
                   <ArrowLeft size={20} />
                 </button>
-                <div className="w-10 h-10 rounded-full bg-white/10 animate-pulse flex-shrink-0" />
+                <div className="w-10 h-10 rounded-full bg-gray-200 animate-pulse flex-shrink-0" />
                 <div className="flex-1 min-w-0 space-y-2">
-                  <div className="h-4 w-32 bg-white/10 rounded animate-pulse" />
-                  <div className="h-3 w-20 bg-white/5 rounded animate-pulse" />
+                  <div className="h-4 w-32 bg-gray-200 rounded animate-pulse" />
+                  <div className="h-3 w-20 bg-gray-100 rounded animate-pulse" />
                 </div>
               </div>
-              <MessagesSkeleton dark />
+              <MessagesSkeleton />
             </>
           ) : conversationId && activeConversation ? (
             <>
-              {/* Chat header */}
-              <div className="border-b border-white/10 px-4 sm:px-6 py-3 flex items-center justify-between bg-[#0f1d33]">
-                <div className="flex items-center gap-3">
-                  <button onClick={handleBackToList} className="text-gray-400 hover:text-white transition flex-shrink-0">
-                    <ArrowLeft size={20} />
+              {/* MOBILE Chat header — dark navy */}
+              <div className="lg:hidden bg-[#0B1628] px-3 py-3 flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2 min-w-0">
+                  <button
+                    onClick={handleBackToList}
+                    className="w-9 h-9 rounded-lg bg-white/10 text-white flex items-center justify-center flex-shrink-0"
+                    aria-label="Back"
+                  >
+                    <ArrowLeft size={18} />
                   </button>
-                  <h2 className="font-semibold text-white truncate text-sm sm:text-base">
+                  <h2 className="font-semibold text-white truncate text-sm">
                     {getContactDisplayName(activeConversation.contact, platform)}
                   </h2>
-                  <PlatformBadge platform={platform} size="xs" />
+                  <span className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold flex-shrink-0 ${getPlatformBadgeStyle(platform)}`}>
+                    {getPlatformLabel(platform)}
+                  </span>
+                </div>
+                <div className="relative flex-shrink-0">
+                  <button
+                    onClick={() => setMobileMenuOpen((v) => !v)}
+                    className="w-9 h-9 rounded-lg text-white flex items-center justify-center hover:bg-white/10"
+                    aria-label="More options"
+                  >
+                    <MoreVertical size={18} />
+                  </button>
+                  {mobileMenuOpen && (
+                    <>
+                      <div className="fixed inset-0 z-30" onClick={() => setMobileMenuOpen(false)} />
+                      <div className="absolute right-0 top-full mt-1 w-48 bg-white rounded-xl shadow-2xl border border-gray-200 z-40 overflow-hidden">
+                        <button
+                          onClick={() => { toggleLead(conversationId); setMobileMenuOpen(false); }}
+                          className="w-full flex items-center gap-3 px-4 py-3 text-sm text-gray-700 hover:bg-gray-50 transition text-left"
+                        >
+                          <Users size={16} className={activeConversation?.isLead ? 'text-[#1787FE]' : 'text-gray-400'} />
+                          {activeConversation?.isLead ? 'Remove from Leads' : 'Mark as Lead'}
+                        </button>
+                        <button
+                          onClick={() => { toggleStar(conversationId); setMobileMenuOpen(false); }}
+                          className="w-full flex items-center gap-3 px-4 py-3 text-sm text-gray-700 hover:bg-gray-50 transition text-left"
+                        >
+                          <Star size={16} className={activeConversation?.isStarred ? 'text-yellow-500' : 'text-gray-400'} fill={activeConversation?.isStarred ? 'currentColor' : 'none'} />
+                          {activeConversation?.isStarred ? 'Unstar' : 'Star'}
+                        </button>
+                        {activeConversation?.isDeleted ? (
+                          <button
+                            onClick={() => { restoreConversation(conversationId); setMobileMenuOpen(false); }}
+                            className="w-full flex items-center gap-3 px-4 py-3 text-sm text-gray-700 hover:bg-gray-50 transition text-left"
+                          >
+                            <Undo2 size={16} className="text-gray-400" />
+                            Restore
+                          </button>
+                        ) : (
+                          <button
+                            onClick={() => { deleteConversation(conversationId); setMobileMenuOpen(false); }}
+                            className="w-full flex items-center gap-3 px-4 py-3 text-sm text-red-600 hover:bg-red-50 transition text-left"
+                          >
+                            <Trash2 size={16} />
+                            Move to Bin
+                          </button>
+                        )}
+                      </div>
+                    </>
+                  )}
+                </div>
+              </div>
+
+              {/* DESKTOP Chat header */}
+              <div className="hidden lg:flex border-b border-gray-100 px-4 sm:px-6 py-3 items-center justify-between bg-white">
+                <div className="flex items-center gap-3">
+                  <button onClick={handleBackToList} className="text-gray-500 hover:text-gray-800 transition flex-shrink-0">
+                    <ArrowLeft size={20} />
+                  </button>
+                  <h2 className="font-semibold text-gray-900 truncate text-sm sm:text-base">
+                    {getContactDisplayName(activeConversation.contact, platform)}
+                  </h2>
+                  <span className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold ${getPlatformBadgeStyle(platform)}`}>
+                    {getPlatformLabel(platform)}
+                  </span>
                 </div>
                 <div className="flex items-center gap-1">
                   <button
-                    onClick={() => toggleStar(conversationId)}
-                    className={`p-2 rounded-lg transition ${activeConversation?.isStarred ? 'text-yellow-400 hover:bg-yellow-500/10' : 'text-gray-400 hover:text-yellow-400 hover:bg-white/10'}`}
-                    title={activeConversation?.isStarred ? 'Unstar' : 'Star'}
-                  >
-                    <Star size={18} fill={activeConversation?.isStarred ? 'currentColor' : 'none'} />
-                  </button>
-                  <button
                     onClick={() => toggleLead(conversationId)}
-                    className={`p-2 rounded-lg transition ${activeConversation?.isLead ? 'text-primary-400 hover:bg-primary-500/10' : 'text-gray-400 hover:text-primary-400 hover:bg-white/10'}`}
+                    className={`p-2 rounded-lg transition ${activeConversation?.isLead ? 'text-[#1787FE] hover:bg-blue-50' : 'text-gray-400 hover:text-[#1787FE] hover:bg-gray-100'}`}
                     title={activeConversation?.isLead ? 'Remove from Leads' : 'Mark as Lead'}
                   >
                     <Users size={18} />
                   </button>
+                  <button
+                    onClick={() => toggleStar(conversationId)}
+                    className={`p-2 rounded-lg transition ${activeConversation?.isStarred ? 'text-yellow-500 hover:bg-yellow-50' : 'text-gray-400 hover:text-yellow-500 hover:bg-gray-100'}`}
+                    title={activeConversation?.isStarred ? 'Unstar' : 'Star'}
+                  >
+                    <Star size={18} fill={activeConversation?.isStarred ? 'currentColor' : 'none'} />
+                  </button>
                   {activeConversation?.isDeleted ? (
                     <button
                       onClick={() => restoreConversation(conversationId)}
-                      className="p-2 text-gray-400 hover:text-green-400 hover:bg-white/10 rounded-lg transition"
+                      className="p-2 text-gray-400 hover:text-green-600 hover:bg-gray-100 rounded-lg transition"
                       title="Restore from Bin"
                     >
                       <Undo2 size={18} />
@@ -1106,7 +1249,7 @@ export default function InboxPage() {
                   ) : (
                     <button
                       onClick={() => deleteConversation(conversationId)}
-                      className="p-2 text-gray-400 hover:text-red-400 hover:bg-white/10 rounded-lg transition"
+                      className="p-2 text-gray-400 hover:text-red-500 hover:bg-gray-100 rounded-lg transition"
                       title="Move to Bin"
                     >
                       <Trash2 size={18} />
@@ -1117,11 +1260,11 @@ export default function InboxPage() {
 
               {/* Messages area */}
               {(loadingMessages || showMessageSkeleton) && messages.length === 0 ? (
-                <MessagesSkeleton dark />
+                <MessagesSkeleton />
               ) : !loadingMessages && messages.length === 0 ? (
-                <div className="flex-1 flex flex-col items-center justify-center text-gray-500 px-6">
-                  <MessageSquare size={40} className="mb-3 text-gray-600" />
-                  <p className="text-sm text-gray-400">No messages yet</p>
+                <div className="flex-1 flex flex-col items-center justify-center text-gray-500 px-6 bg-white">
+                  <MessageSquare size={40} className="mb-3 text-gray-300" />
+                  <p className="text-sm text-gray-500">No messages yet</p>
                 </div>
               ) : isEmailPlatform ? (
                 <EmailThreadView
@@ -1133,7 +1276,7 @@ export default function InboxPage() {
                   messagesEndRef={messagesEndRef}
                 />
               ) : (
-                <div className="flex-1 overflow-y-auto px-3 sm:px-6 py-4 space-y-3 animate-fade-in bg-[#0c1a2e]">
+                <div className="flex-1 overflow-y-auto px-3 sm:px-6 py-4 space-y-3 animate-fade-in bg-white">
                   {messages.map((msg, idx) => {
                     const isOutbound = msg.direction === 'outbound';
                     const prevMsg = idx > 0 ? messages[idx - 1] : null;
@@ -1142,12 +1285,12 @@ export default function InboxPage() {
                       <div key={msg.id || `msg-${idx}`}>
                         {showDate && (
                           <div className="flex items-center justify-center my-4">
-                            <span className="text-xs px-3 py-1 rounded-full bg-white/10 text-gray-400">
+                            <span className="text-xs px-3 py-1 rounded-full bg-gray-100 text-gray-500">
                               {formatDate(msg.sentAt)}
                             </span>
                           </div>
                         )}
-                        {renderChatBubble(msg, isOutbound)}
+                        {renderChatBubble(msg, isOutbound, activeConversation?.contact, platform)}
                         {msg.status === 'failed' && (
                           <div className="flex justify-end items-center gap-2 mt-1 px-2">
                             <AlertCircle size={12} className="text-red-500" />
@@ -1174,8 +1317,8 @@ export default function InboxPage() {
 
               {/* Send error */}
               {sendError && (
-                <div className="px-4 sm:px-6 py-2 bg-red-500/10 border-t border-red-500/20">
-                  <p className="text-xs text-red-400">{sendError}</p>
+                <div className="px-4 sm:px-6 py-2 bg-red-50 border-t border-red-100">
+                  <p className="text-xs text-red-600">{sendError}</p>
                 </div>
               )}
 
@@ -1209,7 +1352,7 @@ export default function InboxPage() {
                 }}
               />
 
-              {/* Composer */}
+              {/* Composer — EmailReplyBox for Gmail, chat composer for all other platforms */}
               {isEmailPlatform ? (
                 <EmailReplyBox
                   ref={replyBoxRef}
@@ -1227,25 +1370,54 @@ export default function InboxPage() {
                     const lastMsg = messages[messages.length - 1];
                     openReplyBox(lastMsg || { subject: emailSubject });
                   }}
-                  onClose={() => { setShowReplyBox(false); setReplyingTo(null); setAttachments([]); }}
+                  onClose={() => { setShowReplyBox(false); setReplyingTo(null); }}
+                  onAiRespond={handleAiRespond}
+                  aiLoading={aiLoading}
+                  aiSuggestion={aiSuggestion}
+                  aiError={aiError}
+                  onAiUse={(text) => { handleNewMessageChange(text); setAiSuggestion(null); }}
+                  onAiDismiss={() => setAiSuggestion(null)}
                 />
               ) : (
                 <>
                   {attachments.length > 0 && (
                     <AttachmentPreview attachments={attachments} onRemove={removeAttachment} uploadProgress={uploadProgress} />
                   )}
-                  <ChatComposer
-                    newMessage={newMessage}
-                    setNewMessage={handleNewMessageChange}
-                    handleSend={handleSend}
-                    sending={sending}
-                    attachments={attachments}
-                    onAttachClick={() => fileInputRef.current?.click()}
-                  />
+                  {/* Desktop composer */}
+                  <div className="hidden lg:block">
+                    <ChatComposer
+                      newMessage={newMessage}
+                      setNewMessage={handleNewMessageChange}
+                      handleSend={handleSend}
+                      sending={sending}
+                      attachments={attachments}
+                      onAttachClick={() => fileInputRef.current?.click()}
+                      onAiRespond={handleAiRespond}
+                      aiLoading={aiLoading}
+                      aiSuggestion={aiSuggestion}
+                      aiError={aiError}
+                      onAiUse={(text) => { handleNewMessageChange(text); setAiSuggestion(null); }}
+                      onAiDismiss={() => setAiSuggestion(null)}
+                    />
+                  </div>
+                  {/* Mobile composer — dark navy with pill input */}
+                  <div className="lg:hidden">
+                    <MobileChatComposer
+                      newMessage={newMessage}
+                      setNewMessage={handleNewMessageChange}
+                      handleSend={handleSend}
+                      sending={sending}
+                      attachments={attachments}
+                      onAttachClick={() => fileInputRef.current?.click()}
+                      onAiRespond={handleAiRespond}
+                      aiLoading={aiLoading}
+                    />
+                  </div>
                 </>
               )}
             </>
           ) : null}
+        </div>
         </div>
       </div>
     );
@@ -1256,9 +1428,55 @@ export default function InboxPage() {
   // ═══════════════════════════════════════════════════════════════════
 
   return (
-    <div className="flex h-full bg-[#0c1a2e]">
+    <div className="flex flex-col h-full bg-[#0B1628] p-3 sm:p-5 gap-3 lg:gap-4 overflow-hidden">
+      {/* Page header */}
+      <div className="flex items-center justify-between gap-2 lg:gap-3 flex-shrink-0">
+        <div className="flex items-center gap-2 min-w-0">
+          {/* Hamburger — mobile only — toggles DashboardLayout sidebar via custom event */}
+          <button
+            type="button"
+            onClick={() => window.dispatchEvent(new CustomEvent('toggle-mobile-sidebar'))}
+            className="lg:hidden text-white p-1.5 flex-shrink-0"
+            aria-label="Open menu"
+          >
+            <Menu size={22} />
+          </button>
+          <h1 className="text-xl sm:text-2xl lg:text-3xl font-bold text-white truncate">Smart Inbox</h1>
+        </div>
+        <div className="flex items-center gap-2 lg:gap-3 flex-1 lg:flex-none justify-end min-w-0">
+          <div className="relative flex-1 lg:w-72 min-w-0">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-white/40" size={16} />
+            <input
+              type="text"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search"
+              className="w-full pl-9 pr-3 py-2 lg:py-2.5 bg-[#0F1D33] border border-white/5 rounded-full text-sm text-white placeholder-white/40 focus:border-[#1787FE] focus:ring-1 focus:ring-[#1787FE] outline-none transition"
+            />
+          </div>
+          {/* Mobile: round icon-only Link button */}
+          <button
+            onClick={openLinkAccounts}
+            className="lg:hidden w-10 h-10 rounded-full bg-[#1787FE] hover:bg-[#1377e0] text-white flex items-center justify-center flex-shrink-0 shadow-lg shadow-[#1787FE]/30"
+            aria-label="Link account"
+          >
+            <Link2 size={18} />
+          </button>
+          {/* Desktop: pill with label */}
+          <button
+            onClick={openLinkAccounts}
+            className="hidden lg:flex items-center gap-2 px-4 py-2.5 bg-[#1787FE] hover:bg-[#1377e0] text-white text-sm font-semibold rounded-full transition whitespace-nowrap shadow-lg shadow-[#1787FE]/20"
+          >
+            <Link2 size={16} />
+            <span>LINK ACCOUNT</span>
+          </button>
+        </div>
+      </div>
+
+      {/* Inbox card */}
+      <div className="flex flex-1 min-h-0 bg-white rounded-2xl border border-gray-200 overflow-hidden shadow-xl">
       {/* Filter Panel */}
-      <div className="hidden md:flex w-64 flex-shrink-0 flex-col bg-[#0f1d33] border-r border-white/5">
+      <div className="hidden lg:flex w-[260px] flex-shrink-0 flex-col border-r border-gray-100">
         <FilterPanel
           activeFilter={activeFilter}
           setActiveFilter={setActiveFilter}
@@ -1267,49 +1485,21 @@ export default function InboxPage() {
           toggleSourceFilter={toggleSourceFilter}
           sourceCounts={sourceCounts}
           availableSourceFilters={availableSourceFilters}
+          conversationId={null}
+          navigate={navigate}
         />
       </div>
 
       {/* Main content */}
-      <div className="flex-1 flex flex-col min-w-0 bg-[#0f1d33] rounded-tl-2xl">
-        {/* Top bar */}
-        <div className="flex items-center justify-between px-4 sm:px-6 py-4 border-b border-white/10">
-          <h1 className="text-xl font-bold text-white hidden sm:block">Smart Inbox</h1>
-          <div className="flex items-center gap-3 flex-1 sm:flex-none sm:ml-4">
-            <div className="relative flex-1 sm:w-72">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" size={16} />
-              <input
-                type="text"
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                placeholder="Search inbox"
-                className="w-full pl-9 pr-4 py-2.5 bg-white/5 border border-white/10 rounded-xl text-sm text-white placeholder-gray-500 focus:bg-white/10 focus:border-primary-400 focus:ring-1 focus:ring-primary-400 outline-none transition"
-              />
-            </div>
-            <button
-              onClick={() => navigate('/connections')}
-              className="flex items-center gap-2 px-4 py-2.5 bg-primary-500 hover:bg-primary-600 text-white text-sm font-semibold rounded-xl transition whitespace-nowrap"
-            >
-              <Link2 size={16} />
-              LINK ACCOUNT
-            </button>
-          </div>
-        </div>
-
+      <div className="flex-1 flex flex-col min-w-0">
         {/* Toolbar row */}
-        <div className="flex items-center gap-3 px-4 sm:px-6 py-2.5 border-b border-white/5">
+        <div className="flex items-center gap-3 px-4 sm:px-6 py-3 border-b border-gray-100">
           <input
             type="checkbox"
             checked={selectedMessages.size > 0 && selectedMessages.size === paginatedConversations.length}
             onChange={toggleSelectAll}
-            className="w-4 h-4 rounded border-gray-600 bg-transparent text-primary-500 focus:ring-primary-500 focus:ring-offset-0 cursor-pointer"
+            className="w-4 h-4 rounded border-gray-300 bg-white text-[#1787FE] focus:ring-[#1787FE] focus:ring-offset-0 cursor-pointer"
           />
-          <button className="p-1.5 text-gray-500 hover:text-gray-300 transition rounded" title="Refresh">
-            <RotateCw size={16} onClick={() => fetchConversations()} />
-          </button>
-          <button className="p-1.5 text-gray-500 hover:text-gray-300 transition rounded" title="More actions">
-            <MoreHorizontal size={16} />
-          </button>
         </div>
 
         {/* Message rows */}
@@ -1318,12 +1508,12 @@ export default function InboxPage() {
             <InboxListSkeleton />
           ) : filteredConversations.length === 0 && !loadingConversations ? (
             <div className="flex flex-col items-center justify-center h-full text-gray-500 px-6">
-              <MessageSquare size={48} className="mb-3 text-gray-600" />
-              <p className="text-sm font-medium text-gray-400">No conversations found</p>
-              <p className="text-xs mt-1 text-gray-600">Connect an account or adjust your filters</p>
+              <MessageSquare size={48} className="mb-3 text-gray-300" />
+              <p className="text-sm font-medium text-gray-600">No conversations found</p>
+              <p className="text-xs mt-1 text-gray-400">Connect an account or adjust your filters</p>
             </div>
           ) : (
-            paginatedConversations.map((conv) => {
+            paginatedConversations.map((conv, rowIdx) => {
               const lastMessage = conv.messages?.[0];
               const preview = lastMessage?.content
                 ? lastMessage.content.replace(/<[^>]+>/g, '').replace(/\n+/g, ' ').slice(0, 80)
@@ -1338,9 +1528,9 @@ export default function InboxPage() {
                 <button
                   key={conv.id}
                   onClick={() => handleSelectConversation(conv.id)}
-                  className={`w-full px-4 sm:px-6 py-3.5 flex items-center gap-3 border-b border-white/5 transition text-left group hover:bg-white/5 ${
-                    isUnread ? 'bg-white/[0.02]' : ''
-                  }`}
+                  className={`w-full px-4 sm:px-6 py-3.5 flex items-center gap-3 border-b border-gray-100 transition text-left group hover:bg-blue-50 ${
+                    rowIdx % 2 === 0 ? 'bg-white' : 'bg-[#F5F8FF]'
+                  } ${isUnread ? 'font-medium' : ''}`}
                 >
                   {/* Checkbox */}
                   <input
@@ -1348,19 +1538,19 @@ export default function InboxPage() {
                     checked={isSelected}
                     onChange={(e) => toggleSelectMessage(conv.id, e)}
                     onClick={(e) => e.stopPropagation()}
-                    className="w-4 h-4 rounded border-gray-600 bg-transparent text-primary-500 focus:ring-primary-500 focus:ring-offset-0 cursor-pointer flex-shrink-0"
+                    className="w-4 h-4 rounded border-gray-300 bg-white text-[#1787FE] focus:ring-[#1787FE] focus:ring-offset-0 cursor-pointer flex-shrink-0"
                   />
 
                   {/* Star */}
                   <button
                     onClick={(e) => toggleStar(conv.id, e)}
-                    className={`flex-shrink-0 transition ${isStarred ? 'text-yellow-400' : 'text-gray-600 hover:text-yellow-400'}`}
+                    className={`flex-shrink-0 transition ${isStarred ? 'text-yellow-400' : 'text-gray-300 hover:text-yellow-400'}`}
                   >
                     <Star size={16} fill={isStarred ? 'currentColor' : 'none'} />
                   </button>
 
                   {/* Sender name */}
-                  <span className={`w-36 truncate text-sm flex-shrink-0 ${isUnread ? 'font-semibold text-white' : 'text-gray-300'}`}>
+                  <span className={`w-36 truncate text-sm flex-shrink-0 ${isUnread ? 'font-semibold text-gray-900' : 'text-gray-700'}`}>
                     {getContactDisplayName(conv.contact, convPlatform)}
                   </span>
 
@@ -1370,17 +1560,17 @@ export default function InboxPage() {
                   </span>
 
                   {/* Message preview */}
-                  <span className={`flex-1 truncate text-sm ${isUnread ? 'text-gray-200' : 'text-gray-500'}`}>
+                  <span className={`flex-1 truncate text-sm ${isUnread ? 'text-gray-800' : 'text-gray-500'}`}>
                     {preview}
                   </span>
 
                   {/* Draft indicator */}
                   {conv.hasDraft && !isBinView && (
-                    <span className="text-xs text-orange-400 flex-shrink-0">Draft</span>
+                    <span className="text-xs text-orange-500 flex-shrink-0">Draft</span>
                   )}
 
                   {/* Timestamp */}
-                  <span className="text-xs text-gray-500 flex-shrink-0 ml-2">
+                  <span className="text-xs text-gray-400 flex-shrink-0 ml-2">
                     {formatTimeShort(conv.lastMessageAt)}
                   </span>
 
@@ -1389,14 +1579,14 @@ export default function InboxPage() {
                     <div className="flex items-center gap-1 ml-2 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0">
                       <button
                         onClick={(e) => restoreConversation(conv.id, e)}
-                        className="p-1 text-gray-500 hover:text-green-400 transition rounded"
+                        className="p-1 text-gray-400 hover:text-green-600 transition rounded"
                         title="Restore"
                       >
                         <Undo2 size={14} />
                       </button>
                       <button
                         onClick={(e) => permanentDeleteConversation(conv.id, e)}
-                        className="p-1 text-gray-500 hover:text-red-400 transition rounded"
+                        className="p-1 text-gray-400 hover:text-red-600 transition rounded"
                         title="Delete permanently"
                       >
                         <Trash2 size={14} />
@@ -1406,14 +1596,14 @@ export default function InboxPage() {
                     <div className="flex items-center gap-1 ml-2 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0">
                       <button
                         onClick={(e) => toggleLead(conv.id, e)}
-                        className={`p-1 transition rounded ${conv.isLead ? 'text-primary-400 hover:text-primary-300' : 'text-gray-500 hover:text-primary-400'}`}
+                        className={`p-1 transition rounded ${conv.isLead ? 'text-[#1787FE] hover:text-[#1377e0]' : 'text-gray-400 hover:text-[#1787FE]'}`}
                         title={conv.isLead ? 'Remove from Leads' : 'Mark as Lead'}
                       >
                         <Users size={14} />
                       </button>
                       <button
                         onClick={(e) => deleteConversation(conv.id, e)}
-                        className="p-1 text-gray-500 hover:text-red-400 transition rounded"
+                        className="p-1 text-gray-400 hover:text-red-600 transition rounded"
                         title="Move to Bin"
                       >
                         <Trash2 size={14} />
@@ -1428,7 +1618,7 @@ export default function InboxPage() {
 
         {/* Pagination */}
         {filteredConversations.length > 0 && (
-          <div className="flex items-center justify-between px-4 sm:px-6 py-3 border-t border-white/10 text-sm text-gray-400">
+          <div className="flex items-center justify-between px-4 sm:px-6 py-3 border-t border-gray-100 text-sm text-gray-500">
             <span>
               Showing {Math.min((currentPage - 1) * ITEMS_PER_PAGE + 1, filteredConversations.length)}-{Math.min(currentPage * ITEMS_PER_PAGE, filteredConversations.length)} of {filteredConversations.length.toLocaleString()}
             </span>
@@ -1436,14 +1626,14 @@ export default function InboxPage() {
               <button
                 onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
                 disabled={currentPage === 1}
-                className="p-1.5 rounded-lg border border-white/10 text-gray-400 hover:text-white hover:bg-white/5 transition disabled:opacity-30 disabled:cursor-not-allowed"
+                className="p-1.5 rounded-lg border border-gray-200 text-gray-500 hover:text-gray-700 hover:bg-gray-50 transition disabled:opacity-30 disabled:cursor-not-allowed"
               >
                 <ChevronLeft size={16} />
               </button>
               <button
                 onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
                 disabled={currentPage === totalPages}
-                className="p-1.5 rounded-lg border border-white/10 text-gray-400 hover:text-white hover:bg-white/5 transition disabled:opacity-30 disabled:cursor-not-allowed"
+                className="p-1.5 rounded-lg border border-gray-200 text-gray-500 hover:text-gray-700 hover:bg-gray-50 transition disabled:opacity-30 disabled:cursor-not-allowed"
               >
                 <ChevronRight size={16} />
               </button>
@@ -1451,6 +1641,9 @@ export default function InboxPage() {
           </div>
         )}
       </div>
+      </div>
+
+      {/* Link Accounts modal is mounted globally in DashboardLayout */}
     </div>
   );
 }
@@ -1459,7 +1652,8 @@ export default function InboxPage() {
 // FILTER PANEL COMPONENT
 // ═══════════════════════════════════════════════════════════════════
 
-function FilterPanel({ activeFilter, setActiveFilter, filterCounts, sourceFilters, toggleSourceFilter, sourceCounts, availableSourceFilters }) {
+function FilterPanel({ activeFilter, setActiveFilter, filterCounts, sourceFilters, toggleSourceFilter, sourceCounts, availableSourceFilters, conversationId, navigate }) {
+  const { openLinkAccounts } = useLinkAccounts();
   return (
     <div className="flex flex-col h-full py-4">
       {/* Filter categories */}
@@ -1470,20 +1664,23 @@ function FilterPanel({ activeFilter, setActiveFilter, filterCounts, sourceFilter
           return (
             <button
               key={key}
-              onClick={() => setActiveFilter(key)}
-              className={`w-full flex items-center justify-between px-3 py-2.5 rounded-lg text-sm transition ${
+              onClick={() => {
+                setActiveFilter(key);
+                if (conversationId) navigate('/inbox');
+              }}
+              className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-sm transition ${
                 isActive
-                  ? 'bg-primary-600/20 text-primary-400'
-                  : 'text-gray-400 hover:bg-white/5 hover:text-gray-200'
+                  ? 'bg-[#1787FE] text-white shadow-lg shadow-[#1787FE]/20'
+                  : 'text-gray-700 hover:bg-gray-100 hover:text-gray-900'
               }`}
             >
               <div className="flex items-center gap-3">
-                <Icon size={18} className={isActive ? 'text-primary-400' : 'text-gray-500'} />
-                <span className={isActive ? 'font-medium' : ''}>{label}</span>
+                <Icon size={18} className={isActive ? 'text-white' : 'text-gray-400'} />
+                <span className={isActive ? 'font-semibold' : ''}>{label}</span>
               </div>
               {count > 0 && (
                 <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${
-                  isActive ? 'bg-primary-500/20 text-primary-300' : 'text-gray-500'
+                  isActive ? 'bg-white/25 text-white' : 'text-gray-400'
                 }`}>
                   {count}
                 </span>
@@ -1507,22 +1704,27 @@ function FilterPanel({ activeFilter, setActiveFilter, filterCounts, sourceFilter
                   onClick={() => toggleSourceFilter(key)}
                   className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-sm transition ${
                     isActive
-                      ? 'bg-primary-600/20 text-primary-400'
-                      : 'text-gray-400 hover:bg-white/5 hover:text-gray-200'
+                      ? 'bg-blue-50 text-gray-900'
+                      : 'text-gray-700 hover:bg-gray-50 hover:text-gray-900'
                   }`}
                 >
                   <div className="flex items-center gap-3">
-                    <span className={`w-2 h-2 rounded-full flex-shrink-0 ${
-                      key === 'instagram' ? 'bg-pink-500' :
-                      key === 'facebook' ? 'bg-blue-500' :
-                      key === 'whatsapp' ? 'bg-green-500' :
-                      key === 'gmail' ? 'bg-red-500' : 'bg-gray-500'
-                    }`} />
+                    <span className={`w-4 h-4 rounded flex-shrink-0 flex items-center justify-center border ${
+                      isActive
+                        ? key === 'instagram' ? 'bg-orange-500 border-orange-500' :
+                          key === 'facebook' ? 'bg-blue-500 border-blue-500' :
+                          key === 'whatsapp' ? 'bg-green-500 border-green-500' :
+                          key === 'gmail' ? 'bg-red-500 border-red-500' :
+                          key === 'linkedin' ? 'bg-sky-500 border-sky-500' : 'bg-gray-500 border-gray-500'
+                        : 'bg-white border-gray-300'
+                    }`}>
+                      {isActive && <span className="text-white text-[10px] leading-none">✓</span>}
+                    </span>
                     <span className={isActive ? 'font-medium' : ''}>{label}</span>
                   </div>
                   {count > 0 && (
                     <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${
-                      isActive ? 'bg-primary-500/20 text-primary-300' : 'text-gray-500'
+                      isActive ? 'bg-blue-100 text-blue-700' : 'text-gray-400'
                     }`}>
                       {count}
                     </span>
@@ -1534,12 +1736,16 @@ function FilterPanel({ activeFilter, setActiveFilter, filterCounts, sourceFilter
         </div>
       )}
 
-      {/* Connect account link */}
+      {/* Connect account link — opens the global Link Accounts modal */}
       <div className="mt-4 px-6">
-        <a href="/connections" className="flex items-center gap-2 text-sm text-gray-500 hover:text-primary-400 transition">
+        <button
+          type="button"
+          onClick={openLinkAccounts}
+          className="flex items-center gap-2 text-sm text-gray-500 hover:text-[#1787FE] transition"
+        >
           <span className="text-lg leading-none">+</span>
           Connect account
-        </a>
+        </button>
       </div>
     </div>
   );
@@ -1549,18 +1755,86 @@ function FilterPanel({ activeFilter, setActiveFilter, filterCounts, sourceFilter
 // CHAT COMPOSER (dark theme, matching design)
 // ═══════════════════════════════════════════════════════════════════
 
-function ChatComposer({ newMessage, setNewMessage, handleSend, sending, attachments, onAttachClick }) {
+function ChatComposer({
+  newMessage, setNewMessage, handleSend, sending, attachments, onAttachClick,
+  onAiRespond, aiLoading, aiSuggestion, aiError, onAiUse, onAiDismiss,
+}) {
   const hasContent = newMessage.trim() || attachments.length > 0;
+  const [autoSend, setAutoSend] = useState(false);
+
+  const handleUseSuggestion = () => {
+    if (autoSend) {
+      onAiUse(aiSuggestion);
+      // Trigger send after state update
+      setTimeout(() => {
+        document.getElementById('chat-send-btn')?.click();
+      }, 50);
+    } else {
+      onAiUse(aiSuggestion);
+    }
+  };
 
   return (
-    <div className="border-t border-white/10 bg-[#0f1d33] px-4 sm:px-6 py-3">
+    <div className="border-t border-gray-100 bg-white px-4 sm:px-6 py-3 space-y-2">
+      {/* AI Suggestion Box */}
+      {(aiSuggestion || aiLoading || aiError) && (
+        <div className="rounded-xl border-2 border-dashed border-[#1787FE]/40 bg-blue-50/60 px-4 py-3 relative">
+          {aiLoading && (
+            <div className="flex items-center gap-2 text-sm text-gray-500">
+              <Sparkles size={14} className="text-[#1787FE] animate-pulse" />
+              Generating AI reply...
+            </div>
+          )}
+          {aiError && (
+            <div className="text-sm text-red-500">{aiError}</div>
+          )}
+          {aiSuggestion && (
+            <>
+              <p className="text-sm text-gray-800 leading-relaxed pr-24">{aiSuggestion}</p>
+              <div className="absolute top-2 right-2 flex flex-col gap-1.5 items-end">
+                <button
+                  onClick={() => { navigator.clipboard.writeText(aiSuggestion); }}
+                  className="px-3 py-1.5 text-xs font-semibold border border-gray-300 bg-white rounded-lg hover:bg-gray-50 transition whitespace-nowrap"
+                >
+                  Copy Text
+                </button>
+                <button
+                  onClick={handleUseSuggestion}
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-[#1787FE] text-white rounded-lg hover:bg-[#1377e0] transition whitespace-nowrap"
+                >
+                  Auto-Send
+                  <Send size={11} />
+                </button>
+                <label className="flex items-center gap-1 text-xs text-gray-500 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={autoSend}
+                    onChange={e => setAutoSend(e.target.checked)}
+                    className="w-3 h-3"
+                  />
+                  Always
+                </label>
+              </div>
+              <button
+                onClick={onAiDismiss}
+                className="absolute bottom-2 right-2 text-gray-300 hover:text-gray-500 transition"
+              >
+                <X size={13} />
+              </button>
+            </>
+          )}
+        </div>
+      )}
+
       <form onSubmit={handleSend} className="flex items-center gap-3">
-        {/* AI Respond button */}
+        {/* AI Respond pill */}
         <button
           type="button"
-          className="flex items-center gap-2 px-3 py-2 text-sm text-primary-400 hover:text-primary-300 hover:bg-primary-500/10 rounded-lg transition whitespace-nowrap"
+          onClick={onAiRespond}
+          disabled={aiLoading}
+          className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-[#1787FE] bg-blue-50 hover:bg-blue-100 rounded-full transition whitespace-nowrap disabled:opacity-50"
         >
-          <Bot size={16} />
+          <Sparkles size={14} className={aiLoading ? 'animate-pulse' : ''} />
           AI Respond
         </button>
 
@@ -1571,7 +1845,7 @@ function ChatComposer({ newMessage, setNewMessage, handleSend, sending, attachme
             value={newMessage}
             onChange={(e) => setNewMessage(e.target.value)}
             placeholder="Write message"
-            className="w-full px-4 py-2.5 bg-white/5 border border-white/10 rounded-xl text-sm text-white placeholder-gray-500 focus:bg-white/10 focus:border-primary-400 outline-none transition"
+            className="w-full px-4 py-2.5 bg-white border border-transparent rounded-xl text-sm text-gray-900 placeholder-gray-400 focus:border-[#1787FE] focus:ring-1 focus:ring-[#1787FE] outline-none transition"
           />
         </div>
 
@@ -1579,7 +1853,7 @@ function ChatComposer({ newMessage, setNewMessage, handleSend, sending, attachme
         <button
           type="button"
           onClick={onAttachClick}
-          className="p-2 text-gray-500 hover:text-gray-300 transition"
+          className="p-2 text-gray-400 hover:text-gray-700 transition"
           title="Attach file"
         >
           <Paperclip size={18} />
@@ -1588,16 +1862,17 @@ function ChatComposer({ newMessage, setNewMessage, handleSend, sending, attachme
         {/* Emoji */}
         <button
           type="button"
-          className="p-2 text-gray-500 hover:text-gray-300 transition hidden sm:block"
+          className="p-2 text-gray-400 hover:text-gray-700 transition hidden sm:block"
         >
           <Smile size={18} />
         </button>
 
         {/* Send */}
         <button
+          id="chat-send-btn"
           type="submit"
           disabled={!hasContent || sending}
-          className="flex items-center gap-2 px-4 py-2.5 bg-primary-500 hover:bg-primary-600 text-white text-sm font-medium rounded-xl transition disabled:opacity-40 disabled:cursor-not-allowed"
+          className="flex items-center gap-2 px-5 py-2.5 bg-[#1787FE] hover:bg-[#1377e0] text-white text-sm font-semibold rounded-xl transition disabled:opacity-40 disabled:cursor-not-allowed"
         >
           Send
           <Send size={14} />
@@ -1608,26 +1883,121 @@ function ChatComposer({ newMessage, setNewMessage, handleSend, sending, attachme
 }
 
 // ═══════════════════════════════════════════════════════════════════
+// MOBILE CHAT COMPOSER — dark navy bottom bar matching mockup
+// ═══════════════════════════════════════════════════════════════════
+
+function MobileChatComposer({ newMessage, setNewMessage, handleSend, sending, attachments, onAttachClick, onAiRespond, aiLoading }) {
+  const hasContent = newMessage.trim() || attachments.length > 0;
+
+  return (
+    <div className="bg-[#0B1628] px-3 py-3 border-t border-white/5">
+      <form onSubmit={handleSend} className="flex items-center gap-2">
+        {/* Attach */}
+        <button
+          type="button"
+          onClick={onAttachClick}
+          className="text-[#1787FE] p-1.5 flex-shrink-0"
+          aria-label="Attach file"
+        >
+          <Paperclip size={20} />
+        </button>
+
+        {/* Pill input */}
+        <div className="flex-1 relative">
+          <input
+            type="text"
+            value={newMessage}
+            onChange={(e) => setNewMessage(e.target.value)}
+            placeholder="Write message"
+            className="w-full px-4 py-2.5 bg-[#0F1D33] border border-white/5 rounded-full text-sm text-white placeholder-white/40 focus:border-[#1787FE] outline-none transition"
+          />
+        </div>
+
+        {/* AI Respond button */}
+        <button
+          type="button"
+          onClick={onAiRespond}
+          disabled={aiLoading}
+          className="w-10 h-10 rounded-full bg-white flex items-center justify-center flex-shrink-0 disabled:opacity-50 transition"
+          aria-label="AI Respond"
+        >
+          <Sparkles size={18} className={`text-[#1787FE] ${aiLoading ? 'animate-pulse' : ''}`} />
+        </button>
+
+        {/* Camera */}
+        <button
+          type="button"
+          onClick={onAttachClick}
+          className="text-white/70 p-1.5 flex-shrink-0"
+          aria-label="Camera"
+        >
+          <Camera size={20} />
+        </button>
+
+        {/* Mic */}
+        <button
+          type="button"
+          className="text-white/70 p-1.5 flex-shrink-0"
+          aria-label="Voice message"
+        >
+          <Mic size={20} />
+        </button>
+      </form>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════
 // CHAT BUBBLE (dark theme, matching design)
 // ═══════════════════════════════════════════════════════════════════
 
-function renderChatBubble(msg, isOutbound) {
+function renderChatBubble(msg, isOutbound, contact, platform) {
   const isSending = msg._optimistic || msg.status === 'sending';
   const isPlaceholder = msg.attachments?.length > 0 && msg.content && /^\[[\w\s.,_-]+\]$/.test(msg.content.trim());
-  const textContent = isPlaceholder ? '' : (msg.content || '');
   const hasAttachments = msg.attachments && Array.isArray(msg.attachments) && msg.attachments.length > 0;
+  // Suppress text content if all attachments are images — the text is just
+  // the filename echoed by Instagram/WhatsApp and clutters the image bubble.
+  const allAttachmentsAreImages = hasAttachments && msg.attachments.every(a => a.mimeType?.startsWith('image/'));
+  const textContent = (isPlaceholder || allAttachmentsAreImages) ? '' : (msg.content || '');
   if (!textContent && !hasAttachments && !isSending) return null;
 
+  // For image-only messages, render images without the colored bubble wrapper
+  if (allAttachmentsAreImages && !textContent) {
+    return (
+      <div className={`flex items-end gap-2 ${isOutbound ? 'justify-end' : 'justify-start'}`}>
+        {!isOutbound && (
+          <ContactAvatar
+            name={contact?.name || contact?.username || msg.sender}
+            avatarUrl={contact?.avatarUrl}
+            platform={platform}
+            size={8}
+          />
+        )}
+        <div className={`max-w-[80%] sm:max-w-[65%] ${isSending ? 'opacity-70' : ''}`}>
+          <MessageAttachments attachments={msg.attachments} messageId={msg.id} isOutbound={isOutbound} />
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className={`flex ${isOutbound ? 'justify-end' : 'justify-start'}`}>
+    <div className={`flex items-end gap-2 ${isOutbound ? 'justify-end' : 'justify-start'}`}>
+      {!isOutbound && (
+        <ContactAvatar
+          name={contact?.name || contact?.username || msg.sender}
+          avatarUrl={contact?.avatarUrl}
+          platform={platform}
+          size={8}
+        />
+      )}
       <div className={`max-w-[80%] sm:max-w-[65%] px-4 py-3 rounded-2xl text-sm ${
         isOutbound
-          ? 'bg-primary-500 text-white rounded-br-md'
-          : 'bg-white/10 text-gray-200 rounded-bl-md'
+          ? 'bg-[#1787FE] text-white rounded-br-md'
+          : 'bg-gray-100 text-gray-800 rounded-bl-md'
       } ${isSending ? 'opacity-70' : ''}`}>
         {textContent && <p className="whitespace-pre-wrap break-words leading-relaxed">{textContent}</p>}
         <MessageAttachments attachments={msg.attachments} messageId={msg.id} isOutbound={isOutbound} />
-        <p className={`text-[10px] mt-1.5 text-right ${isOutbound ? 'text-primary-200' : 'text-gray-500'}`}>
+        <p className={`text-[10px] mt-1.5 text-right ${isOutbound ? 'text-blue-100' : 'text-gray-500'}`}>
           {isSending ? 'Sending...' : formatTime(msg.sentAt)}
         </p>
       </div>
@@ -1640,48 +2010,36 @@ function renderChatBubble(msg, isOutbound) {
 // ═══════════════════════════════════════════════════════════════════
 
 function EmailThreadView({ messages, emailSubject, collapsedMessages, toggleCollapsed, onReply, messagesEndRef }) {
-  const autoCollapsed = messages.length > 3;
-
   return (
-    <div className="flex-1 overflow-y-auto bg-[#0c1a2e]">
-      <div className="max-w-3xl mx-auto px-4 sm:px-6 py-6">
-        <div className="mb-6">
-          <h1 className="text-xl sm:text-2xl font-semibold text-white leading-tight">{emailSubject}</h1>
-          <div className="flex items-center gap-2 mt-2">
-            <span className="text-xs bg-white/10 text-gray-400 px-2 py-0.5 rounded">Inbox</span>
-            <span className="text-xs text-gray-500">{messages.length} message{messages.length !== 1 ? 's' : ''}</span>
-          </div>
-        </div>
+    <div className="flex-1 overflow-y-auto bg-white">
+      <div className="divide-y divide-gray-100">
+        {messages.map((msg, idx) => {
+          const isOutbound = msg.direction === 'outbound';
+          const isLast = idx === messages.length - 1;
+          // Auto-expand only the last message; allow user toggle for the rest
+          const isCollapsed = isLast
+            ? collapsedMessages.has(msg.id)
+            : !collapsedMessages.has(msg.id);
 
-        <div className="space-y-0">
-          {messages.map((msg, idx) => {
-            const isOutbound = msg.direction === 'outbound';
-            const isLast = idx === messages.length - 1;
-            const isSecondLast = idx === messages.length - 2;
-            const isCollapsed = autoCollapsed && !isLast && !isSecondLast
-              ? !collapsedMessages.has(msg.id)
-              : collapsedMessages.has(msg.id);
-
-            return (
-              <EmailMessageCard
-                key={msg.id || `msg-${idx}`}
-                msg={msg}
-                isOutbound={isOutbound}
-                isLast={isLast}
-                isCollapsed={isCollapsed}
-                onToggleCollapse={() => toggleCollapsed(msg.id)}
-                onReply={() => onReply(msg)}
-              />
-            );
-          })}
-        </div>
-        <div ref={messagesEndRef} />
+          return (
+            <EmailMessageCard
+              key={msg.id || `msg-${idx}`}
+              msg={msg}
+              emailSubject={emailSubject}
+              isOutbound={isOutbound}
+              isCollapsed={isCollapsed}
+              onToggleCollapse={() => toggleCollapsed(msg.id)}
+              onReply={onReply}
+            />
+          );
+        })}
       </div>
+      <div ref={messagesEndRef} />
     </div>
   );
 }
 
-function EmailMessageCard({ msg, isOutbound, isLast, isCollapsed, onToggleCollapse, onReply }) {
+function EmailMessageCard({ msg, emailSubject, isOutbound, isCollapsed, onToggleCollapse, onReply }) {
   const hasHtml = msg.htmlContent && msg.htmlContent.trim().length > 0;
   const sanitizedHtml = hasHtml
     ? DOMPurify.sanitize(msg.htmlContent, {
@@ -1696,94 +2054,99 @@ function EmailMessageCard({ msg, isOutbound, isLast, isCollapsed, onToggleCollap
       })
     : null;
 
-  const senderInitial = (msg.sender || (isOutbound ? 'Y' : '?'))[0]?.toUpperCase();
   const senderName = isOutbound ? 'You' : (msg.sender || 'Unknown');
-  const timestamp = msg.sentAt
-    ? new Date(msg.sentAt).toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
-    : '';
+  const senderEmail = msg.senderEmail || msg.fromEmail || (isOutbound ? null : msg.sender);
+  const isEmailLikeAddress = senderEmail && /@/.test(senderEmail);
+  const subjectText = msg.subject || emailSubject || '';
+  const timestamp = msg.sentAt ? formatRelative(msg.sentAt) : '';
 
   const hasAttachments = msg.attachments && Array.isArray(msg.attachments) && msg.attachments.length > 0;
 
   return (
-    <div className={`border border-white/10 bg-white/5 ${isLast ? 'rounded-xl' : 'rounded-t-xl border-b-0'} overflow-hidden`}>
+    <div className="px-4 sm:px-6 py-4 group/email-card">
       <div
-        className="flex items-center gap-3 px-4 sm:px-5 py-3 cursor-pointer hover:bg-white/5 transition-colors"
+        className="flex items-start gap-3 cursor-pointer"
         onClick={onToggleCollapse}
       >
-        <div className={`w-9 h-9 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0 ${
-          isOutbound ? 'bg-blue-500/20 text-blue-400' : 'bg-red-500/20 text-red-400'
-        }`}>
-          {senderInitial}
-        </div>
+        {/* Avatar — letter fallback with platform color */}
+        <ContactAvatar
+          name={senderName}
+          avatarUrl={msg.avatarUrl || null}
+          platform="gmail"
+          size={10}
+        />
+
+        {/* Sender + subject/preview */}
         <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2">
-            <span className="text-sm font-semibold text-white">{senderName}</span>
-            {isCollapsed && (
-              <span className="text-xs text-gray-500 truncate hidden sm:inline">
-                &mdash; {msg.content?.replace(/<[^>]+>/g, '').replace(/\n+/g, ' ').slice(0, 60) || '(empty)'}
-              </span>
-            )}
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-sm font-semibold text-gray-900 truncate">{senderName}</span>
+            <div className="flex items-center gap-1 flex-shrink-0">
+              {/* Reply icon — visible on row hover */}
+              {onReply && (
+                <button
+                  type="button"
+                  onClick={(e) => { e.stopPropagation(); onReply(msg); }}
+                  className="opacity-0 group-hover/email-card:opacity-100 transition-opacity p-1 text-gray-400 hover:text-[#1787FE] rounded hover:bg-blue-50"
+                  title="Reply"
+                >
+                  <Reply size={14} />
+                </button>
+              )}
+              <span className="text-xs text-gray-500">{timestamp}</span>
+            </div>
           </div>
-          {!isCollapsed && (
-            <p className="text-xs text-gray-500 truncate">to {isOutbound ? (msg.sender || 'recipient') : 'me'}</p>
+          {isCollapsed ? (
+            <p className="text-xs text-gray-500 truncate mt-0.5">{subjectText || '(no subject)'}</p>
+          ) : (
+            isEmailLikeAddress && (
+              <p className="text-xs text-gray-500 truncate mt-0.5">&lt;{senderEmail}&gt;</p>
+            )
           )}
-        </div>
-        <div className="flex items-center gap-2 flex-shrink-0">
-          <span className="text-xs text-gray-500 hidden sm:inline">{timestamp}</span>
-          {isCollapsed ? <ChevronDown size={16} className="text-gray-500" /> : <ChevronUp size={16} className="text-gray-500" />}
         </div>
       </div>
 
       {!isCollapsed && (
-        <>
-          {msg.subject && (
-            <div className="px-4 sm:px-5 pb-1">
-              <div className="flex items-center gap-1.5 text-xs text-gray-500">
-                <Mail size={12} />
-                <span className="truncate">{msg.subject}</span>
-              </div>
-            </div>
+        <div className="pl-13 sm:pl-[52px] mt-3">
+          {subjectText && (
+            <h3 className="text-sm font-semibold text-gray-900 mb-2">{subjectText}</h3>
           )}
-          <div className="px-4 sm:px-5 pb-2 sm:hidden">
-            <span className="text-xs text-gray-500">{timestamp}</span>
-          </div>
-          <div className="px-4 sm:px-5 py-4 border-t border-white/5">
-            {sanitizedHtml ? (
-              <div className="bg-white rounded-lg p-4 sm:p-5">
-                <div
-                  className="email-html-content text-sm text-gray-900 leading-relaxed"
-                  style={{ color: '#1a1a1a' }}
-                  dangerouslySetInnerHTML={{ __html: sanitizedHtml }}
-                />
-              </div>
-            ) : msg.content ? (
-              <div className="bg-white rounded-lg p-4 sm:p-5">
-                <div className="text-sm text-gray-900 whitespace-pre-wrap break-words leading-relaxed">
-                  {msg.content}
-                </div>
-              </div>
-            ) : (
-              <div className="text-sm text-gray-500 italic py-2">(No content)</div>
-            )}
-          </div>
+          {sanitizedHtml ? (
+            <div
+              className="email-html-content text-sm text-gray-700 leading-relaxed"
+              style={{ color: '#374151' }}
+              dangerouslySetInnerHTML={{ __html: sanitizedHtml }}
+            />
+          ) : msg.content ? (
+            <div className="text-sm text-gray-700 whitespace-pre-wrap break-words leading-relaxed">
+              {msg.content}
+            </div>
+          ) : (
+            <div className="text-sm text-gray-400 italic">(No content)</div>
+          )}
           {hasAttachments && (
-            <EmailAttachments attachments={msg.attachments} messageId={msg.id} />
-          )}
-          {isLast && (
-            <div className="px-4 sm:px-5 py-3 border-t border-white/5 flex items-center gap-2">
-              <button
-                onClick={(e) => { e.stopPropagation(); onReply(); }}
-                className="flex items-center gap-1.5 px-4 py-2 text-sm text-gray-300 bg-white/5 border border-white/10 rounded-full hover:bg-white/10 hover:border-white/20 transition"
-              >
-                <Reply size={14} />
-                Reply
-              </button>
+            <div className="mt-3">
+              <EmailAttachments attachments={msg.attachments} messageId={msg.id} />
             </div>
           )}
-        </>
+        </div>
       )}
     </div>
   );
+}
+
+function formatRelative(date) {
+  const then = new Date(date).getTime();
+  const now = Date.now();
+  const diff = Math.max(0, now - then);
+  const sec = Math.floor(diff / 1000);
+  if (sec < 60) return 'just now';
+  const min = Math.floor(sec / 60);
+  if (min < 60) return `${min}m ago`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return `${hr}h ago`;
+  const days = Math.floor(hr / 24);
+  if (days < 30) return `${days} day${days !== 1 ? 's' : ''} ago`;
+  return new Date(date).toLocaleDateString();
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -1816,7 +2179,7 @@ function EmailAttachments({ attachments, messageId }) {
   };
 
   return (
-    <div className="px-4 sm:px-5 py-3 border-t border-white/5 bg-white/[0.02]">
+    <div className="px-4 sm:px-5 py-3 border-t border-gray-100 bg-gray-50">
       <p className="text-[10px] uppercase tracking-wider text-gray-500 font-medium mb-2">
         {attachments.length} Attachment{attachments.length !== 1 ? 's' : ''}
       </p>
@@ -1825,14 +2188,14 @@ function EmailAttachments({ attachments, messageId }) {
           {attachments.map((att, i) => {
             if (!att.mimeType?.startsWith('image/') || !(att.attachmentId || att.fileUrl || att.mediaId || att.localPath)) return null;
             return (
-              <div key={i} className="relative bg-white/5 animate-pulse rounded-lg min-h-[80px] min-w-[80px]">
+              <div key={i} className="relative bg-gray-100 animate-pulse rounded-lg min-h-[80px] min-w-[80px]">
                 <img
                   src={getPreviewUrl(i)}
                   alt={att.filename}
-                  className="max-h-[200px] rounded-lg cursor-pointer border border-white/10 relative z-[1]"
+                  className="max-h-[200px] rounded-lg cursor-pointer border border-gray-200 relative z-[1]"
                   onClick={() => window.open(getPreviewUrl(i), '_blank')}
                   loading="lazy"
-                  onLoad={(e) => { e.target.parentElement.classList.remove('animate-pulse', 'bg-white/5'); e.target.parentElement.style.minHeight = ''; e.target.parentElement.style.minWidth = ''; }}
+                  onLoad={(e) => { e.target.parentElement.classList.remove('animate-pulse', 'bg-gray-100'); e.target.parentElement.style.minHeight = ''; e.target.parentElement.style.minWidth = ''; }}
                 />
               </div>
             );
@@ -1844,24 +2207,24 @@ function EmailAttachments({ attachments, messageId }) {
           <div
             key={i}
             onClick={() => handleDownload(att, i)}
-            className="flex items-center gap-2 px-3 py-2 bg-white/5 rounded-lg border border-white/10 hover:border-primary-400/50 hover:bg-white/10 transition-all cursor-pointer group"
+            className="flex items-center gap-2 px-3 py-2 bg-white rounded-lg border border-gray-200 hover:border-[#1787FE] hover:bg-blue-50 transition-all cursor-pointer group"
           >
             <div className={`w-8 h-8 rounded flex items-center justify-center ${
-              att.mimeType?.startsWith('image/') ? 'bg-blue-500/10'
-              : att.mimeType?.includes('pdf') ? 'bg-red-500/10'
-              : 'bg-white/5'
+              att.mimeType?.startsWith('image/') ? 'bg-blue-100'
+              : att.mimeType?.includes('pdf') ? 'bg-red-100'
+              : 'bg-gray-100'
             }`}>
-              {att.mimeType?.startsWith('image/') ? <ImageIcon size={16} className="text-blue-400" />
-              : att.mimeType?.includes('pdf') ? <FileText size={16} className="text-red-400" />
-              : att.mimeType?.startsWith('audio/') ? <Music size={16} className="text-purple-400" />
-              : att.mimeType?.startsWith('video/') ? <Play size={16} className="text-orange-400" />
+              {att.mimeType?.startsWith('image/') ? <ImageIcon size={16} className="text-blue-600" />
+              : att.mimeType?.includes('pdf') ? <FileText size={16} className="text-red-600" />
+              : att.mimeType?.startsWith('audio/') ? <Music size={16} className="text-purple-600" />
+              : att.mimeType?.startsWith('video/') ? <Play size={16} className="text-orange-600" />
               : <FileText size={16} className="text-gray-500" />}
             </div>
             <div className="min-w-0">
-              <p className="text-xs font-medium text-gray-300 truncate max-w-[140px]">{att.filename}</p>
+              <p className="text-xs font-medium text-gray-700 truncate max-w-[140px]">{att.filename}</p>
               {formatFileSize(att.size) && <p className="text-[10px] text-gray-500">{formatFileSize(att.size)}</p>}
             </div>
-            <Download size={14} className="text-gray-600 group-hover:text-primary-400 ml-1 transition-colors" />
+            <Download size={14} className="text-gray-400 group-hover:text-[#1787FE] ml-1 transition-colors" />
           </div>
         ))}
       </div>
@@ -1874,95 +2237,135 @@ function EmailAttachments({ attachments, messageId }) {
 // ═══════════════════════════════════════════════════════════════════
 
 const EmailReplyBox = forwardRef(function EmailReplyBox(
-  { showReplyBox, replyingTo, newMessage, setNewMessage, handleSend, sending, attachments, onAttachClick, removeAttachment, uploadProgress, onOpenReply, onClose },
+  { showReplyBox, replyingTo, newMessage, setNewMessage, handleSend, sending, attachments, onAttachClick, removeAttachment, uploadProgress, onOpenReply, onClose, onAiRespond, aiLoading, aiSuggestion, aiError, onAiUse, onAiDismiss },
   ref
 ) {
   const hasContent = newMessage.trim() || attachments.length > 0;
 
-  if (!showReplyBox) {
-    return (
-      <div className="border-t border-white/10 bg-[#0f1d33] px-4 sm:px-6 py-3">
-        <div className="max-w-3xl mx-auto">
-          <button
-            onClick={onOpenReply}
-            className="flex items-center gap-2 px-4 py-2.5 text-sm text-gray-500 bg-white/5 border border-white/10 rounded-xl hover:bg-white/10 hover:text-gray-300 transition w-full"
-          >
-            <Reply size={16} />
-            Click here to reply...
-          </button>
-        </div>
-      </div>
-    );
-  }
-
   return (
-    <div ref={ref} className="border-t border-white/10 bg-[#0f1d33] px-4 sm:px-6 py-4">
-      <div className="max-w-3xl mx-auto">
-        <form onSubmit={handleSend}>
-          <div className="border border-white/10 rounded-xl overflow-hidden shadow-sm focus-within:border-primary-400 focus-within:ring-1 focus-within:ring-primary-400 transition">
-            <div className="flex items-center justify-between px-4 py-2 bg-white/5 border-b border-white/5">
-              <div className="flex items-center gap-2 text-xs text-gray-500">
-                <Reply size={13} />
-                <span>Replying to {replyingTo?.sender || 'Unknown'}</span>
-              </div>
-              <button type="button" onClick={onClose} className="text-gray-500 hover:text-gray-300 transition"><X size={16} /></button>
+    <div ref={ref} className="border-t border-gray-100 bg-white px-4 sm:px-6 py-3 space-y-2">
+
+      {/* AI Suggestion Box — shown when AI generates a reply */}
+      {(aiSuggestion || aiLoading || aiError) && (
+        <div className="rounded-xl border-2 border-dashed border-[#1787FE]/40 bg-blue-50/60 px-4 py-3 relative">
+          {aiLoading && (
+            <div className="flex items-center gap-2 text-sm text-gray-500">
+              <Sparkles size={14} className="text-[#1787FE] animate-pulse" />
+              Generating AI reply...
             </div>
-            <textarea
-              value={newMessage}
-              onChange={(e) => setNewMessage(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(e); }
-              }}
-              placeholder="Write your reply..."
-              rows={4}
-              className="w-full px-4 py-3 text-sm outline-none resize-none bg-transparent text-white placeholder-gray-500"
-              autoFocus
-            />
-            {attachments.length > 0 && (
-              <div className="px-4 py-2 border-t border-white/5 bg-white/[0.02]">
-                <div className="flex gap-2 flex-wrap">
-                  {attachments.map((att) => (
-                    <div key={att.id} className="relative group flex items-center gap-2 px-2.5 py-1.5 bg-white/5 rounded-lg border border-white/10 text-xs">
-                      {att.preview ? (
-                        <img src={att.preview} alt={att.name} className="w-8 h-8 rounded object-cover" />
-                      ) : (
-                        <FileText size={16} className="text-gray-500" />
-                      )}
-                      <div className="min-w-0">
-                        <p className="truncate max-w-[100px] font-medium text-gray-300">{att.name}</p>
-                        {formatFileSize(att.size) && <p className="text-[10px] text-gray-500">{formatFileSize(att.size)}</p>}
-                      </div>
-                      <button type="button" onClick={() => removeAttachment(att.id)} className="text-gray-600 hover:text-red-400 transition ml-1"><X size={14} /></button>
-                    </div>
-                  ))}
-                </div>
-                {uploadProgress !== null && uploadProgress < 100 && (
-                  <div className="mt-2">
-                    <div className="h-1 bg-white/10 rounded-full overflow-hidden">
-                      <div className="h-full bg-primary-500 transition-all" style={{ width: `${uploadProgress}%` }} />
-                    </div>
-                    <p className="text-[10px] text-gray-500 mt-0.5">{uploadProgress}% uploaded</p>
-                  </div>
-                )}
+          )}
+          {aiError && <div className="text-sm text-red-500">{aiError}</div>}
+          {aiSuggestion && (
+            <>
+              <p className="text-sm text-gray-800 leading-relaxed pr-24">{aiSuggestion}</p>
+              <div className="absolute top-2 right-2 flex flex-col gap-1.5 items-end">
+                <button
+                  type="button"
+                  onClick={() => navigator.clipboard.writeText(aiSuggestion)}
+                  className="px-3 py-1.5 text-xs font-semibold border border-gray-300 bg-white rounded-lg hover:bg-gray-50 transition whitespace-nowrap"
+                >
+                  Copy Text
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onAiUse(aiSuggestion)}
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-[#1787FE] text-white rounded-lg hover:bg-[#1377e0] transition whitespace-nowrap"
+                >
+                  Use Reply <Send size={11} />
+                </button>
               </div>
-            )}
-            <div className="flex items-center justify-between px-4 py-2 bg-white/5 border-t border-white/5">
-              <button type="button" onClick={onAttachClick} className="p-1.5 text-gray-500 hover:text-gray-300 hover:bg-white/10 rounded transition" title="Attach files"><Paperclip size={16} /></button>
               <button
-                type="submit"
-                disabled={!hasContent || sending}
-                className="bg-primary-500 hover:bg-primary-600 text-white px-5 py-1.5 rounded-lg text-sm font-medium transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                type="button"
+                onClick={onAiDismiss}
+                className="absolute bottom-2 right-2 text-gray-300 hover:text-gray-500 transition"
               >
-                {sending ? (
-                  <><span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />Sending...</>
-                ) : (
-                  <><Send size={14} />Send</>
-                )}
+                <X size={13} />
+              </button>
+            </>
+          )}
+        </div>
+      )}
+
+      {/* Attachment previews */}
+      {attachments.length > 0 && (
+        <div className="flex gap-2 flex-wrap px-1">
+          {attachments.map((att) => (
+            <div key={att.id} className="flex items-center gap-2 px-2.5 py-1.5 bg-gray-50 rounded-lg border border-gray-200 text-xs">
+              {att.preview
+                ? <img src={att.preview} alt={att.name} className="w-8 h-8 rounded object-cover" />
+                : <FileText size={16} className="text-gray-400" />}
+              <div className="min-w-0">
+                <p className="truncate max-w-[100px] font-medium text-gray-700">{att.name}</p>
+                {formatFileSize(att.size) && <p className="text-[10px] text-gray-500">{formatFileSize(att.size)}</p>}
+              </div>
+              <button type="button" onClick={() => removeAttachment(att.id)} className="text-gray-400 hover:text-red-500 transition ml-1">
+                <X size={14} />
               </button>
             </div>
-          </div>
-        </form>
-      </div>
+          ))}
+          {uploadProgress !== null && uploadProgress < 100 && (
+            <div className="w-full mt-1">
+              <div className="h-1 bg-gray-200 rounded-full overflow-hidden">
+                <div className="h-full bg-[#1787FE] transition-all" style={{ width: `${uploadProgress}%` }} />
+              </div>
+              <p className="text-[10px] text-gray-500 mt-0.5">{uploadProgress}% uploaded</p>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Composer bar — always visible, matches chat design */}
+      <form onSubmit={handleSend} className="flex items-center gap-2">
+        {/* AI Respond pill */}
+        <button
+          type="button"
+          onClick={onAiRespond}
+          disabled={aiLoading}
+          className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-white bg-[#1787FE] hover:bg-[#1377e0] rounded-full transition whitespace-nowrap disabled:opacity-50 flex-shrink-0"
+        >
+          <Sparkles size={14} className={aiLoading ? 'animate-pulse' : ''} />
+          AI Respond
+        </button>
+
+        {/* Input */}
+        <div className="flex-1 relative">
+          <input
+            type="text"
+            value={newMessage}
+            onChange={(e) => setNewMessage(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(e); } }}
+            onClick={() => { if (!showReplyBox) onOpenReply(); }}
+            placeholder="Write message"
+            className="w-full px-4 py-2.5 bg-white border border-transparent rounded-xl text-sm text-gray-900 placeholder-gray-400 focus:border-[#1787FE] focus:ring-1 focus:ring-[#1787FE] outline-none transition"
+          />
+        </div>
+
+        {/* Mic */}
+        <button type="button" className="p-2 text-gray-400 hover:text-gray-700 transition flex-shrink-0" title="Voice">
+          <Mic size={18} />
+        </button>
+
+        {/* Image */}
+        <button type="button" onClick={onAttachClick} className="p-2 text-gray-400 hover:text-gray-700 transition flex-shrink-0" title="Attach image">
+          <ImageIcon size={18} />
+        </button>
+
+        {/* Paperclip */}
+        <button type="button" onClick={onAttachClick} className="p-2 text-gray-400 hover:text-gray-700 transition flex-shrink-0" title="Attach file">
+          <Paperclip size={18} />
+        </button>
+
+        {/* Send */}
+        <button
+          type="submit"
+          disabled={!hasContent || sending}
+          className="flex items-center gap-2 px-5 py-2.5 bg-[#1787FE] hover:bg-[#1377e0] text-white text-sm font-semibold rounded-xl transition disabled:opacity-40 disabled:cursor-not-allowed flex-shrink-0"
+        >
+          {sending
+            ? <span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+            : <><Send size={14} /> Send</>}
+        </button>
+      </form>
     </div>
   );
 });
@@ -1973,17 +2376,17 @@ const EmailReplyBox = forwardRef(function EmailReplyBox(
 
 function AttachmentPreview({ attachments, onRemove, uploadProgress }) {
   return (
-    <div className="px-4 sm:px-6 py-2 bg-[#0f1d33] border-t border-white/10">
+    <div className="px-4 sm:px-6 py-2 bg-white border-t border-gray-100">
       <div className="flex gap-2 overflow-x-auto pb-1">
         {attachments.map((att) => (
           <div key={att.id} className="relative flex-shrink-0 group">
             {att.preview ? (
-              <div className="w-16 h-16 rounded-lg overflow-hidden border border-white/10">
+              <div className="w-16 h-16 rounded-lg overflow-hidden border border-gray-200">
                 <img src={att.preview} alt={att.name} className="w-full h-full object-cover" />
               </div>
             ) : (
-              <div className="w-16 h-16 rounded-lg border border-white/10 bg-white/5 flex flex-col items-center justify-center px-1">
-                <FileText size={18} className="text-gray-500 mb-0.5" />
+              <div className="w-16 h-16 rounded-lg border border-gray-200 bg-gray-50 flex flex-col items-center justify-center px-1">
+                <FileText size={18} className="text-gray-400 mb-0.5" />
                 <span className="text-[9px] text-gray-500 truncate w-full text-center">{att.name.split('.').pop()}</span>
               </div>
             )}
@@ -1999,8 +2402,8 @@ function AttachmentPreview({ attachments, onRemove, uploadProgress }) {
       </div>
       {uploadProgress !== null && uploadProgress < 100 && (
         <div className="mt-1">
-          <div className="h-1 bg-white/10 rounded-full overflow-hidden">
-            <div className="h-full bg-primary-500 transition-all" style={{ width: `${uploadProgress}%` }} />
+          <div className="h-1 bg-gray-200 rounded-full overflow-hidden">
+            <div className="h-full bg-[#1787FE] transition-all" style={{ width: `${uploadProgress}%` }} />
           </div>
         </div>
       )}
@@ -2046,10 +2449,12 @@ const MessageAttachments = memo(function MessageAttachments({ attachments, messa
         const isImage = mime.startsWith('image/');
         const isVideo = mime.startsWith('video/');
         const isAudio = mime.startsWith('audio/');
-        const hasSource = att.mediaId || att.fileUrl || att.attachmentId || att.localPath;
+        const hasSource = att.mediaId || att.fileUrl || att.attachmentId || att.localPath || att.s3Key;
         const previewUrl = hasSource ? getPreviewUrl(i) : null;
 
-        if (isImage && previewUrl) {
+        if (isImage) {
+          // Always show image-only preview; never fall through to the filename card.
+          if (!previewUrl) return null;
           return (
             <div key={i} className="relative rounded-lg overflow-hidden max-w-[280px] group cursor-pointer"
               onClick={() => window.open(previewUrl, '_blank')}
@@ -2063,8 +2468,7 @@ const MessageAttachments = memo(function MessageAttachments({ attachments, messa
                   onLoad={(e) => { e.target.parentElement.classList.remove('animate-pulse', 'bg-white/5'); e.target.parentElement.style.minHeight = ''; }}
                 />
               </div>
-              <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors z-[2] rounded-lg flex items-end justify-between px-2 py-1.5">
-                <span className="text-[10px] text-white truncate opacity-0 group-hover:opacity-100 transition-opacity drop-shadow">{att.filename}</span>
+              <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors z-[2] rounded-lg flex items-end justify-end px-2 py-1.5">
                 <button
                   onClick={(e) => { e.stopPropagation(); handleDownload(att, i); }}
                   className="p-1.5 rounded-full bg-black/40 text-white opacity-0 group-hover:opacity-100 transition-opacity hover:bg-black/60"
@@ -2200,12 +2604,12 @@ function getPlatformTheme(platform) {
 
 function getPlatformBadgeStyle(platform) {
   switch (platform) {
-    case 'instagram': return 'bg-pink-500/20 text-pink-400';
-    case 'facebook': return 'bg-blue-500/20 text-blue-400';
-    case 'gmail': return 'bg-red-500/20 text-red-400';
-    case 'whatsapp': return 'bg-green-500/20 text-green-400';
-    case 'linkedin': return 'bg-sky-500/20 text-sky-400';
-    default: return 'bg-gray-500/20 text-gray-400';
+    case 'instagram': return 'bg-emerald-100 text-emerald-700 border border-emerald-200';
+    case 'facebook': return 'bg-blue-100 text-blue-700 border border-blue-200';
+    case 'gmail': return 'bg-pink-100 text-pink-700 border border-pink-200';
+    case 'whatsapp': return 'bg-green-100 text-green-700 border border-green-200';
+    case 'linkedin': return 'bg-rose-100 text-rose-700 border border-rose-200';
+    default: return 'bg-gray-100 text-gray-600 border border-gray-200';
   }
 }
 
@@ -2220,14 +2624,58 @@ function getPlatformLabel(platform) {
   }
 }
 
-function getPlatformAvatarStyle(platform) {
+// Generate a deterministic color from a name so every sender always gets the same color.
+const AVATAR_COLORS = [
+  'bg-red-100 text-red-600', 'bg-blue-100 text-blue-700',
+  'bg-green-100 text-green-700', 'bg-purple-100 text-purple-600',
+  'bg-orange-100 text-orange-600', 'bg-teal-100 text-teal-600',
+  'bg-pink-100 text-pink-600', 'bg-indigo-100 text-indigo-600',
+];
+function getNameAvatarColor(name) {
+  if (!name) return AVATAR_COLORS[0];
+  let hash = 0;
+  for (let i = 0; i < name.length; i++) hash = name.charCodeAt(i) + ((hash << 5) - hash);
+  return AVATAR_COLORS[Math.abs(hash) % AVATAR_COLORS.length];
+}
+
+function getPlatformAvatarStyle(platform, name) {
+  if (name) return getNameAvatarColor(name);
   switch (platform) {
-    case 'gmail': return 'bg-red-500/20 text-red-400';
-    case 'whatsapp': return 'bg-green-500/20 text-green-400';
-    case 'instagram': return 'bg-pink-500/20 text-pink-400';
-    case 'facebook': return 'bg-blue-500/20 text-blue-400';
-    default: return 'bg-white/10 text-gray-400';
+    case 'gmail': return 'bg-red-100 text-red-600';
+    case 'whatsapp': return 'bg-green-100 text-green-700';
+    case 'instagram': return 'bg-pink-100 text-pink-600';
+    case 'facebook': return 'bg-blue-100 text-blue-600';
+    default: return 'bg-gray-100 text-gray-500';
   }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// CONTACT AVATAR — shows profile photo or initial letter fallback
+// ═══════════════════════════════════════════════════════════════════
+
+function ContactAvatar({ name, avatarUrl, platform, size = 8, className = '' }) {
+  const [imgError, setImgError] = useState(false);
+  const initials = (name || '?').trim().charAt(0).toUpperCase();
+  const styleClass = getPlatformAvatarStyle(platform, name);
+  const sizeMap = { 8: 'w-8 h-8 text-xs', 10: 'w-10 h-10 text-sm' };
+  const sizeClass = sizeMap[size] || `w-${size} h-${size} text-xs`;
+
+  if (avatarUrl && !imgError) {
+    return (
+      <img
+        src={avatarUrl}
+        alt={name || 'Avatar'}
+        className={`${sizeClass} rounded-full object-cover flex-shrink-0 ${className}`}
+        onError={() => setImgError(true)}
+      />
+    );
+  }
+
+  return (
+    <div className={`${sizeClass} rounded-full flex items-center justify-center flex-shrink-0 font-semibold ${styleClass} ${className}`}>
+      {initials}
+    </div>
+  );
 }
 
 // ═══════════════════════════════════════════════════════════════════

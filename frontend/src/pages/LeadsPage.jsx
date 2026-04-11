@@ -3,6 +3,8 @@ import { useNavigate } from 'react-router-dom';
 import { Search, ChevronDown, RotateCcw, MessageSquare, FileText, Plus, UserPlus, Filter } from 'lucide-react';
 import api from '../services/api.js';
 import AddLeadModal from '../components/AddLeadModal.jsx';
+import LeadInvoicesModal from '../components/LeadInvoicesModal.jsx';
+import { getSocket } from '../services/socket.js';
 
 const STATUS_OPTIONS = ['New', 'Warm', 'Won', 'Lost'];
 const PLATFORM_OPTIONS = ['Instagram', 'WhatsApp', 'Gmail', 'Facebook'];
@@ -95,6 +97,7 @@ export default function LeadsPage() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [showAdd, setShowAdd] = useState(false);
+  const [invoicesLead, setInvoicesLead] = useState(null);
   const [hoveredId, setHoveredId] = useState(null);
   const [filters, setFilters] = useState({ date: '', platform: '', lastAction: '', status: '' });
 
@@ -125,6 +128,36 @@ export default function LeadsPage() {
   }, [filters]);
 
   useEffect(() => { fetchLeads(); }, [fetchLeads]);
+
+  // ── Real-time sync: listen for lead create/update/delete from anywhere ──
+  useEffect(() => {
+    const sock = getSocket();
+    if (!sock) return;
+    const onCreated = ({ lead }) => {
+      setLeads((prev) => (prev.some((l) => l.id === lead.id) ? prev : [{ ...lead, invoices: [] }, ...prev]));
+    };
+    const onUpdated = ({ lead }) => {
+      setLeads((prev) => prev.map((l) => (l.id === lead.id ? { ...l, ...lead } : l)));
+    };
+    const onDeleted = ({ id }) => {
+      setLeads((prev) => prev.filter((l) => l.id !== id));
+    };
+    const onInvoiceChange = () => fetchLeads();
+    sock.on('lead_created', onCreated);
+    sock.on('lead_updated', onUpdated);
+    sock.on('lead_deleted', onDeleted);
+    sock.on('invoice_created', onInvoiceChange);
+    sock.on('invoice_updated', onInvoiceChange);
+    sock.on('invoice_deleted', onInvoiceChange);
+    return () => {
+      sock.off('lead_created', onCreated);
+      sock.off('lead_updated', onUpdated);
+      sock.off('lead_deleted', onDeleted);
+      sock.off('invoice_created', onInvoiceChange);
+      sock.off('invoice_updated', onInvoiceChange);
+      sock.off('invoice_deleted', onInvoiceChange);
+    };
+  }, [fetchLeads]);
 
   const filtered = useMemo(() => {
     if (!search.trim()) return leads;
@@ -254,21 +287,30 @@ export default function LeadsPage() {
                                   <MessageSquare size={12} /> OPEN CHAT
                                 </button>
                               )}
-                              {lead.invoices?.[0] ? (
-                                <button
-                                  onClick={() => navigate(`/invoices/${lead.invoices[0].id}`)}
-                                  className="flex items-center gap-1.5 px-3 py-1.5 bg-white border border-gray-200 rounded-md text-xs font-semibold text-gray-700 hover:bg-gray-50 shadow-sm"
-                                >
-                                  <FileText size={12} /> SHOW INVOICE
-                                </button>
-                              ) : (
-                                <button
-                                  onClick={() => navigate(`/invoices/new?leadId=${lead.id}`)}
-                                  className="flex items-center gap-1.5 px-3 py-1.5 bg-white border border-gray-200 rounded-md text-xs font-semibold text-gray-700 hover:bg-gray-50 shadow-sm"
-                                >
-                                  <Plus size={12} /> CREATE INVOICE
-                                </button>
-                              )}
+                              {(() => {
+                                const invoices = lead.invoices || [];
+                                const activeInvoice = invoices.find((i) => i.status !== 'Paid');
+                                const latest = invoices[0];
+                                const canCreate = !activeInvoice;
+                                return (
+                                  <>
+                                    <button
+                                      onClick={() => setInvoicesLead(lead)}
+                                      className="flex items-center gap-1.5 px-3 py-1.5 bg-white border border-gray-200 rounded-md text-xs font-semibold text-gray-700 hover:bg-gray-50 shadow-sm"
+                                    >
+                                      <FileText size={12} /> SHOW INVOICE{invoices.length > 1 ? `S (${invoices.length})` : ''}
+                                    </button>
+                                    {canCreate && (
+                                      <button
+                                        onClick={() => navigate(`/invoices/new?leadId=${lead.id}`)}
+                                        className="flex items-center gap-1.5 px-3 py-1.5 bg-white border border-gray-200 rounded-md text-xs font-semibold text-gray-700 hover:bg-gray-50 shadow-sm"
+                                      >
+                                        <Plus size={12} /> CREATE INVOICE
+                                      </button>
+                                    )}
+                                  </>
+                                );
+                              })()}
                             </div>
                           )}
                         </div>
@@ -286,6 +328,14 @@ export default function LeadsPage() {
       </div>
 
       {showAdd && <AddLeadModal onClose={() => setShowAdd(false)} onCreated={handleAdded} />}
+      {invoicesLead && (
+        <LeadInvoicesModal
+          lead={invoicesLead}
+          onClose={() => setInvoicesLead(null)}
+          onOpenInvoice={(id) => navigate(`/invoices/${id}`)}
+          onCreateInvoice={() => navigate(`/invoices/new?leadId=${invoicesLead.id}`)}
+        />
+      )}
     </div>
   );
 }

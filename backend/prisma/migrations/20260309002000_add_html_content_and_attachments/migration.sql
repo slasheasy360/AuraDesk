@@ -1,4 +1,4 @@
 -- AlterTable
 ALTER TABLE "messages"
-ADD COLUMN "html_content" TEXT,
-ADD COLUMN "attachments" JSONB;
+ADD COLUMN IF NOT EXISTS "html_content" TEXT,
+ADD COLUMN IF NOT EXISTS "attachments" JSONB;

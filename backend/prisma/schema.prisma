@@ -14,17 +14,48 @@ model User {
   passwordHash  String   @map("password_hash")
   createdAt     DateTime @default(now()) @map("created_at")
 
+  // ── Password Reset ──
+  // Stores SHA-256 hash of the raw token (never the raw token itself).
+  // Single-use: cleared after a successful reset. Expires after 10 minutes.
+  passwordResetTokenHash String?   @map("password_reset_token_hash")
+  passwordResetExpiresAt DateTime? @map("password_reset_expires_at")
+
   // ── Trial & Subscription ──
   plan              PlanType    @default(trial)
   trialEndsAt       DateTime?   @map("trial_ends_at")
   subscriptionStatus SubStatus  @default(trialing) @map("subscription_status")
+  isSubscribed      Boolean     @default(false) @map("is_subscribed")
   stripeCustomerId  String?     @unique @map("stripe_customer_id")
   stripeSubscriptionId String?  @unique @map("stripe_subscription_id")
+  currentPeriodStart DateTime?  @map("current_period_start")
   currentPeriodEnd  DateTime?   @map("current_period_end")
+  cancelAtPeriodEnd Boolean     @default(false) @map("cancel_at_period_end")
+  // When set, the user is in grace period after a failed payment.
+  // Access is denied once we pass this timestamp.
+  gracePeriodEndsAt DateTime?   @map("grace_period_ends_at")
   billingCycle      BillingCycle? @map("billing_cycle")
 
+  // ── Plan limits / usage (Phase 1 — log-only enforcement) ──
+  // `aiRepliesUsed` counts AI replies consumed in the CURRENT billing cycle.
+  // Reset to 0 whenever `currentPeriodStart` rolls forward (handled in the
+  // Stripe webhook + lazy-reset inside planGuard.assertAndConsumeAiReply).
+  // `aiRepliesCycleStart` is the anchor timestamp for the current window,
+  // used to detect whether a reset is needed without a separate cron job.
+  // `planOverrides` is an optional JSON blob that shallow-merges on top of
+  // PLAN_LIMITS[plan] — reserved for enterprise deals. NULL on all normal
+  // users; safe to leave unset.
+  aiRepliesUsed        Int       @default(0)  @map("ai_replies_used")
+  aiRepliesCycleStart  DateTime? @map("ai_replies_cycle_start")
+  planOverrides        Json?     @map("plan_overrides")
+
   // ── Onboarding ──
-  onboardingStep    Int         @default(0) @map("onboarding_step")  // 0=not started, 1=branding, 2=platforms, 3=first-message, 4=complete
+  // `onboardingStep` is a UI breadcrumb for the multi-step wizard.
+  // `onboardingCompleted` is the canonical "is this user fully onboarded"
+  // flag — set the moment the organization (branding) step completes,
+  // regardless of whether they connected any platforms. This is the only
+  // value the route guards check; do NOT gate access on onboardingStep.
+  onboardingStep      Int      @default(0) @map("onboarding_step")  // 0=not started, 1=branding, 2=platforms, 3=first-message, 4=complete
+  onboardingCompleted Boolean  @default(false) @map("onboarding_completed")
   companyName       String?     @map("company_name")
   companyLogo       String?     @map("company_logo")
   brandColor        String?     @map("brand_color")
@@ -32,12 +63,104 @@ model User {
   lastName          String?     @map("last_name")
   cannedResponse    String?     @map("canned_response")
 
+  // ── Team / Workspace ──
+  role            UserRole  @default(owner)
+  inviterUserId   String?   @map("inviter_user_id")
+  inviter         User?     @relation("TeamMembers", fields: [inviterUserId], references: [id], onDelete: SetNull)
+  teamMembers     User[]    @relation("TeamMembers")
+
   connectedAccounts ConnectedAccount[]
   contacts          Contact[]
   leads             Lead[]
   invoices          Invoice[]
+  sentInvites       TeamInvite[] @relation("InviterInvites")
+  aiReplyUsage      AiReplyUsage[]
+  aiSettings        AiSettings?
+  faqs              Faq[]
 
   @@map("users")
+}
+
+model AiSettings {
+  id          String   @id @default(uuid())
+  userId      String   @unique @map("user_id")
+  tones       Json     @default("[]")
+  automations Json     @default("[]")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("ai_settings")
+}
+
+model Faq {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  question  String
+  answer    String
+  category  String   @default("general")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("faqs")
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// AI reply usage audit log
+// ───────────────────────────────────────────────────────────────────
+// One row per AI reply consumed. Backs the monthly quota counter on
+// User.aiRepliesUsed but also preserves a durable history for audit,
+// refund, and analytics. Scoped to the WORKSPACE OWNER's userId — team
+// members share the owner's quota. Cascade delete so closing an account
+// cleans up naturally.
+// ═══════════════════════════════════════════════════════════════════
+model AiReplyUsage {
+  id             String    @id @default(uuid())
+  userId         String    @map("user_id")
+  platform       Platform?
+  conversationId String?   @map("conversation_id")
+  cost           Int       @default(1)
+  createdAt      DateTime  @default(now()) @map("created_at")
+
+  user           User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@map("ai_reply_usage")
+}
+
+enum UserRole {
+  owner
+  admin
+  member
+}
+
+model TeamInvite {
+  id          String       @id @default(uuid())
+  inviterId   String       @map("inviter_id")
+  email       String
+  role        UserRole     @default(member)
+  token       String       @unique
+  status      InviteStatus @default(pending)
+  expiresAt   DateTime     @map("expires_at")
+  createdAt   DateTime     @default(now()) @map("created_at")
+  acceptedAt  DateTime?    @map("accepted_at")
+
+  inviter     User         @relation("InviterInvites", fields: [inviterId], references: [id], onDelete: Cascade)
+
+  @@unique([inviterId, email])
+  @@index([token])
+  @@map("team_invites")
+}
+
+enum InviteStatus {
+  pending
+  accepted
+  expired
+  revoked
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -52,7 +175,7 @@ model Lead {
   lastContactedAt DateTime?  @map("last_contacted_at")
   lastAction      String?    @map("last_action")
   status          LeadStatus @default(New)
-  conversationId  String?    @map("conversation_id")
+  conversationId  String?    @unique @map("conversation_id")
   email           String?
   phone           String?
   createdAt       DateTime   @default(now()) @map("created_at")

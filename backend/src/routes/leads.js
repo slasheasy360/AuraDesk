@@ -53,6 +53,12 @@ router.post('/', authenticate, async (req, res) => {
     if (!name || !name.trim()) {
       return res.status(400).json({ error: 'Name is required' });
     }
+    if (conversationId) {
+      const existing = await prisma.lead.findUnique({ where: { conversationId } });
+      if (existing) {
+        return res.status(200).json({ lead: existing, alreadyExists: true });
+      }
+    }
     const lead = await prisma.lead.create({
       data: {
         userId: req.user.id,

@@ -3,6 +3,7 @@ import { authenticate } from '../middleware/auth.js';
 import * as facebookService from '../services/facebook.js';
 import { syncFacebookMessages } from '../services/facebook.sync.js';
 import prisma from '../utils/prisma.js';
+import { assertCanConnectPlatform } from '../services/planGuard.js';
 
 const router = Router();
 const DEFAULT_FRONTEND_URL = 'https://aura-desk.vercel.app';
@@ -23,7 +24,11 @@ router.get('/', authenticate, (req, res) => {
 // Start Facebook OAuth for page connection (authenticated)
 router.get('/start', authenticate, async (req, res) => {
   try {
-    const state = facebookService.encodeConnectState(req.user.id);
+    // Phase 1: log-only plan guard. Never blocks — surfaces violations to
+    // logs so we can audit real user impact before flipping to enforce.
+    try { await assertCanConnectPlatform(req.user, 'facebook', { context: 'facebook/start' }); } catch (_) {}
+    const popup = String(req.query.popup || '') === '1';
+    const state = facebookService.encodeConnectState(req.user.id, { popup });
     const url = facebookService.getLoginUrl(state);
     console.log('[Facebook OAuth] /start — generated OAuth URL', {
       userId: req.user.id,
@@ -39,6 +44,21 @@ router.get('/start', authenticate, async (req, res) => {
 // Facebook OAuth callback — Facebook redirects here after user approves
 router.get('/callback', async (req, res) => {
   const frontendUrl = getFrontendUrl();
+  const sendPopupResponse = (payload) => {
+    const json = JSON.stringify(payload);
+    const html = `<!doctype html><html><head><meta charset="utf-8"/></head><body>
+      <script>
+        try {
+          if (window.opener) {
+            window.opener.postMessage(${json}, "${frontendUrl}");
+          }
+        } catch (e) {}
+        window.close();
+      </script>
+    </body></html>`;
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    return res.status(200).send(html);
+  };
   console.log('[Facebook OAuth] /callback — received', {
     hasCode: Boolean(req.query.code),
     hasState: Boolean(req.query.state),
@@ -47,10 +67,32 @@ router.get('/callback', async (req, res) => {
     errorDescription: req.query.error_description || null,
   });
 
-  // Handle user denial
+  // Handle user denial / cancel
   if (req.query.error) {
     console.warn('[Facebook OAuth] User denied or error from Facebook:', req.query.error_description);
-    return res.redirect(`${frontendUrl}/connections?error=facebook&reason=${encodeURIComponent(req.query.error_description || req.query.error)}`);
+    const reason = req.query.error_description || req.query.error;
+    if (req.query.state) {
+      try {
+        const { popup, userId } = facebookService.decodeConnectState(req.query.state);
+        if (popup) {
+          return sendPopupResponse({
+            type: 'auradesk:connect',
+            platform: 'facebook',
+            status: 'error',
+            reason,
+          });
+        }
+        // Redirect to the correct page based on whether the user is still in
+        // onboarding — prevents cancel from dumping them at /connections when
+        // they started the flow from the onboarding wizard.
+        if (userId) {
+          const user = await prisma.user.findUnique({ where: { id: userId }, select: { onboardingStep: true } });
+          const target = (user && user.onboardingStep < 4) ? '/onboarding' : '/connections';
+          return res.redirect(`${frontendUrl}${target}?error=facebook&reason=${encodeURIComponent(reason)}`);
+        }
+      } catch { }
+    }
+    return res.redirect(`${frontendUrl}/connections?error=facebook&reason=${encodeURIComponent(reason)}`);
   }
 
   try {
@@ -65,7 +107,8 @@ router.get('/callback', async (req, res) => {
       return res.redirect(`${frontendUrl}/connections?error=facebook&reason=missing_state`);
     }
 
-    const { userId } = facebookService.decodeConnectState(state);
+    const decoded = facebookService.decodeConnectState(state);
+    const { userId, popup } = decoded || {};
     if (!userId) {
       console.warn('[Facebook OAuth] Decoded state without userId');
       return res.redirect(`${frontendUrl}/connections?error=facebook&reason=invalid_state`);
@@ -97,6 +140,14 @@ router.get('/callback', async (req, res) => {
     }
 
     // Redirect to onboarding if user hasn't completed it, otherwise connections page
+    if (popup) {
+      return sendPopupResponse({
+        type: 'auradesk:connect',
+        platform: 'facebook',
+        status: 'success',
+      });
+    }
+
     const user = await prisma.user.findUnique({ where: { id: userId }, select: { onboardingStep: true } });
     const redirectPath = (user && user.onboardingStep < 4) ? '/onboarding' : '/connections';
     return res.redirect(`${frontendUrl}${redirectPath}?success=facebook`);
@@ -112,6 +163,19 @@ router.get('/callback', async (req, res) => {
       rawData: err.response?.data || null,
       stack: err.stack,
     });
+    if (req.query.state) {
+      try {
+        const { popup } = facebookService.decodeConnectState(req.query.state);
+        if (popup) {
+          return sendPopupResponse({
+            type: 'auradesk:connect',
+            platform: 'facebook',
+            status: 'error',
+            reason: err.message,
+          });
+        }
+      } catch { }
+    }
     return res.redirect(`${frontendUrl}/connections?error=facebook&reason=${encodeURIComponent(err.message)}`);
   }
 });

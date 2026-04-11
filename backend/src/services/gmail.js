@@ -213,37 +213,41 @@ export async function fetchThread(connectedAccountId, threadId) {
   return res.data;
 }
 
-export async function sendEmail(connectedAccountId, to, subject, body, threadId, attachments = []) {
+/**
+ * Send an email via the Gmail API.
+ *
+ * @param {string}   connectedAccountId
+ * @param {string}   to
+ * @param {string}   subject
+ * @param {string}   body
+ * @param {string}   threadId   - Gmail thread ID (platformConversationId). Pass null for new threads.
+ * @param {Array}    attachments
+ * @param {object}   threadingHeaders
+ * @param {string}   threadingHeaders.inReplyToMsgId  - RFC 2822 Message-ID of the message being replied to
+ * @param {string}   threadingHeaders.references       - Full References header value (space-separated chain)
+ */
+export async function sendEmail(connectedAccountId, to, subject, body, threadId, attachments = [], threadingHeaders = {}) {
   const gmail = await getGmailClient(connectedAccountId);
 
   const account = await prisma.connectedAccount.findUnique({
     where: { id: connectedAccountId },
   });
 
-  // Get the Message-ID of the last message in the thread for proper In-Reply-To
-  let lastMessageId = null;
-  if (threadId) {
-    try {
-      const threadRes = await gmail.users.threads.get({
-        userId: 'me',
-        id: threadId,
-        format: 'metadata',
-        metadataHeaders: ['Message-ID'],
-      });
-      const threadMessages = threadRes.data.messages || [];
-      if (threadMessages.length > 0) {
-        const lastMsg = threadMessages[threadMessages.length - 1];
-        const msgIdHeader = lastMsg.payload?.headers?.find(
-          (h) => h.name.toLowerCase() === 'message-id'
-        );
-        lastMessageId = msgIdHeader?.value || null;
-      }
-    } catch {
-      // If we can't fetch the thread, send without In-Reply-To
-    }
-  }
+  const { inReplyToMsgId: providedInReplyTo, references: providedReferences } = threadingHeaders;
 
-  const raw = createRawEmail(account.platformAccountId, to, subject, body, lastMessageId, attachments);
+  let inReplyToMsgId = providedInReplyTo || null;
+  let references     = providedReferences || null;
+
+  console.log('[Gmail API] Sending email:', {
+    from: account?.platformAccountId,
+    to,
+    subject,
+    threadId: threadId || null,
+    inReplyToMsgId: inReplyToMsgId || '(fallback to live fetch)',
+    attachmentCount: attachments.length,
+  });
+
+  const raw = createRawEmail(account.platformAccountId, to, subject, body, inReplyToMsgId, references, attachments);
 
   const requestBody = { raw };
   if (threadId) requestBody.threadId = threadId;
@@ -253,10 +257,20 @@ export async function sendEmail(connectedAccountId, to, subject, body, threadId,
     requestBody,
   });
 
+  console.log('[Gmail API] Email sent:', { messageId: res.data.id, threadId: res.data.threadId });
   return res.data;
 }
 
-function createRawEmail(from, to, subject, body, inReplyToMessageId, attachments = []) {
+/**
+ * @param {string}      from
+ * @param {string}      to
+ * @param {string}      subject
+ * @param {string}      body
+ * @param {string|null} inReplyToMessageId  - RFC 2822 Message-ID of the direct parent message
+ * @param {string|null} references          - Full References chain (space-separated list of Message-IDs)
+ * @param {Array}       attachments
+ */
+function createRawEmail(from, to, subject, body, inReplyToMessageId, references, attachments = []) {
   const boundary = `boundary_${Date.now()}_${Math.random().toString(36).slice(2)}`;
   const hasAttachments = attachments.length > 0;
 
@@ -269,7 +283,10 @@ function createRawEmail(from, to, subject, body, inReplyToMessageId, attachments
 
   if (inReplyToMessageId) {
     headers.push(`In-Reply-To: ${inReplyToMessageId}`);
-    headers.push(`References: ${inReplyToMessageId}`);
+    // References must contain the complete ancestor chain so every email client
+    // can reconstruct the thread. Use the supplied chain if available; fall back
+    // to just the direct parent so we always set at least something.
+    headers.push(`References: ${references || inReplyToMessageId}`);
   }
 
   if (!hasAttachments) {
@@ -288,9 +305,17 @@ function createRawEmail(from, to, subject, body, inReplyToMessageId, attachments
   email += 'Content-Type: text/plain; charset=utf-8\r\n\r\n';
   email += `${body}\r\n\r\n`;
 
-  // Attachment parts
+  // Attachment parts — support both in-memory buffers (multer memory storage) and disk paths
   for (const file of attachments) {
-    const fileData = fs.readFileSync(file.path);
+    let fileData;
+    if (file.buffer) {
+      fileData = file.buffer;
+    } else if (file.path) {
+      fileData = fs.readFileSync(file.path);
+    } else {
+      console.warn('[Gmail API] Attachment skipped (no buffer or path):', file.originalname);
+      continue;
+    }
     const base64Data = fileData.toString('base64');
     email += `--${boundary}\r\n`;
     email += `Content-Type: ${file.mimetype}; name="${file.originalname}"\r\n`;

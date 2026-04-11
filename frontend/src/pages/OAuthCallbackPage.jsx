@@ -8,12 +8,13 @@ export default function OAuthCallbackPage() {
   useEffect(() => {
     const token = searchParams.get('token');
     if (token) {
-      // Store the JWT token from OAuth callback
       localStorage.setItem('token', token);
-      // Reload to let AuthContext pick up the new token
-      window.location.href = '/inbox';
+      // Backend encodes the correct destination (/pricing, /onboarding, /inbox).
+      // Fall back to /pricing so users without a plan are never sent straight
+      // to the app without going through checkout first.
+      const next = searchParams.get('next') || '/pricing';
+      window.location.href = next;
     } else {
-      // No token — redirect to login
       navigate('/login?error=oauth_failed');
     }
   }, [searchParams, navigate]);

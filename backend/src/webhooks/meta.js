@@ -685,6 +685,8 @@ async function processWhatsAppWebhook(payload, io) {
           },
         });
 
+        const msgSentAt = msg.timestamp ? new Date(Number(msg.timestamp) * 1000) : new Date();
+
         const message = await prisma.message.create({
           data: {
             conversationId: conversation.id,
@@ -695,6 +697,7 @@ async function processWhatsAppWebhook(payload, io) {
             contentType: mediaTypes.includes(msg.type) ? msg.type : 'text',
             attachments: waAttachments.length > 0 ? waAttachments : undefined,
             status: 'delivered',
+            sentAt: msgSentAt,
             rawPayload: msg,
           },
         });

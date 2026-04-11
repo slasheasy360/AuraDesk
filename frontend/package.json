@@ -9,6 +9,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@stripe/stripe-js": "^9.1.0",
     "axios": "^1.7.9",
     "dompurify": "^3.3.2",
     "lucide-react": "^0.473.0",

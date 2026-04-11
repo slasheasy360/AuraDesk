@@ -1,8 +1,12 @@
 import { Router } from 'express';
 import crypto from 'crypto';
-import { authenticate } from '../middleware/auth.js';
+import { authenticate, requireActiveSubscription } from '../middleware/auth.js';
 import prisma from '../utils/prisma.js';
 import { emitToUser } from '../utils/socket.js';
+import * as facebookService from '../services/facebook.js';
+import * as instagramService from '../services/instagram.js';
+import * as whatsappService from '../services/whatsapp.js';
+import { sendMail } from '../utils/mailer.js';
 
 const router = Router();
 
@@ -19,6 +23,127 @@ async function nextInvoiceNumber(userId) {
     where: { userId, createdAt: { gte: new Date(`${year}-01-01`) } },
   });
   return `INV-${year}-${String(count + 1).padStart(4, '0')}`;
+}
+
+// ── Send a plain-text message via the conversation's platform ───────────────
+async function sendOnPlatform(conversation, content) {
+  const { platform } = conversation.connectedAccount;
+  switch (platform) {
+    case 'facebook': {
+      const r = await facebookService.sendMessage(
+        conversation.connectedAccountId,
+        conversation.platformConversationId,
+        content
+      );
+      return { platformMessageId: r?.message_id || null, subject: null };
+    }
+    case 'instagram': {
+      const recipientId = conversation.contact?.platformUserId || conversation.platformConversationId;
+      const r = await instagramService.sendMessage(
+        conversation.connectedAccountId,
+        recipientId,
+        content
+      );
+      return { platformMessageId: r?.message_id || null, subject: null };
+    }
+    case 'whatsapp': {
+      const r = await whatsappService.sendMessage(
+        conversation.connectedAccountId,
+        conversation.platformConversationId,
+        content
+      );
+      return { platformMessageId: r?.messages?.[0]?.id || null, subject: null };
+    }
+    case 'gmail': {
+      const recipientEmail = conversation.contact?.platformUserId;
+      if (!recipientEmail) throw new Error('No recipient email on conversation');
+      // Reply to the latest thread subject so it threads correctly
+      const lastMsg = await prisma.message.findFirst({
+        where: { conversationId: conversation.id },
+        orderBy: { sentAt: 'desc' },
+        select: { subject: true },
+      });
+      const subject = lastMsg?.subject
+        ? (lastMsg.subject.startsWith('Re:') ? lastMsg.subject : `Re: ${lastMsg.subject}`)
+        : 'Your invoice';
+      const headers = await getThreadingHeaders(conversation.id);
+      const mailResult = await sendMail({
+        from: conversation.connectedAccount.platformAccountId,
+        to: recipientEmail,
+        subject,
+        text: content,
+        headers: headers || undefined,
+      });
+      if (!mailResult.sent) {
+        throw new Error(`SMTP send failed: ${mailResult.reason || 'Unknown error'}`);
+      }
+      console.log('[Invoice SMTP] Gmail thread reply sent:', {
+        to: recipientEmail,
+        subject,
+        messageId: mailResult.messageId,
+        response: mailResult.response,
+        accepted: mailResult.accepted,
+        rejected: mailResult.rejected,
+      });
+      return { platformMessageId: mailResult.messageId || null, subject };
+    }
+    default:
+      throw new Error(`Unsupported platform: ${platform}`);
+  }
+}
+
+function extractHeader(headers = [], name) {
+  const target = name.toLowerCase();
+  const header = headers.find((h) => String(h.name || '').toLowerCase() === target);
+  return header?.value || '';
+}
+
+async function getThreadingHeaders(conversationId) {
+  const lastWithPayload = await prisma.message.findFirst({
+    where: { conversationId, rawPayload: { not: null } },
+    orderBy: { sentAt: 'desc' },
+    select: { rawPayload: true },
+  });
+
+  const headers = lastWithPayload?.rawPayload?.payload?.headers || [];
+  const messageId = extractHeader(headers, 'Message-ID');
+  const references = extractHeader(headers, 'References');
+
+  if (!messageId && !references) return null;
+
+  const refValue = references
+    ? `${references} ${messageId || ''}`.trim()
+    : messageId || '';
+
+  return {
+    'In-Reply-To': messageId || undefined,
+    References: refValue || undefined,
+  };
+}
+
+function buildInvoiceEmail({ invoice, company, publicLink }) {
+  const subject = `Invoice ${invoice.invoiceNumber} from ${company || 'AuraDesk'}`;
+  const lines = [
+    `Hi ${invoice.clientName || 'there'},`,
+    '',
+    `Here is your invoice ${invoice.invoiceNumber}.`,
+    `Total: ${invoice.currency} ${invoice.total.toFixed(2)}`,
+    `Due date: ${invoice.dueDate.toISOString().slice(0, 10)}`,
+    '',
+    `View and pay: ${publicLink}`,
+  ];
+  const text = lines.join('\n');
+  const html = `
+    <div style="font-family:Segoe UI,Arial,sans-serif;max-width:560px;margin:0 auto;padding:24px;">
+      <h2 style="margin:0 0 12px;color:#0f172a;">Invoice ${invoice.invoiceNumber}</h2>
+      <p style="margin:0 0 8px;color:#334155;">Hi ${invoice.clientName || 'there'},</p>
+      <p style="margin:0 0 8px;color:#334155;">Here is your invoice.</p>
+      <p style="margin:0 0 8px;color:#334155;"><strong>Total:</strong> ${invoice.currency} ${invoice.total.toFixed(2)}</p>
+      <p style="margin:0 0 16px;color:#334155;"><strong>Due date:</strong> ${invoice.dueDate.toISOString().slice(0, 10)}</p>
+      <a href="${publicLink}" style="display:inline-block;background:#2563eb;color:#fff;text-decoration:none;padding:10px 16px;border-radius:6px;">View invoice</a>
+    </div>
+  `;
+  return { subject, text, html };
 }
 
 function calcTotals(items, taxRate) {
@@ -84,10 +209,11 @@ router.get('/public/:slug', async (req, res) => {
 // ═══════════════════════════════════════════════════════════════════
 // GET /api/invoices — list
 // ═══════════════════════════════════════════════════════════════════
-router.get('/', authenticate, async (req, res) => {
+router.get('/', authenticate, requireActiveSubscription, async (req, res) => {
   try {
-    const { search, status } = req.query;
+    const { search, status, leadId } = req.query;
     const where = { userId: req.user.id };
+    if (leadId) where.leadId = leadId;
     if (status && VALID_STATUSES.includes(status)) where.status = status;
     if (search) {
       where.OR = [
@@ -116,7 +242,7 @@ router.get('/', authenticate, async (req, res) => {
 // ═══════════════════════════════════════════════════════════════════
 // GET /api/invoices/:id — detail
 // ═══════════════════════════════════════════════════════════════════
-router.get('/:id', authenticate, async (req, res) => {
+router.get('/:id', authenticate, requireActiveSubscription, async (req, res) => {
   try {
     const invoice = await loadInvoiceWithComputed({ id: req.params.id, userId: req.user.id });
     if (!invoice) return res.status(404).json({ error: 'Invoice not found' });
@@ -130,7 +256,7 @@ router.get('/:id', authenticate, async (req, res) => {
 // ═══════════════════════════════════════════════════════════════════
 // POST /api/invoices — create
 // ═══════════════════════════════════════════════════════════════════
-router.post('/', authenticate, async (req, res) => {
+router.post('/', authenticate, requireActiveSubscription, async (req, res) => {
   try {
     const {
       leadId,
@@ -168,11 +294,20 @@ router.post('/', authenticate, async (req, res) => {
     const tax = Number(taxRate) || 0;
     const totals = calcTotals(cleanItems, tax);
 
-    // Validate lead ownership if provided
+    // Validate lead ownership if provided + block duplicate active invoices
     let lead = null;
     if (leadId) {
       lead = await prisma.lead.findFirst({ where: { id: leadId, userId: req.user.id } });
       if (!lead) return res.status(400).json({ error: 'Invalid leadId' });
+      const activeInvoice = await prisma.invoice.findFirst({
+        where: { leadId, status: { not: 'Paid' } },
+      });
+      if (activeInvoice) {
+        return res.status(409).json({
+          error: 'This lead already has an active invoice. Complete payment before creating a new one.',
+          activeInvoiceId: activeInvoice.id,
+        });
+      }
     }
 
     const invoiceNumber = await nextInvoiceNumber(req.user.id);
@@ -202,31 +337,119 @@ router.post('/', authenticate, async (req, res) => {
       include: { items: true, payments: true },
     });
 
-    // ── Auto-send to chat if lead has conversation ──
+    let gmailConversationRecipient = null;
+
+    // ── Auto-send to chat if lead has conversation: real platform delivery ──
     if (lead?.conversationId) {
       try {
         const frontendBase = (process.env.FRONTEND_URL || 'http://localhost:5173').split(',')[0].trim();
         const link = `${frontendBase}/i/${publicSlug}`;
-        await prisma.message.create({
-          data: {
-            conversationId: lead.conversationId,
-            direction: 'outbound',
-            content: `Your invoice is ready: ${link}`,
-            contentType: 'text',
-            status: 'sent',
+        const content = `Your invoice is ready: ${link}`;
+
+        const conversation = await prisma.conversation.findUnique({
+          where: { id: lead.conversationId },
+          include: {
+            connectedAccount: true,
+            contact: true,
           },
         });
-        emitToUser(req.user.id, 'message_created', {
+
+        if (!conversation) {
+          throw new Error('Linked conversation not found');
+        }
+
+        // Actually send via the platform (Gmail / WhatsApp / IG / FB)
+        const { platformMessageId, subject } = await sendOnPlatform(conversation, content);
+
+        if (conversation.connectedAccount.platform === 'gmail') {
+          gmailConversationRecipient = conversation.contact?.platformUserId || null;
+        }
+
+        // Persist the outbound message in our DB
+        const platform = conversation.connectedAccount.platform;
+        const message = await prisma.message.create({
+          data: {
+            conversationId: lead.conversationId,
+            platformMessageId,
+            direction: 'outbound',
+            sender: req.user.name || req.user.email,
+            subject,
+            content,
+            contentType: platform === 'gmail' ? 'email' : 'text',
+            status: 'sent',
+            sentAt: new Date(),
+          },
+        });
+
+        // Bump conversation lastMessageAt
+        const updatedConv = await prisma.conversation.update({
+          where: { id: lead.conversationId },
+          data: { lastMessageAt: message.sentAt },
+        });
+
+        // Emit the same events the inbox listens to
+        emitToUser(req.user.id, 'new_message', {
           conversationId: lead.conversationId,
-          invoiceId: invoice.id,
+          message,
+          platform,
+          _fromSender: true,
+        });
+        emitToUser(req.user.id, 'conversation_update', {
+          conversationId: lead.conversationId,
+          lastMessageAt: updatedConv.lastMessageAt,
+          unreadCount: updatedConv.unreadCount,
         });
       } catch (e) {
-        console.warn('Auto-send invoice message failed:', e.message);
+        // Don't fail invoice creation if delivery fails — just log + surface a flag
+        console.error('[Invoice] Auto-send to platform failed:', e?.response?.data || e?.message || e);
+      }
+    }
+
+    let emailDelivery = null;
+    if (clientEmail && clientEmail !== gmailConversationRecipient) {
+      const frontendBase = (process.env.FRONTEND_URL || 'http://localhost:5173').split(',')[0].trim();
+      const publicLink = `${frontendBase}/i/${publicSlug}`;
+      const { subject, text, html } = buildInvoiceEmail({
+        invoice,
+        company: req.user.companyName || req.user.name,
+        publicLink,
+      });
+
+      const mailResult = await sendMail({
+        from: process.env.SMTP_FROM || `${req.user.name || 'AuraDesk'} <${req.user.email}>`,
+        to: clientEmail,
+        subject,
+        text,
+        html,
+      });
+
+      emailDelivery = {
+        sent: mailResult.sent,
+        messageId: mailResult.messageId || null,
+        reason: mailResult.sent ? null : mailResult.reason || 'Unknown error',
+        response: mailResult.response || null,
+      };
+
+      if (mailResult.sent) {
+        console.log('[Invoice SMTP] Invoice email sent:', {
+          to: clientEmail,
+          subject,
+          messageId: mailResult.messageId,
+          response: mailResult.response,
+          accepted: mailResult.accepted,
+          rejected: mailResult.rejected,
+        });
+      } else {
+        console.error('[Invoice SMTP] Invoice email failed:', {
+          to: clientEmail,
+          subject,
+          reason: mailResult.reason,
+        });
       }
     }
 
     emitToUser(req.user.id, 'invoice_created', { invoice });
-    res.status(201).json({ invoice });
+    res.status(201).json({ invoice, emailDelivery });
   } catch (err) {
     console.error('Create invoice error:', err);
     res.status(500).json({ error: 'Failed to create invoice' });
@@ -236,7 +459,7 @@ router.post('/', authenticate, async (req, res) => {
 // ═══════════════════════════════════════════════════════════════════
 // PATCH /api/invoices/:id/status
 // ═══════════════════════════════════════════════════════════════════
-router.patch('/:id/status', authenticate, async (req, res) => {
+router.patch('/:id/status', authenticate, requireActiveSubscription, async (req, res) => {
   try {
     const { status } = req.body;
     if (!VALID_STATUSES.includes(status)) {
@@ -262,7 +485,7 @@ router.patch('/:id/status', authenticate, async (req, res) => {
 // ═══════════════════════════════════════════════════════════════════
 // DELETE /api/invoices/:id
 // ═══════════════════════════════════════════════════════════════════
-router.delete('/:id', authenticate, async (req, res) => {
+router.delete('/:id', authenticate, requireActiveSubscription, async (req, res) => {
   try {
     const existing = await prisma.invoice.findFirst({
       where: { id: req.params.id, userId: req.user.id },
@@ -280,7 +503,7 @@ router.delete('/:id', authenticate, async (req, res) => {
 // ═══════════════════════════════════════════════════════════════════
 // POST /api/invoices/:id/payments — record payment
 // ═══════════════════════════════════════════════════════════════════
-router.post('/:id/payments', authenticate, async (req, res) => {
+router.post('/:id/payments', authenticate, requireActiveSubscription, async (req, res) => {
   try {
     const { amount, date, type, note } = req.body;
     const amt = Number(amount);
@@ -323,7 +546,7 @@ router.post('/:id/payments', authenticate, async (req, res) => {
 // ═══════════════════════════════════════════════════════════════════
 // DELETE /api/invoices/:id/payments/:paymentId
 // ═══════════════════════════════════════════════════════════════════
-router.delete('/:id/payments/:paymentId', authenticate, async (req, res) => {
+router.delete('/:id/payments/:paymentId', authenticate, requireActiveSubscription, async (req, res) => {
   try {
     const existing = await prisma.invoice.findFirst({
       where: { id: req.params.id, userId: req.user.id },

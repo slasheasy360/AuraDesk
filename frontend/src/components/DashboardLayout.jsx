@@ -1,14 +1,29 @@
 import { useState, useEffect } from 'react';
 import { Outlet, NavLink, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext.jsx';
+import { LinkAccountsProvider, useLinkAccounts } from '../context/LinkAccountsContext.jsx';
 import { connectSocket, disconnectSocket } from '../services/socket.js';
 import { LayoutDashboard, Inbox, Users, FileText, Brain, LogOut, Menu, X, ChevronRight } from 'lucide-react';
+import logoUrl from '../assets/logo.svg';
+import MobileBottomNav from './MobileBottomNav.jsx';
+import LinkAccountsSheet from './LinkAccountsSheet.jsx';
 
+// Wraps the dashboard tree in the Link-Accounts provider so any nested
+// page can pop the modal via `useLinkAccounts()` without prop-drilling.
 export default function DashboardLayout() {
+  return (
+    <LinkAccountsProvider>
+      <DashboardLayoutInner />
+    </LinkAccountsProvider>
+  );
+}
+
+function DashboardLayoutInner() {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const { open: linkAccountsOpen, closeLinkAccounts } = useLinkAccounts();
 
   useEffect(() => {
     if (user?.id) {
@@ -21,6 +36,13 @@ export default function DashboardLayout() {
   useEffect(() => {
     setSidebarOpen(false);
   }, [location.pathname]);
+
+  // Allow nested pages (e.g. InboxPage) to toggle the mobile sidebar via custom event
+  useEffect(() => {
+    const handleToggle = () => setSidebarOpen((prev) => !prev);
+    window.addEventListener('toggle-mobile-sidebar', handleToggle);
+    return () => window.removeEventListener('toggle-mobile-sidebar', handleToggle);
+  }, []);
 
   const handleLogout = () => {
     logout();
@@ -40,7 +62,7 @@ export default function DashboardLayout() {
   const planLabel = user?.plan === 'pro' ? 'PRO' : user?.plan === 'elite' ? 'ELITE' : user?.plan === 'starter' ? 'STARTER' : user?.plan === 'trial' ? 'TRIAL' : 'FREE';
 
   return (
-    <div className="flex h-screen bg-gray-100">
+    <div className="flex h-screen bg-[#0B1628]">
       {/* Mobile overlay */}
       {sidebarOpen && (
         <div
@@ -52,7 +74,7 @@ export default function DashboardLayout() {
       {/* Sidebar */}
       <aside
         className={`
-          fixed inset-y-0 left-0 z-50 w-64 bg-sidebar text-white flex flex-col
+          fixed inset-y-0 left-0 z-50 w-64 bg-[#0B1628] text-white flex flex-col
           transform transition-transform duration-300 ease-out
           lg:relative lg:translate-x-0
           ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'}
@@ -61,9 +83,7 @@ export default function DashboardLayout() {
         {/* Logo + close button */}
         <div className="px-5 py-5 border-b border-white/10 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="w-9 h-9 bg-primary-500 rounded-lg flex items-center justify-center text-lg font-bold">
-              A
-            </div>
+            <img src={logoUrl} alt="AuraDesk" className="h-8 w-auto" />
             <span className="text-xl font-bold">AuraDesk</span>
           </div>
           <button
@@ -82,10 +102,10 @@ export default function DashboardLayout() {
               to={to}
               end={to === '/'}
               className={({ isActive }) =>
-                `flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-medium transition ${
+                `flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium transition ${
                   isActive || (to === '/inbox' && location.pathname.startsWith('/inbox'))
-                    ? 'bg-primary-600 text-white'
-                    : 'text-gray-300 hover:bg-white/10 hover:text-white'
+                    ? 'bg-[#1787FE] text-white shadow-lg shadow-[#1787FE]/20'
+                    : 'text-gray-300 hover:bg-white/5 hover:text-white'
                 }`
               }
             >
@@ -97,8 +117,13 @@ export default function DashboardLayout() {
 
         {/* Company section */}
         <div className="px-4 py-4 border-t border-white/10">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3 min-w-0">
+          <div className="flex items-center justify-between gap-2">
+            <button
+              type="button"
+              onClick={() => navigate('/settings?tab=Personal')}
+              className="flex items-center gap-3 min-w-0 flex-1 text-left hover:opacity-90 transition"
+              title="Profile Settings"
+            >
               {companyLogo ? (
                 <img src={companyLogo} alt={companyName} className="w-9 h-9 rounded-full object-cover flex-shrink-0" />
               ) : (
@@ -108,15 +133,22 @@ export default function DashboardLayout() {
               )}
               <div className="min-w-0">
                 <p className="text-sm font-medium truncate">{companyName}</p>
-                <span className="inline-block px-2 py-0.5 text-[10px] font-bold bg-primary-500 rounded text-white mt-0.5">
+                <span className="inline-block px-2 py-0.5 text-[10px] font-bold bg-green-500 rounded text-white mt-0.5">
                   {planLabel}
                 </span>
               </div>
-            </div>
+            </button>
             <button
               onClick={handleLogout}
-              className="text-gray-400 hover:text-white transition flex-shrink-0"
+              className="text-gray-400 hover:text-white hover:bg-white/10 p-1.5 rounded transition flex-shrink-0"
               title="Logout"
+            >
+              <LogOut size={16} />
+            </button>
+            <button
+              onClick={() => navigate('/settings?tab=Personal')}
+              className="text-gray-400 hover:text-white transition flex-shrink-0"
+              title="Open settings"
             >
               <ChevronRight size={18} />
             </button>
@@ -126,26 +158,53 @@ export default function DashboardLayout() {
 
       {/* Main content */}
       <div className="flex-1 flex flex-col overflow-hidden">
-        {/* Mobile top bar */}
-        <div className="lg:hidden bg-white border-b border-gray-200 px-4 py-3 flex items-center gap-3">
+        {/* Mobile top bar — logo + wordmark on left, hamburger + company avatar on right */}
+        <div className="lg:hidden bg-[#0B1628] border-b border-white/5 px-4 py-3 flex items-center justify-between gap-3">
           <button
-            onClick={() => setSidebarOpen(true)}
-            className="text-gray-600 hover:text-gray-900 transition"
+            type="button"
+            onClick={() => navigate('/')}
+            className="flex items-center gap-2 min-w-0"
+            aria-label="AuraDesk home"
           >
-            <Menu size={24} />
+            <img src={logoUrl} alt="AuraDesk" className="h-7 w-auto" />
+            <span className="font-bold text-white text-[17px] tracking-tight">AuraDesk</span>
           </button>
           <div className="flex items-center gap-2">
-            <div className="w-7 h-7 bg-primary-500 rounded-md flex items-center justify-center text-sm font-bold text-white">
-              A
-            </div>
-            <span className="font-semibold text-gray-900">AuraDesk</span>
+            <button
+              onClick={() => setSidebarOpen(true)}
+              className="text-gray-300 hover:text-white transition p-1.5"
+              aria-label="Open menu"
+            >
+              <Menu size={22} />
+            </button>
+            <button
+              type="button"
+              onClick={() => navigate('/settings?tab=Personal')}
+              className="flex-shrink-0"
+              title={companyName}
+              aria-label="Profile"
+            >
+              {companyLogo ? (
+                <img src={companyLogo} alt={companyName} className="w-9 h-9 rounded-full object-cover border border-white/10" />
+              ) : (
+                <div className="w-9 h-9 bg-[#1787FE] rounded-full flex items-center justify-center text-sm font-bold text-white border border-white/10">
+                  {companyName?.[0]?.toUpperCase()}
+                </div>
+              )}
+            </button>
           </div>
         </div>
 
-        <main className="flex-1 overflow-hidden">
+        <main className="flex-1 overflow-hidden pb-16 lg:pb-0">
           <Outlet />
         </main>
+
+        <MobileBottomNav />
       </div>
+
+      {/* Global Link Accounts modal — single instance, opened from anywhere
+          inside the dashboard via the LinkAccounts context. */}
+      <LinkAccountsSheet open={linkAccountsOpen} onClose={closeLinkAccounts} />
     </div>
   );
 }

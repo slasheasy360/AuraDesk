@@ -190,24 +190,81 @@ router.patch('/:id/star', authenticate, async (req, res) => {
 
 router.patch('/:id/lead', authenticate, async (req, res) => {
   try {
-    const conversation = await findUserConversation(req.params.id, req.user.id);
+    const conversation = await prisma.conversation.findFirst({
+      where: { id: req.params.id, connectedAccount: { userId: req.user.id } },
+      include: {
+        contact: true,
+        connectedAccount: { select: { platform: true } },
+        messages: { take: 1, orderBy: { sentAt: 'desc' }, select: { sentAt: true } },
+      },
+    });
     if (!conversation) {
       return res.status(404).json({ error: 'Conversation not found' });
     }
 
-    const updated = await prisma.conversation.update({
-      where: { id: conversation.id },
-      data: { isLead: !conversation.isLead },
+    // Single source of truth: Lead table. Toggle = create-if-missing or delete-if-present.
+    const existingLead = await prisma.lead.findUnique({
+      where: { conversationId: conversation.id },
     });
 
+    if (existingLead) {
+      // ── Unmark: delete Lead, sync flag ──
+      await prisma.lead.delete({ where: { id: existingLead.id } });
+      await prisma.conversation.update({
+        where: { id: conversation.id },
+        data: { isLead: false },
+      });
+      emitToUser(req.user.id, 'lead_deleted', { id: existingLead.id });
+      emitToUser(req.user.id, 'conversation_state_change', {
+        conversationId: conversation.id,
+        field: 'isLead',
+        value: false,
+      });
+      return res.json({ conversationId: conversation.id, isLead: false, lead: null });
+    }
+
+    // ── Mark as lead: create Lead row from conversation data ──
+    const platformMap = {
+      instagram: 'Instagram',
+      whatsapp: 'WhatsApp',
+      gmail: 'Gmail',
+      facebook: 'Facebook',
+    };
+    const name = conversation.contact?.name || conversation.contact?.username || 'Unknown';
+    const platform = platformMap[conversation.connectedAccount?.platform] || 'Other';
+    const lastContactedAt =
+      conversation.lastMessageAt || conversation.messages?.[0]?.sentAt || new Date();
+
+    const lead = await prisma.lead.create({
+      data: {
+        userId: req.user.id,
+        name,
+        platform,
+        lastContactedAt,
+        lastAction: 'New Lead',
+        status: 'New',
+        conversationId: conversation.id,
+      },
+    });
+
+    await prisma.conversation.update({
+      where: { id: conversation.id },
+      data: { isLead: true },
+    });
+
+    emitToUser(req.user.id, 'lead_created', { lead });
     emitToUser(req.user.id, 'conversation_state_change', {
       conversationId: conversation.id,
       field: 'isLead',
-      value: updated.isLead,
+      value: true,
     });
 
-    res.json({ conversationId: conversation.id, isLead: updated.isLead });
+    res.json({ conversationId: conversation.id, isLead: true, lead });
   } catch (err) {
+    // Handle race / unique-constraint clash gracefully
+    if (err?.code === 'P2002') {
+      return res.status(200).json({ conversationId: req.params.id, isLead: true, alreadyExists: true });
+    }
     console.error('Toggle lead error:', err);
     res.status(500).json({ error: 'Failed to toggle lead' });
   }
