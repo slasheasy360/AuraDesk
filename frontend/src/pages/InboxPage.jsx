@@ -1738,6 +1738,10 @@ const FilterPanel = memo(function FilterPanel({ activeFilter, setActiveFilter, f
             {availableSourceFilters.map(({ key, label }) => {
               const isChecked = sourceFilters.has(key);
               const count = sourceCounts[key] || 0;
+              const dotColor = key === 'instagram' ? 'bg-pink-500' :
+                               key === 'facebook'  ? 'bg-blue-500' :
+                               key === 'whatsapp'  ? 'bg-green-500' :
+                               key === 'gmail'     ? 'bg-red-500' : 'bg-gray-500';
               return (
                 <button
                   key={key}
