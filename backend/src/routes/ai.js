@@ -87,6 +87,7 @@ router.post('/generate-reply', authenticate, requireActiveSubscription, async (r
       if (allFaqs.length === 0) {
         // Truly no FAQ data at all — refund quota and return fallback
         await refundAiReply(req.user, { meta: { conversationId, platform } });
+        console.warn(`[AI] No FAQs found at all for owner ${faqOwnerId} (requester: ${req.user.id})`);
         return res.json({
           reply: "I don't have enough data to answer this question.",
           usage: {
@@ -95,8 +96,11 @@ router.post('/generate-reply', authenticate, requireActiveSubscription, async (r
             unlimited: quota.unlimited,
           },
           planWarning: null,
+          _debug: { faqOwnerId, requesterId: req.user.id, faqCount: 0 },
         });
       }
+
+      console.log(`[AI] Fallback: using ${allFaqs.length} plain FAQs for owner ${faqOwnerId}`);
 
       goodMatches = allFaqs;
     }
