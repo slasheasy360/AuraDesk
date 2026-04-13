@@ -109,6 +109,14 @@ function FullPageLoader() {
   );
 }
 
+/** Redirect authenticated users away from public-only pages (login, register) */
+function PublicRoute({ children }) {
+  const { user, loading } = useAuth();
+  if (loading) return <FullPageLoader />;
+  if (user) return <Navigate to="/inbox" replace />;
+  return children;
+}
+
 /** Only redirect to pricing if user has no active plan (expired trial, no subscription) */
 function RequireAuth({ children }) {
   const { user, loading } = useAuth();

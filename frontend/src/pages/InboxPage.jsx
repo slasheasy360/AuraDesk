@@ -145,7 +145,8 @@ export default function InboxPage() {
   const knownMessageIds = useRef(new Set());
   const messageCache = useRef(new Map());
 
-  // Derive connected platforms from conversations
+  // Derive connected platforms from conversations and auto-check them in sourceFilters
+  const sourceFiltersInitialized = useRef(false);
   useEffect(() => {
     const platforms = new Set();
     conversations.forEach((c) => {
@@ -153,6 +154,21 @@ export default function InboxPage() {
       if (p) platforms.add(p);
     });
     setConnectedPlatforms(platforms);
+
+    if (platforms.size === 0) return;
+    if (!sourceFiltersInitialized.current) {
+      // First load: check all connected platforms
+      sourceFiltersInitialized.current = true;
+      setSourceFilters(new Set(platforms));
+    } else {
+      // New platform added later (new account connected): auto-check it
+      setSourceFilters((prev) => {
+        let changed = false;
+        const next = new Set(prev);
+        platforms.forEach((p) => { if (!next.has(p)) { next.add(p); changed = true; } });
+        return changed ? next : prev;
+      });
+    }
   }, [conversations]);
 
   // ═══════════════════════════════════════════════════════════════════
@@ -817,13 +833,13 @@ export default function InboxPage() {
     });
   };
 
-  const openReplyBox = (msg) => {
+  const openReplyBox = useCallback((msg) => {
     setReplyingTo(msg);
     setShowReplyBox(true);
     // Only clear message if there's no existing draft content
     setNewMessage((prev) => prev || '');
     setAttachments([]);
-  };
+  }, []);
 
   // ── Socket connection status ──
   const [socketConnected, setSocketConnected] = useState(() => {
@@ -979,8 +995,8 @@ export default function InboxPage() {
       });
     }
 
-    // Apply source filter
-    if (sourceFilters.size > 0) {
+    // Apply source filter only when a subset of platforms is selected
+    if (sourceFilters.size > 0 && sourceFilters.size < connectedPlatforms.size) {
       result = result.filter((c) => sourceFilters.has(c.connectedAccount?.platform));
     }
 
@@ -1008,7 +1024,7 @@ export default function InboxPage() {
     }
 
     return result;
-  }, [conversations, search, sourceFilters, activeFilter]);
+  }, [conversations, search, sourceFilters, activeFilter, connectedPlatforms]);
 
   // Filter counts
   const filterCounts = useMemo(() => {
@@ -1052,6 +1068,25 @@ export default function InboxPage() {
   const handleSelectConversation = useCallback((convId) => navigate(`/inbox/${convId}`), [navigate]);
   const handleBackToList = useCallback(() => navigate('/inbox'), [navigate]);
   const platformTheme = useMemo(() => getPlatformTheme(platform), [platform]);
+
+  // Stable handlers for inline props — prevents child re-renders
+  const handleAttachClick = useCallback(() => fileInputRef.current?.click(), []);
+  const handleFileInputChange = useCallback((e) => {
+    if (e.target.files?.length) {
+      const selectedFiles = Array.from(e.target.files);
+      e.target.value = '';
+      handleFileSelect(selectedFiles);
+    }
+  }, [handleFileSelect]);
+  const handleOpenReply = useCallback(() => {
+    const lastMsg = messages[messages.length - 1];
+    openReplyBox(lastMsg || { subject: emailSubject });
+  }, [messages, openReplyBox, emailSubject]);
+  const handleCloseReply = useCallback(() => {
+    setShowReplyBox(false);
+    setReplyingTo(null);
+    setAttachments([]);
+  }, []);
 
   // ═══════════════════════════════════════════════════════════════════
   // RENDER: CONVERSATION VIEW (when a conversation is selected)
@@ -1354,13 +1389,7 @@ export default function InboxPage() {
                 multiple
                 accept="image/jpeg,image/png,image/gif,image/webp,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/plain,text/csv,audio/mpeg,audio/ogg,audio/wav,video/mp4,video/webm"
                 className="hidden"
-                onChange={(e) => {
-                  if (e.target.files?.length) {
-                    const selectedFiles = Array.from(e.target.files);
-                    e.target.value = '';
-                    handleFileSelect(selectedFiles);
-                  }
-                }}
+                onChange={handleFileInputChange}
               />
 
               {/* Composer — EmailReplyBox for Gmail, chat composer for all other platforms */}
@@ -1374,7 +1403,7 @@ export default function InboxPage() {
                   handleSend={handleSend}
                   sending={sending}
                   attachments={attachments}
-                  onAttachClick={() => fileInputRef.current?.click()}
+                  onAttachClick={handleAttachClick}
                   removeAttachment={removeAttachment}
                   uploadProgress={uploadProgress}
                   onOpenReply={() => {
@@ -1707,8 +1736,12 @@ function FilterPanel({ activeFilter, setActiveFilter, filterCounts, sourceFilter
           <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider px-3 mb-2">Source</h3>
           <div className="space-y-0.5">
             {availableSourceFilters.map(({ key, label }) => {
-              const isActive = sourceFilters.has(key);
+              const isChecked = sourceFilters.has(key);
               const count = sourceCounts[key] || 0;
+              const dotColor = key === 'instagram' ? 'bg-pink-500' :
+                               key === 'facebook'  ? 'bg-blue-500' :
+                               key === 'whatsapp'  ? 'bg-green-500' :
+                               key === 'gmail'     ? 'bg-red-500' : 'bg-gray-500';
               return (
                 <button
                   key={key}
@@ -1760,7 +1793,7 @@ function FilterPanel({ activeFilter, setActiveFilter, filterCounts, sourceFilter
       </div>
     </div>
   );
-}
+});
 
 // ═══════════════════════════════════════════════════════════════════
 // CHAT COMPOSER (dark theme, matching design)
@@ -1891,7 +1924,7 @@ function ChatComposer({
       </form>
     </div>
   );
-}
+});
 
 // ═══════════════════════════════════════════════════════════════════
 // MOBILE CHAT COMPOSER — dark navy bottom bar matching mockup
