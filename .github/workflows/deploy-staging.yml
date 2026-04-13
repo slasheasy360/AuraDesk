@@ -115,7 +115,6 @@ jobs:
         id: task-def
         env:
           NEW_IMAGE: ${{ steps.build-image.outputs.IMAGE }}
-          STAGING_APP_URL: ${{ secrets.STAGING_APP_URL }}
         run: |
           # Get the task definition currently used by the service
           CURRENT_TASK_DEF_ARN=$(aws ecs describe-services \
@@ -133,7 +132,7 @@ jobs:
           # Update image and upsert APP_URL env var in every container definition
           UPDATED=$(echo "$TASK_DEF" | jq \
             --arg img "$NEW_IMAGE" \
-            --arg url "$STAGING_APP_URL" \
+            --arg url "https://test.getauradesk.com" \
             '.containerDefinitions |= map(
               .image = $img |
               .environment = ((.environment // [])
