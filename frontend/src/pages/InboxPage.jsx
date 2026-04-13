@@ -619,6 +619,14 @@ export default function InboxPage() {
   const [aiLoading, setAiLoading] = useState(false);
   const [aiError, setAiError] = useState(null);
 
+  // Clear AI state whenever the user switches to a different conversation
+  // so suggestions from one chat never bleed into another.
+  useEffect(() => {
+    setAiSuggestion(null);
+    setAiError(null);
+    setAiLoading(false);
+  }, [conversationId]);
+
   const handleAiRespond = useCallback(async () => {
     const activeId = conversationIdRef.current;
     if (!activeId || aiLoading) return;
@@ -735,6 +743,9 @@ export default function InboxPage() {
         // is now visible in the thread list above).
         setShowReplyBox(false);
         setReplyingTo(null);
+        // Auto-dismiss AI suggestion box after send — prevents stale reuse
+        setAiSuggestion(null);
+        setAiError(null);
       } catch (err) {
         const isRetryable = !err.response || err.response.status >= 500 || err.code === 'ECONNABORTED';
         if (isRetryable && attempt < MAX_RETRIES) {
