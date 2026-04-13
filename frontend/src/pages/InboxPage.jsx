@@ -1015,8 +1015,12 @@ export default function InboxPage() {
       });
     }
 
-    // Apply source filter only when a subset of platforms is selected
-    if (sourceFilters.size > 0 && sourceFilters.size < connectedPlatforms.size) {
+    // Always filter by selected sources.
+    // sourceFilters contains only connected+checked platforms.
+    // If nothing is checked show nothing; otherwise show only matching conversations.
+    if (sourceFilters.size === 0) {
+      result = [];
+    } else {
       result = result.filter((c) => sourceFilters.has(c.connectedAccount?.platform));
     }
 
@@ -1044,15 +1048,16 @@ export default function InboxPage() {
     }
 
     return result;
-  }, [conversations, search, sourceFilters, activeFilter, connectedPlatforms]);
+  }, [conversations, search, sourceFilters, activeFilter]);
 
-  // Filter counts — respect the active source filter so the badge numbers
-  // match the visible conversations when a source is unticked.
+  // Filter counts — always respect sourceFilters so badge numbers
+  // match the visible conversations exactly.
   const filterCounts = useMemo(() => {
-    const isSourceFiltered = sourceFilters.size > 0 && sourceFilters.size < connectedPlatforms.size;
-    const base = conversations.filter(
-      (c) => !c.isDeleted && (!isSourceFiltered || sourceFilters.has(c.connectedAccount?.platform))
-    );
+    const base = sourceFilters.size === 0
+      ? []
+      : conversations.filter(
+          (c) => !c.isDeleted && sourceFilters.has(c.connectedAccount?.platform)
+        );
     return {
       all: base.length,
       unread: base.filter((c) => c.unreadCount > 0).length,
@@ -1061,7 +1066,7 @@ export default function InboxPage() {
       draft: base.filter((c) => c.hasDraft).length,
       bin: conversations.filter((c) => c.isDeleted).length,
     };
-  }, [conversations, sourceFilters, connectedPlatforms]);
+  }, [conversations, sourceFilters]);
 
   // Source counts — only from non-deleted conversations
   const sourceCounts = useMemo(() => {
