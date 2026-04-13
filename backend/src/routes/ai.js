@@ -14,17 +14,55 @@ const router = Router();
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 /**
+ * Build the user-facing prompt using the structured template.
+ * {context}      → formatted FAQ entries
+ * {last_message} → the last inbound customer message
+ */
+function buildPrompt(context, lastMessage) {
+  return `You are an AI assistant for a customer support platform.
+
+Your task is to generate a reply based on the latest user message.
+
+Instructions:
+- ALWAYS treat the LAST user message as the actual question.
+- Ignore older messages unless needed for context.
+- Understand the intent of the question, not just exact wording.
+- Match the question with the provided training data (even if wording is different).
+- Use ONLY the provided context to generate the answer.
+- If multiple relevant entries exist, combine them into a single clear response.
+- Keep the response short, helpful, and professional.
+
+Special Rule:
+- If the question is general (e.g., "tell me about your business"), use any relevant company-related context to answer.
+
+Fallback Rule:
+- If no relevant context is found, respond with:
+"I don't have enough data about this question."
+
+---
+
+Context:
+${context}
+
+---
+
+Last User Message:
+${lastMessage}
+
+---
+
+Answer:`;
+}
+
+/**
  * POST /api/ai/generate-reply
  * Body: { conversationId?, prompt, platform? }
  *
  * 1. Quota check + consume
- * 2. Fetch user FAQs + tone settings (vector search + plain fallback)
- * 3. Build context-aware prompt
+ * 2. Fetch workspace FAQs (vector search → plain fallback)
+ * 3. Build structured prompt
  * 4. Call OpenAI gpt-4o-mini
  * 5. Return reply + usage info
- *
- * Error shape when quota exhausted (enforce mode):
- *   403 { error: 'AI_LIMIT', message, meta: { used, limit, upgradeTo, ... } }
  */
 router.post('/generate-reply', authenticate, requireActiveSubscription, async (req, res) => {
   const { conversationId, prompt, platform } = req.body || {};
@@ -49,35 +87,27 @@ router.post('/generate-reply', authenticate, requireActiveSubscription, async (r
   }
 
   try {
-    // Team members store FAQs under the workspace owner's userId.
-    // Always resolve to the owner's ID so member + owner share one knowledge base.
+    // Team members share the workspace owner's knowledge base.
     const faqOwnerId = req.user.inviterUserId || req.user.id;
 
-    // 2. Fetch settings + user info + semantic FAQ search in parallel
-    const [relevantFaqs, settings, user] = await Promise.all([
+    // 2. Fetch FAQs: try vector search first, fall back to all FAQs
+    const [relevantFaqs, user] = await Promise.all([
       searchSimilarFaqs(faqOwnerId, prompt, 5),
-      prisma.aiSettings.findUnique({ where: { userId: faqOwnerId } }),
       prisma.user.findUnique({
         where: { id: faqOwnerId },
-        select: { companyName: true, name: true },
+        select: { companyName: true },
       }),
     ]);
 
-    const tones = Array.isArray(settings?.tones) ? settings.tones : ['friendly'];
-    const toneList = tones.length > 0 ? tones.join(', ') : 'friendly';
     const companyName = user?.companyName || 'our company';
-
-    // 3. Use vector results if any pass the threshold (lowered to 0.3 for broader coverage).
-    //    If none pass — e.g. embeddings not yet generated, or low similarity — fall back to
-    //    fetching ALL FAQs for this org so the AI always has something to work with.
     const SIMILARITY_THRESHOLD = 0.3;
-    let goodMatches = relevantFaqs.filter(f => Number(f.similarity) >= SIMILARITY_THRESHOLD);
+    let matchedFaqs = relevantFaqs.filter(f => Number(f.similarity) >= SIMILARITY_THRESHOLD);
 
-    console.log(`[AI] Vector search: ${relevantFaqs.length} results, ${goodMatches.length} above ${SIMILARITY_THRESHOLD} for user ${req.user.id} (org: ${companyName})`);
+    console.log(`[AI] Query: "${prompt.slice(0, 80)}" | Vector: ${relevantFaqs.length} results, ${matchedFaqs.length} above ${SIMILARITY_THRESHOLD} | owner: ${faqOwnerId} (${companyName})`);
 
-    if (goodMatches.length === 0) {
-      // Fallback: pull all FAQs directly (covers missing embeddings & low similarity cases)
-      console.log(`[AI] Vector search yielded no matches — falling back to all FAQs for owner ${faqOwnerId}`);
+    if (matchedFaqs.length === 0) {
+      // Fallback: fetch all FAQs for this workspace
+      console.log(`[AI] Falling back to all FAQs for owner ${faqOwnerId}`);
       const allFaqs = await prisma.faq.findMany({
         where: { userId: faqOwnerId },
         select: { question: true, answer: true, category: true },
@@ -85,11 +115,10 @@ router.post('/generate-reply', authenticate, requireActiveSubscription, async (r
       });
 
       if (allFaqs.length === 0) {
-        // Truly no FAQ data at all — refund quota and return fallback
         await refundAiReply(req.user, { meta: { conversationId, platform } });
-        console.warn(`[AI] No FAQs found at all for owner ${faqOwnerId} (requester: ${req.user.id})`);
+        console.warn(`[AI] No FAQs found for owner ${faqOwnerId} (requester: ${req.user.id})`);
         return res.json({
-          reply: "I don't have enough data to answer this question.",
+          reply: "I don't have enough data about this question.",
           usage: {
             used: Math.max(0, quota.used - 1),
             limit: quota.limit,
@@ -100,44 +129,39 @@ router.post('/generate-reply', authenticate, requireActiveSubscription, async (r
         });
       }
 
-      console.log(`[AI] Fallback: using ${allFaqs.length} plain FAQs for owner ${faqOwnerId}`);
-
-      goodMatches = allFaqs;
+      matchedFaqs = allFaqs;
+      console.log(`[AI] Using ${allFaqs.length} plain FAQs as context`);
     }
 
-    const faqContext = goodMatches
+    // 3. Format FAQ context
+    const context = matchedFaqs
       .slice(0, 10)
       .map((f, i) => `${i + 1}. Q: ${f.question}\n   A: ${f.answer}`)
       .join('\n\n');
 
-    const systemPrompt = [
-      `You are a customer support AI assistant for ${companyName}.`,
-      `Communication tone: ${toneList}.`,
-      `\nKnowledge base (your ONLY source of truth):\n${faqContext}`,
-      '\nStrict rules:',
-      '- Reply with only the response text, no meta-commentary or preamble.',
-      '- Keep the reply concise (2–4 sentences max).',
-      '- Match the specified tone exactly.',
-      '- Base your answer SOLELY on the knowledge base above.',
-      '- If the knowledge base does not contain a clear answer, reply exactly: "I don\'t have enough data to answer this question."',
-      '- Do NOT use general knowledge, make assumptions, or fabricate information.',
-    ].join('\n');
+    console.log(`[AI] FAQ Context:\n${context}`);
+    console.log(`[AI] Final prompt sent to model:\n${buildPrompt(context, prompt)}`);
 
-    // 4. Call OpenAI
+    // 4. Call OpenAI with the structured template
     const response = await openai.chat.completions.create({
       model: 'gpt-4o-mini',
       max_tokens: 300,
       messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: prompt },
+        {
+          role: 'system',
+          content: `You are a support assistant for ${companyName}. Reply in a helpful and professional tone.`,
+        },
+        {
+          role: 'user',
+          content: buildPrompt(context, prompt),
+        },
       ],
     });
 
     const text = response.choices[0]?.message?.content?.trim()
-      || "I don't have enough data to answer this question.";
+      || "I don't have enough data about this question.";
 
-    // Log AI usage for billing/audit trail
-    console.log(`[AI] Reply generated for user ${req.user.id}, org: ${companyName}, platform: ${platform || 'unknown'}, used: ${quota.used}/${quota.unlimited ? '∞' : quota.limit}`);
+    console.log(`[AI] Response: "${text.slice(0, 120)}" | user: ${req.user.id} | used: ${quota.used}/${quota.unlimited ? '∞' : quota.limit}`);
 
     return res.json({
       reply: text,
