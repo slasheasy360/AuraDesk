@@ -1125,6 +1125,30 @@ export default function InboxPage() {
     }
   }, [selectedMessages, conversationId, navigate]);
 
+  // Bulk restore — restores selected conversations from Bin
+  const handleBulkRestore = useCallback(async () => {
+    const ids = [...selectedMessages];
+    if (ids.length === 0) return;
+
+    // Optimistic update
+    setConversations((prev) =>
+      prev.map((c) => ids.includes(c.id) ? { ...c, isDeleted: false } : c)
+    );
+    setSelectedMessages(new Set());
+
+    const results = await Promise.allSettled(
+      ids.map((id) => api.patch(`/api/conversations/${id}/restore`))
+    );
+
+    const failed = ids.filter((_, i) => results[i].status === 'rejected');
+    if (failed.length > 0) {
+      console.error(`[BulkRestore] ${failed.length} conversation(s) failed to restore`);
+      setConversations((prev) =>
+        prev.map((c) => failed.includes(c.id) ? { ...c, isDeleted: true } : c)
+      );
+    }
+  }, [selectedMessages]);
+
   const handleSelectConversation = useCallback((convId) => navigate(`/inbox/${convId}`), [navigate]);
   const handleBackToList = useCallback(() => navigate('/inbox'), [navigate]);
   const platformTheme = useMemo(() => getPlatformTheme(platform), [platform]);
@@ -1606,14 +1630,25 @@ export default function InboxPage() {
               <span className="text-sm text-gray-500 font-medium">
                 {selectedMessages.size} selected
               </span>
-              <button
-                onClick={handleBulkDelete}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-red-500 hover:bg-red-600 rounded-lg transition whitespace-nowrap"
-                title="Move selected to Bin"
-              >
-                <Trash2 size={13} />
-                Move to Bin
-              </button>
+              {activeFilter === 'bin' ? (
+                <button
+                  onClick={handleBulkRestore}
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-[#1787FE] hover:bg-[#1377e0] rounded-lg transition whitespace-nowrap"
+                  title="Restore selected from Bin"
+                >
+                  <Undo2 size={13} />
+                  Restore
+                </button>
+              ) : (
+                <button
+                  onClick={handleBulkDelete}
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-red-500 hover:bg-red-600 rounded-lg transition whitespace-nowrap"
+                  title="Move selected to Bin"
+                >
+                  <Trash2 size={13} />
+                  Move to Bin
+                </button>
+              )}
             </>
           ) : (
             <span className="text-xs text-gray-400 select-none">
