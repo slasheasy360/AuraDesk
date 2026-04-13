@@ -1002,42 +1002,6 @@ export default function InboxPage() {
     });
   }, []);
 
-  const toggleSelectAll = useCallback(() => {
-    setSelectedMessages((prev) => {
-      if (prev.size > 0) return new Set();
-      return new Set(paginatedConversations.map((c) => c.id));
-    });
-  }, [paginatedConversations]);
-
-  // Bulk delete — moves selected conversations to Bin (soft delete only)
-  const handleBulkDelete = useCallback(async () => {
-    const ids = [...selectedMessages];
-    if (ids.length === 0) return;
-
-    // Optimistic update
-    setConversations((prev) =>
-      prev.map((c) => ids.includes(c.id) ? { ...c, isDeleted: true } : c)
-    );
-    setSelectedMessages(new Set());
-
-    // Navigate away if the active conversation was deleted
-    if (ids.includes(conversationId)) navigate('/inbox');
-
-    // Fire all PATCH requests in parallel
-    const results = await Promise.allSettled(
-      ids.map((id) => api.patch(`/api/conversations/${id}/delete`))
-    );
-
-    // Roll back any that failed
-    const failed = ids.filter((_, i) => results[i].status === 'rejected');
-    if (failed.length > 0) {
-      console.error(`[BulkDelete] ${failed.length} conversation(s) failed to delete`);
-      setConversations((prev) =>
-        prev.map((c) => failed.includes(c.id) ? { ...c, isDeleted: false } : c)
-      );
-    }
-  }, [selectedMessages, conversationId, navigate]);
-
   const filteredConversations = useMemo(() => {
     let result = conversations;
 
@@ -1124,6 +1088,42 @@ export default function InboxPage() {
 
   // Reset page when filter changes
   useEffect(() => { setCurrentPage(1); }, [activeFilter, search]);
+
+  const toggleSelectAll = useCallback(() => {
+    setSelectedMessages((prev) => {
+      if (prev.size > 0) return new Set();
+      return new Set(paginatedConversations.map((c) => c.id));
+    });
+  }, [paginatedConversations]);
+
+  // Bulk delete — moves selected conversations to Bin (soft delete only)
+  const handleBulkDelete = useCallback(async () => {
+    const ids = [...selectedMessages];
+    if (ids.length === 0) return;
+
+    // Optimistic update
+    setConversations((prev) =>
+      prev.map((c) => ids.includes(c.id) ? { ...c, isDeleted: true } : c)
+    );
+    setSelectedMessages(new Set());
+
+    // Navigate away if the active conversation was deleted
+    if (ids.includes(conversationId)) navigate('/inbox');
+
+    // Fire all PATCH requests in parallel
+    const results = await Promise.allSettled(
+      ids.map((id) => api.patch(`/api/conversations/${id}/delete`))
+    );
+
+    // Roll back any that failed
+    const failed = ids.filter((_, i) => results[i].status === 'rejected');
+    if (failed.length > 0) {
+      console.error(`[BulkDelete] ${failed.length} conversation(s) failed to delete`);
+      setConversations((prev) =>
+        prev.map((c) => failed.includes(c.id) ? { ...c, isDeleted: false } : c)
+      );
+    }
+  }, [selectedMessages, conversationId, navigate]);
 
   const handleSelectConversation = useCallback((convId) => navigate(`/inbox/${convId}`), [navigate]);
   const handleBackToList = useCallback(() => navigate('/inbox'), [navigate]);
