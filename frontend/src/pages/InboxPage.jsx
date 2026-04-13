@@ -1003,7 +1003,8 @@ export default function InboxPage() {
   }, []);
 
   const filteredConversations = useMemo(() => {
-    let result = conversations;
+    // Never show conversations that have no messages
+    let result = conversations.filter((c) => c.messages && c.messages.length > 0);
 
     // Apply search filter
     if (search) {
@@ -1051,11 +1052,12 @@ export default function InboxPage() {
   }, [conversations, search, sourceFilters, activeFilter]);
 
   // Filter counts — always respect sourceFilters so badge numbers
-  // match the visible conversations exactly.
+  // match the visible conversations exactly. Exclude messageless convs.
   const filterCounts = useMemo(() => {
+    const withMessages = conversations.filter((c) => c.messages && c.messages.length > 0);
     const base = sourceFilters.size === 0
       ? []
-      : conversations.filter(
+      : withMessages.filter(
           (c) => !c.isDeleted && sourceFilters.has(c.connectedAccount?.platform)
         );
     return {
@@ -1064,17 +1066,19 @@ export default function InboxPage() {
       starred: base.filter((c) => c.isStarred).length,
       ai_responded: 0,
       draft: base.filter((c) => c.hasDraft).length,
-      bin: conversations.filter((c) => c.isDeleted).length,
+      bin: withMessages.filter((c) => c.isDeleted).length,
     };
   }, [conversations, sourceFilters]);
 
-  // Source counts — only from non-deleted conversations
+  // Source counts — only from non-deleted conversations with messages
   const sourceCounts = useMemo(() => {
     const counts = {};
-    conversations.filter((c) => !c.isDeleted).forEach((c) => {
-      const p = c.connectedAccount?.platform;
-      if (p) counts[p] = (counts[p] || 0) + 1;
-    });
+    conversations
+      .filter((c) => !c.isDeleted && c.messages && c.messages.length > 0)
+      .forEach((c) => {
+        const p = c.connectedAccount?.platform;
+        if (p) counts[p] = (counts[p] || 0) + 1;
+      });
     return counts;
   }, [conversations]);
 
