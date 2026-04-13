@@ -1738,23 +1738,19 @@ const FilterPanel = memo(function FilterPanel({ activeFilter, setActiveFilter, f
             {availableSourceFilters.map(({ key, label }) => {
               const isChecked = sourceFilters.has(key);
               const count = sourceCounts[key] || 0;
-              const dotColor = key === 'instagram' ? 'bg-pink-500' :
-                               key === 'facebook'  ? 'bg-blue-500' :
-                               key === 'whatsapp'  ? 'bg-green-500' :
-                               key === 'gmail'     ? 'bg-red-500' : 'bg-gray-500';
               return (
                 <button
                   key={key}
                   onClick={() => toggleSourceFilter(key)}
                   className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-sm transition ${
-                    isActive
+                    isChecked
                       ? 'bg-blue-50 text-gray-900'
                       : 'text-gray-700 hover:bg-gray-50 hover:text-gray-900'
                   }`}
                 >
                   <div className="flex items-center gap-3">
                     <span className={`w-4 h-4 rounded flex-shrink-0 flex items-center justify-center border ${
-                      isActive
+                      isChecked
                         ? key === 'instagram' ? 'bg-orange-500 border-orange-500' :
                           key === 'facebook' ? 'bg-blue-500 border-blue-500' :
                           key === 'whatsapp' ? 'bg-green-500 border-green-500' :
@@ -1762,13 +1758,13 @@ const FilterPanel = memo(function FilterPanel({ activeFilter, setActiveFilter, f
                           key === 'linkedin' ? 'bg-sky-500 border-sky-500' : 'bg-gray-500 border-gray-500'
                         : 'bg-white border-gray-300'
                     }`}>
-                      {isActive && <span className="text-white text-[10px] leading-none">✓</span>}
+                      {isChecked && <span className="text-white text-[10px] leading-none">✓</span>}
                     </span>
-                    <span className={isActive ? 'font-medium' : ''}>{label}</span>
+                    <span className={isChecked ? 'font-medium' : ''}>{label}</span>
                   </div>
                   {count > 0 && (
                     <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${
-                      isActive ? 'bg-blue-100 text-blue-700' : 'text-gray-400'
+                      isChecked ? 'bg-blue-100 text-blue-700' : 'text-gray-400'
                     }`}>
                       {count}
                     </span>
