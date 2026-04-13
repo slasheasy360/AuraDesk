@@ -49,12 +49,16 @@ router.post('/generate-reply', authenticate, requireActiveSubscription, async (r
   }
 
   try {
+    // Team members store FAQs under the workspace owner's userId.
+    // Always resolve to the owner's ID so member + owner share one knowledge base.
+    const faqOwnerId = req.user.inviterUserId || req.user.id;
+
     // 2. Fetch settings + user info + semantic FAQ search in parallel
     const [relevantFaqs, settings, user] = await Promise.all([
-      searchSimilarFaqs(req.user.id, prompt, 5),
-      prisma.aiSettings.findUnique({ where: { userId: req.user.id } }),
+      searchSimilarFaqs(faqOwnerId, prompt, 5),
+      prisma.aiSettings.findUnique({ where: { userId: faqOwnerId } }),
       prisma.user.findUnique({
-        where: { id: req.user.id },
+        where: { id: faqOwnerId },
         select: { companyName: true, name: true },
       }),
     ]);
@@ -73,9 +77,9 @@ router.post('/generate-reply', authenticate, requireActiveSubscription, async (r
 
     if (goodMatches.length === 0) {
       // Fallback: pull all FAQs directly (covers missing embeddings & low similarity cases)
-      console.log(`[AI] Vector search yielded no matches — falling back to all FAQs for user ${req.user.id}`);
+      console.log(`[AI] Vector search yielded no matches — falling back to all FAQs for owner ${faqOwnerId}`);
       const allFaqs = await prisma.faq.findMany({
-        where: { userId: req.user.id },
+        where: { userId: faqOwnerId },
         select: { question: true, answer: true, category: true },
         take: 20,
       });
