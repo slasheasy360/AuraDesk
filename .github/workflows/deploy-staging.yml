@@ -129,12 +129,13 @@ jobs:
             jq 'del(.taskDefinitionArn,.revision,.status,.requiresAttributes,
                     .compatibilities,.registeredAt,.registeredBy,.deregisteredAt)')
 
-          # Update image and ensure FRONTEND_URL starts with the correct staging URL
+          # Update image, move FRONTEND_URL from secrets to plain env (avoids ECS conflict)
           UPDATED=$(echo "$TASK_DEF" | jq \
             --arg img "$NEW_IMAGE" \
             --arg url "https://test.getauradesk.com" \
             '.containerDefinitions |= map(
               .image = $img |
+              .secrets = [.secrets[] | select(.name != "FRONTEND_URL")] |
               .environment = ((.environment // [])
                 | map(select(.name != "FRONTEND_URL"))
                 + [{"name":"FRONTEND_URL","value":$url}])
