@@ -1692,7 +1692,7 @@ export default function InboxPage() {
 // FILTER PANEL COMPONENT
 // ═══════════════════════════════════════════════════════════════════
 
-function FilterPanel({ activeFilter, setActiveFilter, filterCounts, sourceFilters, toggleSourceFilter, sourceCounts, availableSourceFilters, conversationId, navigate }) {
+const FilterPanel = memo(function FilterPanel({ activeFilter, setActiveFilter, filterCounts, sourceFilters, toggleSourceFilter, sourceCounts, availableSourceFilters, conversationId, navigate }) {
   const { openLinkAccounts } = useLinkAccounts();
   return (
     <div className="flex flex-col h-full py-4">
@@ -1799,7 +1799,7 @@ function FilterPanel({ activeFilter, setActiveFilter, filterCounts, sourceFilter
 // CHAT COMPOSER (dark theme, matching design)
 // ═══════════════════════════════════════════════════════════════════
 
-function ChatComposer({
+const ChatComposer = memo(function ChatComposer({
   newMessage, setNewMessage, handleSend, sending, attachments, onAttachClick,
   onAiRespond, aiLoading, aiSuggestion, aiError, onAiUse, onAiDismiss,
 }) {
