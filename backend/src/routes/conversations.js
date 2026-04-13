@@ -85,7 +85,8 @@ router.get('/', authenticate, async (req, res) => {
           select: { id: true, name: true, username: true, avatarUrl: true, platform: true },
         },
         connectedAccount: {
-          select: { id: true, platform: true, displayName: true },
+          // Include createdAt so we can filter pre-connection messages below
+          select: { id: true, platform: true, displayName: true, createdAt: true },
         },
         messages: {
           take: 1,
@@ -99,8 +100,18 @@ router.get('/', authenticate, async (req, res) => {
       orderBy: { lastMessageAt: 'desc' },
     });
 
+    // Secondary filter: the conversation-level lastMessageAt is set to server
+    // time at sync, so old conversations can slip through. Verify that the
+    // latest message's actual sentAt is >= the account connection time.
+    const postConnectionConversations = conversations.filter((c) => {
+      const connectedAt = c.connectedAccount?.createdAt;
+      const latestMsgSentAt = c.messages?.[0]?.sentAt;
+      if (!connectedAt || !latestMsgSentAt) return false;
+      return new Date(latestMsgSentAt) >= new Date(connectedAt);
+    });
+
     // Add hasDraft flag for frontend convenience
-    const enriched = conversations.map((c) => ({
+    const enriched = postConnectionConversations.map((c) => ({
       ...c,
       hasDraft: c.drafts && c.drafts.length > 0,
       draftPreview: c.drafts?.[0]?.content?.slice(0, 80) || null,
