@@ -77,10 +77,10 @@ validateStripeConfig();
 const stripe = getStripe();
 
 function frontendBase() {
-  return (
-    process.env.APP_URL ||
-    (process.env.FRONTEND_URL || 'http://localhost:5173').split(',')[0]
-  ).trim().replace(/\/$/, '');
+  return (process.env.FRONTEND_URL || 'http://localhost:5173')
+    .split(',')[0]
+    .trim()
+    .replace(/\/$/, '');
 }
 
 // ────────────────────────────────────────────────────────────────────

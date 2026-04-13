@@ -129,15 +129,15 @@ jobs:
             jq 'del(.taskDefinitionArn,.revision,.status,.requiresAttributes,
                     .compatibilities,.registeredAt,.registeredBy,.deregisteredAt)')
 
-          # Update image and upsert APP_URL env var in every container definition
+          # Update image and ensure FRONTEND_URL starts with the correct staging URL
           UPDATED=$(echo "$TASK_DEF" | jq \
             --arg img "$NEW_IMAGE" \
             --arg url "https://test.getauradesk.com" \
             '.containerDefinitions |= map(
               .image = $img |
               .environment = ((.environment // [])
-                | map(select(.name != "APP_URL"))
-                + [{"name":"APP_URL","value":$url}])
+                | map(select(.name != "FRONTEND_URL"))
+                + [{"name":"FRONTEND_URL","value":$url}])
             )')
 
           # Register as a new revision and capture the ARN
