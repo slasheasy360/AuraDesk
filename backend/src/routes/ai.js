@@ -18,9 +18,9 @@ const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
  * Body: { conversationId?, prompt, platform? }
  *
  * 1. Quota check + consume
- * 2. Fetch user FAQs + tone settings
+ * 2. Fetch user FAQs + tone settings (vector search + plain fallback)
  * 3. Build context-aware prompt
- * 4. Call Claude Haiku
+ * 4. Call OpenAI gpt-4o-mini
  * 5. Return reply + usage info
  *
  * Error shape when quota exhausted (enforce mode):
@@ -63,28 +63,42 @@ router.post('/generate-reply', authenticate, requireActiveSubscription, async (r
     const toneList = tones.length > 0 ? tones.join(', ') : 'friendly';
     const companyName = user?.companyName || 'our company';
 
-    // 3. Build FAQ context from top semantic matches only
-    // Filter out low-relevance results (similarity < 0.5)
-    const goodMatches = relevantFaqs.filter(f => Number(f.similarity) >= 0.5);
+    // 3. Use vector results if any pass the threshold (lowered to 0.3 for broader coverage).
+    //    If none pass — e.g. embeddings not yet generated, or low similarity — fall back to
+    //    fetching ALL FAQs for this org so the AI always has something to work with.
+    const SIMILARITY_THRESHOLD = 0.3;
+    let goodMatches = relevantFaqs.filter(f => Number(f.similarity) >= SIMILARITY_THRESHOLD);
 
-    console.log(`[AI] Vector search found ${relevantFaqs.length} results, ${goodMatches.length} above threshold for user ${req.user.id} (org: ${companyName})`);
+    console.log(`[AI] Vector search: ${relevantFaqs.length} results, ${goodMatches.length} above ${SIMILARITY_THRESHOLD} for user ${req.user.id} (org: ${companyName})`);
 
-    // If no relevant FAQ data exists, return the fallback immediately — no AI call needed.
     if (goodMatches.length === 0) {
-      await refundAiReply(req.user, { meta: { conversationId, platform } });
-      return res.json({
-        reply: "I don't have enough data to answer this question.",
-        usage: {
-          used: Math.max(0, quota.used - 1),
-          limit: quota.limit,
-          unlimited: quota.unlimited,
-        },
-        planWarning: null,
+      // Fallback: pull all FAQs directly (covers missing embeddings & low similarity cases)
+      console.log(`[AI] Vector search yielded no matches — falling back to all FAQs for user ${req.user.id}`);
+      const allFaqs = await prisma.faq.findMany({
+        where: { userId: req.user.id },
+        select: { question: true, answer: true, category: true },
+        take: 20,
       });
+
+      if (allFaqs.length === 0) {
+        // Truly no FAQ data at all — refund quota and return fallback
+        await refundAiReply(req.user, { meta: { conversationId, platform } });
+        return res.json({
+          reply: "I don't have enough data to answer this question.",
+          usage: {
+            used: Math.max(0, quota.used - 1),
+            limit: quota.limit,
+            unlimited: quota.unlimited,
+          },
+          planWarning: null,
+        });
+      }
+
+      goodMatches = allFaqs;
     }
 
     const faqContext = goodMatches
-      .slice(0, 5)
+      .slice(0, 10)
       .map((f, i) => `${i + 1}. Q: ${f.question}\n   A: ${f.answer}`)
       .join('\n\n');
 
