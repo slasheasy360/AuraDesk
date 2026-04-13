@@ -54,7 +54,27 @@ function classifySyncError(err) {
 export async function syncGmailMessagesController(req, res) {
     try {
         const messages = await gmailSyncService.syncGmailMessages(req.user.id);
-        const newCount = messages.filter((m) => m._isNew).length;
+        const newMessages = messages.filter((m) => m._isNew);
+        const newCount = newMessages.length;
+
+        // Push new messages to the frontend via socket — same path as Gmail Pub/Sub
+        if (newCount > 0) {
+            const io = req.app.get('io');
+            if (io) {
+                for (const msg of newMessages) {
+                    io.to(`user:${req.user.id}`).emit('new_message', {
+                        message: msg,
+                        conversationId: msg.conversationId,
+                        platform: 'gmail',
+                    });
+                    io.to(`user:${req.user.id}`).emit('conversation_update', {
+                        conversationId: msg.conversationId,
+                        lastMessageAt: msg.sentAt || new Date(),
+                    });
+                }
+            }
+        }
+
         res.json({
             success: true,
             synced: messages.length,

@@ -207,17 +207,28 @@ export default function InboxPage() {
 
     igPollingRef.current = setInterval(async () => {
       try {
-        const res = await api.get('/api/messages/instagram/sync');
-        if ((res.data?.newMessages || 0) > 0) {
+        const results = await Promise.allSettled([
+          api.get('/api/messages/instagram/sync'),
+          api.get('/api/messages/facebook/sync'),
+          api.get('/api/messages/gmail/sync'),
+        ]);
+        const hasNew = results.some(
+          (r) => r.status === 'fulfilled' && (r.value?.data?.newMessages || 0) > 0
+        );
+        if (hasNew) {
           fetchConversations();
           const activeId = conversationIdRef.current;
-          if (activeId) fetchMessages(activeId);
+          if (activeId) fetchMessages(activeId, true, true);
         }
       } catch { /* silent */ }
     }, 60000);
 
     const safetyRefresh = setInterval(() => {
-      if (!cancelled) fetchConversations();
+      if (!cancelled) {
+        fetchConversations();
+        const activeId = conversationIdRef.current;
+        if (activeId) fetchMessages(activeId, true, true);
+      }
     }, 30000);
 
     return () => {
@@ -247,7 +258,7 @@ export default function InboxPage() {
         }
         fetchConversations();
         const activeId = conversationIdRef.current;
-        if (activeId) fetchMessages(activeId, true);
+        if (activeId) fetchMessages(activeId, true, true);
       };
 
       socket.on('connect', handleReconnect);
@@ -459,9 +470,9 @@ export default function InboxPage() {
     }
   }, []);
 
-  const fetchMessages = useCallback(async (convId, forceRefresh = false) => {
+  const fetchMessages = useCallback(async (convId, forceRefresh = false, silent = false) => {
     if (!forceRefresh && messageCache.current.get(convId)?.fresh) return;
-    setLoadingMessages(true);
+    if (!silent) setLoadingMessages(true);
     setMessagesError(null);
 
     const MAX_ATTEMPTS = 3;
@@ -496,7 +507,7 @@ export default function InboxPage() {
         }, 30000);
         sessionSet(SESSION_KEYS.MESSAGES + convId, msgs.slice(-50));
         sessionSet(SESSION_KEYS.ACTIVE_CONVERSATION, convRes.data.conversation);
-        setLoadingMessages(false);
+        if (!silent) setLoadingMessages(false);
         return; // success
       } catch (err) {
         console.error(`fetchMessages attempt ${attempt + 1} failed:`, err.message);
@@ -504,13 +515,13 @@ export default function InboxPage() {
           await new Promise((r) => setTimeout(r, 2000 * (attempt + 1)));
         } else {
           // All attempts failed
-          if (conversationIdRef.current === convId) {
+          if (conversationIdRef.current === convId && !silent) {
             setMessagesError('Failed to load messages. Please try again.');
           }
         }
       }
     }
-    setLoadingMessages(false);
+    if (!silent) setLoadingMessages(false);
   }, []);
 
   const activeConversationRef = useRef(activeConversation);

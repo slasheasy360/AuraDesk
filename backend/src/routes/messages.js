@@ -139,7 +139,26 @@ router.get('/gmail/sync', authenticate, syncGmailMessagesController);
 router.get('/instagram/sync', authenticate, async (req, res) => {
   try {
     const messages = await syncInstagramMessages(req.user.id);
-    const newCount = messages.filter((m) => m._isNew).length;
+    const newMessages = messages.filter((m) => m._isNew);
+    const newCount = newMessages.length;
+
+    if (newCount > 0) {
+      const io = req.app.get('io');
+      if (io) {
+        for (const msg of newMessages) {
+          io.to(`user:${req.user.id}`).emit('new_message', {
+            message: msg,
+            conversationId: msg.conversationId,
+            platform: 'instagram',
+          });
+          io.to(`user:${req.user.id}`).emit('conversation_update', {
+            conversationId: msg.conversationId,
+            lastMessageAt: msg.sentAt || new Date(),
+          });
+        }
+      }
+    }
+
     res.json({
       success: true,
       synced: messages.length,
@@ -158,7 +177,26 @@ router.get('/instagram/sync', authenticate, async (req, res) => {
 router.get('/facebook/sync', authenticate, async (req, res) => {
   try {
     const messages = await syncFacebookMessages(req.user.id);
-    const newCount = messages.filter((m) => m._isNew).length;
+    const newMessages = messages.filter((m) => m._isNew);
+    const newCount = newMessages.length;
+
+    if (newCount > 0) {
+      const io = req.app.get('io');
+      if (io) {
+        for (const msg of newMessages) {
+          io.to(`user:${req.user.id}`).emit('new_message', {
+            message: msg,
+            conversationId: msg.conversationId,
+            platform: 'facebook',
+          });
+          io.to(`user:${req.user.id}`).emit('conversation_update', {
+            conversationId: msg.conversationId,
+            lastMessageAt: msg.sentAt || new Date(),
+          });
+        }
+      }
+    }
+
     res.json({
       success: true,
       synced: messages.length,
@@ -398,6 +436,7 @@ router.post('/send', authenticate, upload.array('attachments', 10), async (req, 
               recipientPsid,
               file
             );
+            platformMessageId = result.message_id || platformMessageId;
             const meta = {
               filename: file.originalname,
               mimeType: file.mimetype,
@@ -431,6 +470,7 @@ router.post('/send', authenticate, upload.array('attachments', 10), async (req, 
               igRecipientId,
               file
             );
+            platformMessageId = result.message_id || platformMessageId;
             const meta = {
               filename: file.originalname,
               mimeType: file.mimetype,
