@@ -526,6 +526,16 @@ export default function InboxPage() {
         if (!silent) setLoadingMessages(false);
         return; // success
       } catch (err) {
+        const status = err.response?.status;
+        // 404 = conversation doesn't exist (permanent) — stop immediately, don't retry.
+        if (status === 404) {
+          console.warn(`fetchMessages: conversation ${convId} not found (404) — stopping retries`);
+          if (conversationIdRef.current === convId && !silent) {
+            setLoadingMessages(false);
+            setMessagesError('Conversation not found. It may have been deleted.');
+          }
+          return;
+        }
         console.error(`fetchMessages attempt ${attempt + 1} failed:`, err.message);
         if (attempt < MAX_ATTEMPTS - 1) {
           await new Promise((r) => setTimeout(r, 2000 * (attempt + 1)));
