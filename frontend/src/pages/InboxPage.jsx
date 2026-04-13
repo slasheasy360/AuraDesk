@@ -1921,50 +1921,65 @@ const ChatComposer = memo(function ChatComposer({
     <div className="border-t border-gray-100 bg-white px-4 sm:px-6 py-3 space-y-2">
       {/* AI Suggestion Box */}
       {(aiSuggestion || aiLoading || aiError) && (
-        <div className="rounded-xl border-2 border-dashed border-[#1787FE]/40 bg-blue-50/60 px-4 py-3 relative">
-          {aiLoading && (
-            <div className="flex items-center gap-2 text-sm text-gray-500">
-              <Sparkles size={14} className="text-[#1787FE] animate-pulse" />
-              Generating AI reply...
+        <div className="rounded-xl border-2 border-dashed border-[#1787FE]/40 bg-blue-50/60 px-4 py-3 flex flex-col gap-2">
+          {/* Header */}
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-1.5 text-xs font-semibold text-[#1787FE]">
+              <Sparkles size={13} className={aiLoading ? 'animate-pulse' : ''} />
+              AI Suggestion
             </div>
+            {(aiSuggestion || aiError) && (
+              <button
+                type="button"
+                onClick={onAiDismiss}
+                className="text-gray-300 hover:text-gray-500 transition flex-shrink-0"
+                title="Dismiss"
+              >
+                <X size={14} />
+              </button>
+            )}
+          </div>
+
+          {/* Body */}
+          {aiLoading && (
+            <p className="text-sm text-gray-500">Generating AI reply…</p>
           )}
           {aiError && (
-            <div className="text-sm text-red-500">{aiError}</div>
+            <p className="text-sm text-red-500">{aiError}</p>
           )}
           {aiSuggestion && (
-            <>
-              <p className="text-sm text-gray-800 leading-relaxed pr-24">{aiSuggestion}</p>
-              <div className="absolute top-2 right-2 flex flex-col gap-1.5 items-end">
+            <p className="text-sm text-gray-800 leading-relaxed">{aiSuggestion}</p>
+          )}
+
+          {/* Action buttons — always below the text, never overlapping */}
+          {aiSuggestion && (
+            <div className="flex items-center justify-between gap-2 pt-1 border-t border-[#1787FE]/10">
+              <label className="flex items-center gap-1.5 text-xs text-gray-400 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={autoSend}
+                  onChange={e => setAutoSend(e.target.checked)}
+                  className="w-3 h-3 accent-[#1787FE]"
+                />
+                Auto-send
+              </label>
+              <div className="flex items-center gap-2">
                 <button
-                  onClick={() => { navigator.clipboard.writeText(aiSuggestion); }}
+                  type="button"
+                  onClick={() => navigator.clipboard.writeText(aiSuggestion)}
                   className="px-3 py-1.5 text-xs font-semibold border border-gray-300 bg-white rounded-lg hover:bg-gray-50 transition whitespace-nowrap"
                 >
                   Copy Text
                 </button>
                 <button
+                  type="button"
                   onClick={handleUseSuggestion}
                   className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-[#1787FE] text-white rounded-lg hover:bg-[#1377e0] transition whitespace-nowrap"
                 >
-                  Auto-Send
-                  <Send size={11} />
+                  Use Reply <Send size={11} />
                 </button>
-                <label className="flex items-center gap-1 text-xs text-gray-500 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={autoSend}
-                    onChange={e => setAutoSend(e.target.checked)}
-                    className="w-3 h-3"
-                  />
-                  Always
-                </label>
               </div>
-              <button
-                onClick={onAiDismiss}
-                className="absolute bottom-2 right-2 text-gray-300 hover:text-gray-500 transition"
-              >
-                <X size={13} />
-              </button>
-            </>
+            </div>
           )}
         </div>
       )}
@@ -2419,41 +2434,52 @@ const EmailReplyBox = forwardRef(function EmailReplyBox(
 
       {/* AI Suggestion Box — shown when AI generates a reply */}
       {(aiSuggestion || aiLoading || aiError) && (
-        <div className="rounded-xl border-2 border-dashed border-[#1787FE]/40 bg-blue-50/60 px-4 py-3 relative">
-          {aiLoading && (
-            <div className="flex items-center gap-2 text-sm text-gray-500">
-              <Sparkles size={14} className="text-[#1787FE] animate-pulse" />
-              Generating AI reply...
+        <div className="rounded-xl border-2 border-dashed border-[#1787FE]/40 bg-blue-50/60 px-4 py-3 flex flex-col gap-2">
+          {/* Header */}
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-1.5 text-xs font-semibold text-[#1787FE]">
+              <Sparkles size={13} className={aiLoading ? 'animate-pulse' : ''} />
+              AI Suggestion
             </div>
-          )}
-          {aiError && <div className="text-sm text-red-500">{aiError}</div>}
-          {aiSuggestion && (
-            <>
-              <p className="text-sm text-gray-800 leading-relaxed pr-24">{aiSuggestion}</p>
-              <div className="absolute top-2 right-2 flex flex-col gap-1.5 items-end">
-                <button
-                  type="button"
-                  onClick={() => navigator.clipboard.writeText(aiSuggestion)}
-                  className="px-3 py-1.5 text-xs font-semibold border border-gray-300 bg-white rounded-lg hover:bg-gray-50 transition whitespace-nowrap"
-                >
-                  Copy Text
-                </button>
-                <button
-                  type="button"
-                  onClick={() => onAiUse(aiSuggestion)}
-                  className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-[#1787FE] text-white rounded-lg hover:bg-[#1377e0] transition whitespace-nowrap"
-                >
-                  Use Reply <Send size={11} />
-                </button>
-              </div>
+            {(aiSuggestion || aiError) && (
               <button
                 type="button"
                 onClick={onAiDismiss}
-                className="absolute bottom-2 right-2 text-gray-300 hover:text-gray-500 transition"
+                className="text-gray-300 hover:text-gray-500 transition flex-shrink-0"
+                title="Dismiss"
               >
-                <X size={13} />
+                <X size={14} />
               </button>
-            </>
+            )}
+          </div>
+
+          {/* Body */}
+          {aiLoading && (
+            <p className="text-sm text-gray-500">Generating AI reply…</p>
+          )}
+          {aiError && <p className="text-sm text-red-500">{aiError}</p>}
+          {aiSuggestion && (
+            <p className="text-sm text-gray-800 leading-relaxed">{aiSuggestion}</p>
+          )}
+
+          {/* Action buttons — always below text, never overlapping */}
+          {aiSuggestion && (
+            <div className="flex items-center justify-end gap-2 pt-1 border-t border-[#1787FE]/10">
+              <button
+                type="button"
+                onClick={() => navigator.clipboard.writeText(aiSuggestion)}
+                className="px-3 py-1.5 text-xs font-semibold border border-gray-300 bg-white rounded-lg hover:bg-gray-50 transition whitespace-nowrap"
+              >
+                Copy Text
+              </button>
+              <button
+                type="button"
+                onClick={() => onAiUse(aiSuggestion)}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-[#1787FE] text-white rounded-lg hover:bg-[#1377e0] transition whitespace-nowrap"
+              >
+                Use Reply <Send size={11} />
+              </button>
+            </div>
           )}
         </div>
       )}
