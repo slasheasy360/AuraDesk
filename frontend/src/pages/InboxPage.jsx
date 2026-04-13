@@ -1005,9 +1005,38 @@ export default function InboxPage() {
   const toggleSelectAll = useCallback(() => {
     setSelectedMessages((prev) => {
       if (prev.size > 0) return new Set();
-      return new Set(conversations.map((c) => c.id));
+      return new Set(paginatedConversations.map((c) => c.id));
     });
-  }, [conversations]);
+  }, [paginatedConversations]);
+
+  // Bulk delete — moves selected conversations to Bin (soft delete only)
+  const handleBulkDelete = useCallback(async () => {
+    const ids = [...selectedMessages];
+    if (ids.length === 0) return;
+
+    // Optimistic update
+    setConversations((prev) =>
+      prev.map((c) => ids.includes(c.id) ? { ...c, isDeleted: true } : c)
+    );
+    setSelectedMessages(new Set());
+
+    // Navigate away if the active conversation was deleted
+    if (ids.includes(conversationId)) navigate('/inbox');
+
+    // Fire all PATCH requests in parallel
+    const results = await Promise.allSettled(
+      ids.map((id) => api.patch(`/api/conversations/${id}/delete`))
+    );
+
+    // Roll back any that failed
+    const failed = ids.filter((_, i) => results[i].status === 'rejected');
+    if (failed.length > 0) {
+      console.error(`[BulkDelete] ${failed.length} conversation(s) failed to delete`);
+      setConversations((prev) =>
+        prev.map((c) => failed.includes(c.id) ? { ...c, isDeleted: false } : c)
+      );
+    }
+  }, [selectedMessages, conversationId, navigate]);
 
   const filteredConversations = useMemo(() => {
     let result = conversations;
@@ -1564,13 +1593,33 @@ export default function InboxPage() {
       {/* Main content */}
       <div className="flex-1 flex flex-col min-w-0">
         {/* Toolbar row */}
-        <div className="flex items-center gap-3 px-4 sm:px-6 py-3 border-b border-gray-100">
+        <div className="flex items-center gap-3 px-4 sm:px-6 py-2.5 border-b border-gray-100 min-h-[48px]">
           <input
             type="checkbox"
             checked={selectedMessages.size > 0 && selectedMessages.size === paginatedConversations.length}
             onChange={toggleSelectAll}
-            className="w-4 h-4 rounded border-gray-300 bg-white text-[#1787FE] focus:ring-[#1787FE] focus:ring-offset-0 cursor-pointer"
+            className="w-4 h-4 rounded border-gray-300 bg-white text-[#1787FE] focus:ring-[#1787FE] focus:ring-offset-0 cursor-pointer flex-shrink-0"
           />
+
+          {selectedMessages.size > 0 ? (
+            <>
+              <span className="text-sm text-gray-500 font-medium">
+                {selectedMessages.size} selected
+              </span>
+              <button
+                onClick={handleBulkDelete}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-red-500 hover:bg-red-600 rounded-lg transition whitespace-nowrap"
+                title="Move selected to Bin"
+              >
+                <Trash2 size={13} />
+                Move to Bin
+              </button>
+            </>
+          ) : (
+            <span className="text-xs text-gray-400 select-none">
+              {filteredConversations.length} conversation{filteredConversations.length !== 1 ? 's' : ''}
+            </span>
+          )}
         </div>
 
         {/* Message rows */}
@@ -1953,48 +2002,48 @@ const ChatComposer = memo(function ChatComposer({
 
           {/* Action buttons — always below the text, never overlapping */}
           {aiSuggestion && (
-            <div className="flex items-center justify-between gap-2 pt-1 border-t border-[#1787FE]/10">
-              <label className="flex items-center gap-1.5 text-xs text-gray-400 cursor-pointer select-none">
-                <input
-                  type="checkbox"
-                  checked={autoSend}
-                  onChange={e => setAutoSend(e.target.checked)}
-                  className="w-3 h-3 accent-[#1787FE]"
-                />
-                Auto-send
-              </label>
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => navigator.clipboard.writeText(aiSuggestion)}
-                  className="px-3 py-1.5 text-xs font-semibold border border-gray-300 bg-white rounded-lg hover:bg-gray-50 transition whitespace-nowrap"
-                >
-                  Copy Text
-                </button>
-                <button
-                  type="button"
-                  onClick={handleUseSuggestion}
-                  className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-[#1787FE] text-white rounded-lg hover:bg-[#1377e0] transition whitespace-nowrap"
-                >
-                  Use Reply <Send size={11} />
-                </button>
-              </div>
+            <div className="flex items-center justify-end gap-2 pt-1 border-t border-[#1787FE]/10">
+              <button
+                type="button"
+                onClick={() => navigator.clipboard.writeText(aiSuggestion)}
+                className="px-3 py-1.5 text-xs font-semibold border border-gray-300 bg-white rounded-lg hover:bg-gray-50 transition whitespace-nowrap"
+              >
+                Copy Text
+              </button>
+              <button
+                type="button"
+                onClick={handleUseSuggestion}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-[#1787FE] text-white rounded-lg hover:bg-[#1377e0] transition whitespace-nowrap"
+              >
+                Use Reply <Send size={11} />
+              </button>
             </div>
           )}
         </div>
       )}
 
       <form onSubmit={handleSend} className="flex items-center gap-3">
-        {/* AI Respond pill */}
-        <button
-          type="button"
-          onClick={onAiRespond}
-          disabled={aiLoading}
-          className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-[#1787FE] bg-blue-50 hover:bg-blue-100 rounded-full transition whitespace-nowrap disabled:opacity-50"
-        >
-          <Sparkles size={14} className={aiLoading ? 'animate-pulse' : ''} />
-          AI Respond
-        </button>
+        {/* AI Respond pill + persistent Auto-send toggle */}
+        <div className="flex items-center gap-2 flex-shrink-0">
+          <button
+            type="button"
+            onClick={onAiRespond}
+            disabled={aiLoading}
+            className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-[#1787FE] bg-blue-50 hover:bg-blue-100 rounded-full transition whitespace-nowrap disabled:opacity-50"
+          >
+            <Sparkles size={14} className={aiLoading ? 'animate-pulse' : ''} />
+            AI Respond
+          </button>
+          <label className="flex items-center gap-1 text-xs text-gray-400 cursor-pointer select-none whitespace-nowrap" title="Auto-send AI reply">
+            <input
+              type="checkbox"
+              checked={autoSend}
+              onChange={e => setAutoSend(e.target.checked)}
+              className="w-3 h-3 accent-[#1787FE]"
+            />
+            Auto
+          </label>
+        </div>
 
         {/* Input */}
         <div className="flex-1 relative">
