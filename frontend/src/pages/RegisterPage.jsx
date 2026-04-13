@@ -102,29 +102,35 @@ export default function RegisterPage() {
 
       <form onSubmit={handleSubmit} className="space-y-4">
         <AuthInput
-          label="EMAIL"
+          label="Email"
           type="email"
           value={email}
           onChange={(e) => setEmail(e.target.value)}
+          placeholder="you@example.com"
+          autoComplete="email"
           required
         />
         <AuthInput
-          label="PASSWORD"
+          label="Password"
           hasToggle
           show={showPw}
           onToggle={() => setShowPw((s) => !s)}
           value={password}
           onChange={(e) => setPassword(e.target.value)}
+          placeholder="Min. 8 characters"
+          autoComplete="new-password"
           required
           minLength={8}
         />
         <AuthInput
-          label="CONFIRM PASSSWORD"
+          label="Confirm Password"
           hasToggle
           show={showCPw}
           onToggle={() => setShowCPw((s) => !s)}
           value={confirmPassword}
           onChange={(e) => setConfirmPassword(e.target.value)}
+          placeholder="Re-enter your password"
+          autoComplete="new-password"
           required
         />
         <div className="pt-2">
