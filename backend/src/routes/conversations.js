@@ -5,12 +5,16 @@ import { emitToUser } from '../utils/socket.js';
 
 const router = Router();
 
-// ─── Helper: get all active account IDs for user ───
-async function getUserAccountIds(userId) {
-  const accounts = await prisma.connectedAccount.findMany({
+// ─── Helper: get all active accounts for user (id + connection date) ───
+async function getUserAccounts(userId) {
+  return prisma.connectedAccount.findMany({
     where: { userId, status: 'active' },
-    select: { id: true },
+    select: { id: true, createdAt: true },
   });
+}
+
+async function getUserAccountIds(userId) {
+  const accounts = await getUserAccounts(userId);
   return accounts.map((a) => a.id);
 }
 
@@ -35,11 +39,33 @@ async function findUserConversation(conversationId, userId) {
 router.get('/', authenticate, async (req, res) => {
   try {
     const { platform, filter } = req.query;
-    const accountIds = await getUserAccountIds(req.user.id);
+    const accounts = await getUserAccounts(req.user.id);
 
-    const where = { connectedAccountId: { in: accountIds } };
+    // Only show conversations with activity AFTER the account was connected.
+    // This hides historical messages that were synced from before connection.
+    let eligibleAccounts = accounts;
+    if (platform) {
+      const platformAccountIds = await prisma.connectedAccount.findMany({
+        where: { id: { in: accounts.map((a) => a.id) }, platform },
+        select: { id: true },
+      });
+      const pidSet = new Set(platformAccountIds.map((a) => a.id));
+      eligibleAccounts = accounts.filter((a) => pidSet.has(a.id));
+    }
 
-    // By default, exclude deleted conversations unless requesting bin
+    // Build per-account filter: conversation must have lastMessageAt >= account.createdAt
+    const accountFilter = eligibleAccounts.map((acc) => ({
+      connectedAccountId: acc.id,
+      lastMessageAt: { gte: acc.createdAt },
+    }));
+
+    if (accountFilter.length === 0) {
+      return res.json({ conversations: [] });
+    }
+
+    const where = { OR: accountFilter };
+
+    // Apply category filters on top
     if (filter === 'bin') {
       where.isDeleted = true;
     } else if (filter === 'starred') {
@@ -50,16 +76,6 @@ router.get('/', authenticate, async (req, res) => {
       where.isLead = true;
     } else {
       where.isDeleted = false;
-    }
-
-    if (platform) {
-      // Filter by platform through the connected account relation
-      // Use a nested AND to avoid overwriting the connectedAccountId filter
-      const platformAccountIds = await prisma.connectedAccount.findMany({
-        where: { id: { in: accountIds }, platform },
-        select: { id: true },
-      });
-      where.connectedAccountId = { in: platformAccountIds.map((a) => a.id) };
     }
 
     const conversations = await prisma.conversation.findMany({

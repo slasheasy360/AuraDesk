@@ -219,14 +219,25 @@ router.get('/:conversationId', authenticate, async (req, res) => {
         id: req.params.conversationId,
         connectedAccount: { userId: req.user.id },
       },
+      include: {
+        connectedAccount: { select: { createdAt: true } },
+      },
     });
 
     if (!conversation) {
       return res.status(404).json({ error: 'Conversation not found' });
     }
 
+    // Only return messages sent after the platform was connected.
+    // This prevents historical pre-connection messages from appearing.
+    const connectedAt = conversation.connectedAccount?.createdAt;
+    const msgWhere = { conversationId: conversation.id };
+    if (connectedAt) {
+      msgWhere.sentAt = { gte: connectedAt };
+    }
+
     const messages = await prisma.message.findMany({
-      where: { conversationId: conversation.id },
+      where: msgWhere,
       orderBy: { sentAt: 'asc' },
     });
 
