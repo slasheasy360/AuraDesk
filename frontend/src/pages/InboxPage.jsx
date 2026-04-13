@@ -628,9 +628,15 @@ export default function InboxPage() {
       });
       setAiSuggestion(res.data.reply);
     } catch (err) {
-      const msg = err.response?.data?.error || 'AI generation failed';
+      const status = err.response?.status;
+      const serverMsg = err.response?.data?.error;
+      // For 402/403 (plan limits) or known server messages, show them directly.
+      // For network/5xx errors, show a generic user-friendly message.
+      const msg = serverMsg && status && status < 500
+        ? serverMsg
+        : 'Something went wrong. Please try again.';
       setAiError(msg);
-      setTimeout(() => setAiError(null), 4000);
+      setTimeout(() => setAiError(null), 5000);
     } finally {
       setAiLoading(false);
     }
@@ -1026,18 +1032,22 @@ export default function InboxPage() {
     return result;
   }, [conversations, search, sourceFilters, activeFilter, connectedPlatforms]);
 
-  // Filter counts
+  // Filter counts — respect the active source filter so the badge numbers
+  // match the visible conversations when a source is unticked.
   const filterCounts = useMemo(() => {
-    const nonDeleted = conversations.filter((c) => !c.isDeleted);
+    const isSourceFiltered = sourceFilters.size > 0 && sourceFilters.size < connectedPlatforms.size;
+    const base = conversations.filter(
+      (c) => !c.isDeleted && (!isSourceFiltered || sourceFilters.has(c.connectedAccount?.platform))
+    );
     return {
-      all: nonDeleted.length,
-      unread: nonDeleted.filter((c) => c.unreadCount > 0).length,
-      starred: nonDeleted.filter((c) => c.isStarred).length,
+      all: base.length,
+      unread: base.filter((c) => c.unreadCount > 0).length,
+      starred: base.filter((c) => c.isStarred).length,
       ai_responded: 0,
-      draft: nonDeleted.filter((c) => c.hasDraft).length,
+      draft: base.filter((c) => c.hasDraft).length,
       bin: conversations.filter((c) => c.isDeleted).length,
     };
-  }, [conversations]);
+  }, [conversations, sourceFilters, connectedPlatforms]);
 
   // Source counts — only from non-deleted conversations
   const sourceCounts = useMemo(() => {
@@ -1796,6 +1806,56 @@ const FilterPanel = memo(function FilterPanel({ activeFilter, setActiveFilter, f
 });
 
 // ═══════════════════════════════════════════════════════════════════
+// SIMPLE EMOJI PICKER — no external library required
+// ═══════════════════════════════════════════════════════════════════
+
+const EMOJI_LIST = [
+  '😀','😃','😄','😁','😆','😅','🤣','😂','🙂','🙃',
+  '😉','😊','😇','🥰','😍','🤩','😘','😗','😚','😙',
+  '🥲','😋','😛','😜','🤪','😝','🤑','🤗','🤭','🫢',
+  '🤫','🤔','🤐','🤨','😐','😑','😶','😏','😒','🙄',
+  '😬','🤥','😌','😔','😪','🤤','😴','😷','🤒','🤧',
+  '🥺','😢','😭','😤','😠','😡','🤬','💀','💩','🤡',
+  '👋','🤚','✋','🖖','🫱','👌','🤌','🤏','✌️','🤞',
+  '🫶','❤️','🧡','💛','💚','💙','💜','🖤','🤍','💔',
+  '🎉','🎊','🎈','🔥','✨','⭐','💫','🌟','💯','👍',
+  '👎','👏','🙌','🤝','🫂','💪','🦾','🚀','🌈','😎',
+];
+
+function SimpleEmojiPicker({ onSelect, onClose }) {
+  const ref = useRef(null);
+
+  useEffect(() => {
+    const handleOutsideClick = (e) => {
+      if (ref.current && !ref.current.contains(e.target)) onClose();
+    };
+    document.addEventListener('mousedown', handleOutsideClick);
+    return () => document.removeEventListener('mousedown', handleOutsideClick);
+  }, [onClose]);
+
+  return (
+    <div
+      ref={ref}
+      className="absolute bottom-full right-0 mb-2 z-50 bg-white border border-gray-200 rounded-xl shadow-lg p-2 w-64"
+    >
+      <div className="grid grid-cols-10 gap-0.5 max-h-48 overflow-y-auto">
+        {EMOJI_LIST.map((emoji) => (
+          <button
+            key={emoji}
+            type="button"
+            onClick={() => { onSelect(emoji); onClose(); }}
+            className="text-xl hover:bg-gray-100 rounded p-0.5 transition leading-none"
+            aria-label={emoji}
+          >
+            {emoji}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════
 // CHAT COMPOSER (dark theme, matching design)
 // ═══════════════════════════════════════════════════════════════════
 
@@ -1805,6 +1865,24 @@ const ChatComposer = memo(function ChatComposer({
 }) {
   const hasContent = newMessage.trim() || attachments.length > 0;
   const [autoSend, setAutoSend] = useState(false);
+  const [showEmojiPicker, setShowEmojiPicker] = useState(false);
+  const inputRef = useRef(null);
+
+  const insertEmoji = useCallback((emoji) => {
+    const input = inputRef.current;
+    if (!input) {
+      setNewMessage((prev) => prev + emoji);
+      return;
+    }
+    const start = input.selectionStart ?? input.value.length;
+    const end = input.selectionEnd ?? input.value.length;
+    const newVal = input.value.slice(0, start) + emoji + input.value.slice(end);
+    setNewMessage(newVal);
+    requestAnimationFrame(() => {
+      input.setSelectionRange(start + emoji.length, start + emoji.length);
+      input.focus();
+    });
+  }, [setNewMessage]);
 
   const handleUseSuggestion = () => {
     if (autoSend) {
@@ -1885,6 +1963,7 @@ const ChatComposer = memo(function ChatComposer({
         {/* Input */}
         <div className="flex-1 relative">
           <input
+            ref={inputRef}
             type="text"
             value={newMessage}
             onChange={(e) => setNewMessage(e.target.value)}
@@ -1904,12 +1983,22 @@ const ChatComposer = memo(function ChatComposer({
         </button>
 
         {/* Emoji */}
-        <button
-          type="button"
-          className="p-2 text-gray-400 hover:text-gray-700 transition hidden sm:block"
-        >
-          <Smile size={18} />
-        </button>
+        <div className="relative hidden sm:block">
+          <button
+            type="button"
+            onClick={() => setShowEmojiPicker((v) => !v)}
+            className={`p-2 transition ${showEmojiPicker ? 'text-[#1787FE]' : 'text-gray-400 hover:text-gray-700'}`}
+            title="Emoji"
+          >
+            <Smile size={18} />
+          </button>
+          {showEmojiPicker && (
+            <SimpleEmojiPicker
+              onSelect={insertEmoji}
+              onClose={() => setShowEmojiPicker(false)}
+            />
+          )}
+        </div>
 
         {/* Send */}
         <button
@@ -2285,6 +2374,24 @@ const EmailReplyBox = forwardRef(function EmailReplyBox(
   ref
 ) {
   const hasContent = newMessage.trim() || attachments.length > 0;
+  const [showEmojiPickerEmail, setShowEmojiPickerEmail] = useState(false);
+  const emailInputRef = useRef(null);
+
+  const insertEmojiEmail = useCallback((emoji) => {
+    const input = emailInputRef.current;
+    if (!input) {
+      setNewMessage((prev) => prev + emoji);
+      return;
+    }
+    const start = input.selectionStart ?? input.value.length;
+    const end = input.selectionEnd ?? input.value.length;
+    const newVal = input.value.slice(0, start) + emoji + input.value.slice(end);
+    setNewMessage(newVal);
+    requestAnimationFrame(() => {
+      input.setSelectionRange(start + emoji.length, start + emoji.length);
+      input.focus();
+    });
+  }, [setNewMessage]);
 
   return (
     <div ref={ref} className="border-t border-gray-100 bg-white px-4 sm:px-6 py-3 space-y-2">
@@ -2374,6 +2481,7 @@ const EmailReplyBox = forwardRef(function EmailReplyBox(
         {/* Input */}
         <div className="flex-1 relative">
           <input
+            ref={emailInputRef}
             type="text"
             value={newMessage}
             onChange={(e) => setNewMessage(e.target.value)}
@@ -2384,10 +2492,23 @@ const EmailReplyBox = forwardRef(function EmailReplyBox(
           />
         </div>
 
-        {/* Mic */}
-        <button type="button" className="p-2 text-gray-400 hover:text-gray-700 transition flex-shrink-0" title="Voice">
-          <Mic size={18} />
-        </button>
+        {/* Emoji */}
+        <div className="relative flex-shrink-0">
+          <button
+            type="button"
+            onClick={() => setShowEmojiPickerEmail((v) => !v)}
+            className={`p-2 transition ${showEmojiPickerEmail ? 'text-[#1787FE]' : 'text-gray-400 hover:text-gray-700'}`}
+            title="Emoji"
+          >
+            <Smile size={18} />
+          </button>
+          {showEmojiPickerEmail && (
+            <SimpleEmojiPicker
+              onSelect={insertEmojiEmail}
+              onClose={() => setShowEmojiPickerEmail(false)}
+            />
+          )}
+        </div>
 
         {/* Image */}
         <button type="button" onClick={onAttachClick} className="p-2 text-gray-400 hover:text-gray-700 transition flex-shrink-0" title="Attach image">

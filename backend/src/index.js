@@ -181,6 +181,29 @@ app.get('/api/user/onboarding-status', authenticate, async (req, res) => {
 app.use('/webhooks/meta', metaWebhook);
 app.use('/webhooks/gmail', gmailWebhook);
 
+// ── Global error handler ─────────────────────────────────────────────────────
+// Catches any error passed via next(err) or thrown inside async route handlers
+// that are wrapped with an error-forwarding try/catch. Returns a structured
+// JSON error instead of Express's default HTML 500 page, and logs the full
+// stack + request context so failures are easy to diagnose.
+app.use((err, req, res, _next) => {
+  const status = typeof err.statusCode === 'number' ? err.statusCode : 500;
+  console.error('[UnhandledError]', {
+    method: req.method,
+    url: req.originalUrl,
+    status,
+    orgId: req.user?.id ?? null,
+    message: err.message,
+    stack: err.stack,
+  });
+  if (res.headersSent) return;
+  res.status(status).json({
+    error: status >= 500
+      ? 'Something went wrong. Please try again.'
+      : (err.message || 'Request failed'),
+  });
+});
+
 // Health check with DB connectivity
 app.get('/health', async (req, res) => {
   try {

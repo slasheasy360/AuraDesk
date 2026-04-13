@@ -66,23 +66,40 @@ router.post('/generate-reply', authenticate, requireActiveSubscription, async (r
     // 3. Build FAQ context from top semantic matches only
     // Filter out low-relevance results (similarity < 0.5)
     const goodMatches = relevantFaqs.filter(f => Number(f.similarity) >= 0.5);
-    const faqContext = goodMatches.length > 0
-      ? goodMatches.map((f, i) => `${i + 1}. Q: ${f.question}\n   A: ${f.answer}`).join('\n\n')
-      : null;
 
-    console.log(`[AI] Vector search found ${relevantFaqs.length} results, ${goodMatches.length} above threshold for user ${req.user.id}`);
+    console.log(`[AI] Vector search found ${relevantFaqs.length} results, ${goodMatches.length} above threshold for user ${req.user.id} (org: ${companyName})`);
+
+    // If no relevant FAQ data exists, return the fallback immediately — no AI call needed.
+    if (goodMatches.length === 0) {
+      await refundAiReply(req.user, { meta: { conversationId, platform } });
+      return res.json({
+        reply: "I don't have enough data to answer this question.",
+        usage: {
+          used: Math.max(0, quota.used - 1),
+          limit: quota.limit,
+          unlimited: quota.unlimited,
+        },
+        planWarning: null,
+      });
+    }
+
+    const faqContext = goodMatches
+      .slice(0, 5)
+      .map((f, i) => `${i + 1}. Q: ${f.question}\n   A: ${f.answer}`)
+      .join('\n\n');
 
     const systemPrompt = [
-      `You are a helpful customer support AI assistant for ${companyName}.`,
+      `You are a customer support AI assistant for ${companyName}.`,
       `Communication tone: ${toneList}.`,
-      faqContext ? `\nKnowledge base:\n${faqContext}` : '',
-      '\nGuidelines:',
-      '- Reply with only the response text, no meta-commentary',
-      '- Keep it concise (2-4 sentences)',
-      '- Match the specified tone',
-      '- If a relevant FAQ exists, base your answer on it',
-      '- If no FAQ is relevant, acknowledge warmly and offer to help further',
-    ].filter(Boolean).join('\n');
+      `\nKnowledge base (your ONLY source of truth):\n${faqContext}`,
+      '\nStrict rules:',
+      '- Reply with only the response text, no meta-commentary or preamble.',
+      '- Keep the reply concise (2–4 sentences max).',
+      '- Match the specified tone exactly.',
+      '- Base your answer SOLELY on the knowledge base above.',
+      '- If the knowledge base does not contain a clear answer, reply exactly: "I don\'t have enough data to answer this question."',
+      '- Do NOT use general knowledge, make assumptions, or fabricate information.',
+    ].join('\n');
 
     // 4. Call OpenAI
     const response = await openai.chat.completions.create({
@@ -95,7 +112,10 @@ router.post('/generate-reply', authenticate, requireActiveSubscription, async (r
     });
 
     const text = response.choices[0]?.message?.content?.trim()
-      || "I'd be happy to help with that! Could you provide a bit more detail?";
+      || "I don't have enough data to answer this question.";
+
+    // Log AI usage for billing/audit trail
+    console.log(`[AI] Reply generated for user ${req.user.id}, org: ${companyName}, platform: ${platform || 'unknown'}, used: ${quota.used}/${quota.unlimited ? '∞' : quota.limit}`);
 
     return res.json({
       reply: text,
