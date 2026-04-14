@@ -156,8 +156,44 @@ jobs:
 
       - name: Wait for service stability
         run: |
-          echo "Waiting for ECS service to stabilize..."
-          aws ecs wait services-stable \
+          echo "Waiting for ECS service to stabilize (up to 20 min)..."
+          TIMEOUT=1200
+          INTERVAL=15
+          ELAPSED=0
+
+          while [ $ELAPSED -lt $TIMEOUT ]; do
+            STATE=$(aws ecs describe-services \
+              --cluster ${{ env.ECS_CLUSTER }} \
+              --services ${{ env.ECS_SERVICE }} \
+              --query 'services[0].deployments[?status==`PRIMARY`].rolloutState' \
+              --output text)
+
+            echo "[${ELAPSED}s] rolloutState=${STATE}"
+
+            if [ "$STATE" = "COMPLETED" ]; then
+              echo "Staging deployment complete"
+              exit 0
+            fi
+
+            if [ "$STATE" = "FAILED" ]; then
+              echo "::error::ECS deployment rolled back (FAILED)"
+              # Print the most recent stopped-task failure reason for diagnosis
+              aws ecs describe-services \
+                --cluster ${{ env.ECS_CLUSTER }} \
+                --services ${{ env.ECS_SERVICE }} \
+                --query 'services[0].events[:5]' \
+                --output table || true
+              exit 1
+            fi
+
+            sleep $INTERVAL
+            ELAPSED=$((ELAPSED + INTERVAL))
+          done
+
+          echo "::error::Timed out after ${TIMEOUT}s — service did not stabilize"
+          aws ecs describe-services \
             --cluster ${{ env.ECS_CLUSTER }} \
-            --services ${{ env.ECS_SERVICE }}
-          echo "Staging deployment complete"
+            --services ${{ env.ECS_SERVICE }} \
+            --query 'services[0].events[:5]' \
+            --output table || true
+          exit 1
