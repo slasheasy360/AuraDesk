@@ -116,20 +116,25 @@ router.post('/exchange', authenticate, async (req, res) => {
     }
 
     // Step 3: Subscribe WABA to webhooks
+    // IMPORTANT: for WhatsApp Business Account, the only valid field is 'messages'.
+    // 'message_status' and 'messaging_postbacks' are Facebook Page fields and will
+    // cause the subscription to fail or be ignored for WABA.
     const tokenToUse = process.env.WHATSAPP_SYSTEM_USER_TOKEN || accessToken;
+    console.log('[WhatsApp Exchange] Subscribing webhook — WABA:', wabaId, 'using', process.env.WHATSAPP_SYSTEM_USER_TOKEN ? 'system token' : 'user token');
     try {
-      await axios.post(`${GRAPH_API}/${wabaId}/subscribed_apps`, null, {
+      const subRes = await axios.post(`${GRAPH_API}/${wabaId}/subscribed_apps`, null, {
         params: {
           access_token: tokenToUse,
-          subscribed_fields: 'messages,message_status,messaging_postbacks',
+          subscribed_fields: 'messages',
         },
       });
-      console.log('[WhatsApp Exchange] Webhook subscription successful for WABA:', wabaId);
+      console.log('[WhatsApp Exchange] ✓ Webhook subscription OK for WABA:', wabaId, subRes.data);
     } catch (err) {
-      console.warn('[WhatsApp Exchange] Webhook subscription failed (non-fatal):', err.response?.data?.error?.message || err.message);
+      console.error('[WhatsApp Exchange] ✗ Webhook subscription failed:', err.response?.data || err.message);
     }
 
     // Step 4: Save the connection
+    console.log('[WhatsApp Exchange] Saving connection — userId:', req.user.id, 'wabaId:', wabaId, 'phoneNumberId:', phoneNumberId);
     const account = await whatsappService.handleEmbeddedSignup(
       req.user.id,
       wabaId,
@@ -137,8 +142,10 @@ router.post('/exchange', authenticate, async (req, res) => {
       accessToken
     );
 
-    console.log('[WhatsApp Exchange] WhatsApp account connected', {
+    console.log('[WhatsApp Exchange] ✓ WhatsApp account connected', {
       accountId: account.id,
+      platform: account.platform,
+      status: account.status,
       wabaId,
       phoneNumberId,
     });

@@ -628,6 +628,7 @@ async function processWhatsAppWebhook(payload, io) {
         wabaId,
         phoneNumberId,
         messageCount: value.messages.length,
+        messageTypes: value.messages.map((m) => m.type),
       });
 
       // Route to correct tenant using both wabaId AND phoneNumberId for precise multi-tenant matching
@@ -642,9 +643,16 @@ async function processWhatsAppWebhook(payload, io) {
       });
 
       if (!waAccount) {
-        console.warn('[WhatsApp Webhook] No account for wabaId:', wabaId, 'phoneNumberId:', phoneNumberId);
+        console.error('[WhatsApp Webhook] ✗ No account found for wabaId:', wabaId, 'phoneNumberId:', phoneNumberId);
+        // Diagnostic: show all registered WhatsApp accounts to identify mismatch
+        const allWaAccounts = await prisma.whatsappAccount.findMany({
+          select: { phoneNumberId: true, wabaId: true, phoneNumber: true, connectedAccountId: true },
+        });
+        console.error('[WhatsApp Webhook] Registered WhatsApp accounts in DB:', JSON.stringify(allWaAccounts));
         continue;
       }
+
+      console.log('[WhatsApp Webhook] ✓ Account matched — userId:', waAccount.connectedAccount.userId, 'phone:', waAccount.phoneNumber);
 
       const account = waAccount.connectedAccount;
 
@@ -766,16 +774,23 @@ async function processWhatsAppWebhook(payload, io) {
 
         console.log('[WhatsApp Webhook] ✓ Message saved', {
           messageId: message.id,
+          conversationId: conversation.id,
           from: senderPhone,
+          content: content.substring(0, 80),
+          attachments: waAttachments.length,
         });
 
-        io.to(`user:${account.userId}`).emit('new_message', {
+        const socketRoom = `user:${account.userId}`;
+        const roomSockets = io.sockets.adapter.rooms.get(socketRoom)?.size || 0;
+        console.log('[WhatsApp Webhook] Emitting new_message to room', socketRoom, '(', roomSockets, 'socket(s) connected )');
+
+        io.to(socketRoom).emit('new_message', {
           message,
           conversationId: conversation.id,
           platform: 'whatsapp',
         });
 
-        io.to(`user:${account.userId}`).emit('conversation_update', {
+        io.to(socketRoom).emit('conversation_update', {
           conversationId: conversation.id,
           lastMessageAt: new Date(),
           unreadCount: updatedConversation.unreadCount,

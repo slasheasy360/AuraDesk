@@ -181,6 +181,33 @@ export default function ConnectionsPage() {
       // Reset embedded data before launching the flow
       window.__WA_EMBEDDED_DATA__ = null;
 
+      // Guard against double exchange calls: both the postMessage FINISH event AND the
+      // FB.login callback can fire with a code. Only the first one should call exchange.
+      let exchangeStarted = false;
+
+      function doExchange(code, waba_id, phone_number_id, source) {
+        if (exchangeStarted) {
+          console.warn('[WhatsApp] Exchange already started (from ' + source + ') — skipping duplicate call');
+          return;
+        }
+        exchangeStarted = true;
+        console.log('[WhatsApp] Starting exchange from:', source, { code: code ? code.substring(0, 20) + '...' : 'missing', waba_id, phone_number_id });
+        api.post('/auth/whatsapp/exchange', { code, waba_id, phone_number_id })
+          .then(function (res) {
+            console.log('[WhatsApp] ✓ Exchange success:', res.data);
+            return fetchAccounts();
+          })
+          .then(function () { setConnectingPlatform(null); })
+          .catch(function (err) {
+            console.error('[WhatsApp] ✗ Exchange failed:', err.response?.data || err.message);
+            setPlatformError({
+              platformId: 'whatsapp',
+              message: err.response?.data?.error || 'Failed to connect WhatsApp.',
+            });
+            setConnectingPlatform(null);
+          });
+      }
+
       // Listen for Embedded Signup postMessage events (FINISH / CANCEL)
       const sessionInfoListener = (event) => {
         if (!event.origin.includes('facebook.com') && !event.origin.includes('fbcdn.net') && !event.origin.includes('meta.com')) return;
@@ -191,7 +218,7 @@ export default function ConnectionsPage() {
           return;
         }
 
-        console.log('[WhatsApp Embedded Signup] postMessage received:', data);
+        console.log('[WhatsApp] postMessage from', event.origin, ':', JSON.stringify(data).substring(0, 300));
 
         if (data.type === 'WA_EMBEDDED_SIGNUP') {
           if (data.event === 'FINISH' || data.event === 'FINISH_ONLY_WABA') {
@@ -203,106 +230,70 @@ export default function ConnectionsPage() {
             const phone_number_id = sessionData.phone_number_id || data.phone_number_id;
 
             window.__WA_EMBEDDED_DATA__ = { code, waba_id, phone_number_id };
-            console.log('[WhatsApp Embedded Signup] FINISH:', { code: code ? 'present' : 'missing', waba_id, phone_number_id });
+            console.log('[WhatsApp] FINISH event captured — code:', code ? 'present' : 'absent', 'waba_id:', waba_id, 'phone_number_id:', phone_number_id);
 
+            // ES v4: code comes from FB.login callback, not postMessage. Only call here if code present.
             if (code) {
-              // Send code + IDs to backend for server-side token exchange
-              api.post('/auth/whatsapp/exchange', { code, waba_id, phone_number_id })
-                .then(function () { return fetchAccounts(); })
-                .then(function () { setConnectingPlatform(null); })
-                .catch(function (err) {
-                  console.error('WhatsApp exchange failed:', err);
-                  setPlatformError({
-                    platformId: 'whatsapp',
-                    message: err.response?.data?.error || 'Failed to connect WhatsApp.',
-                  });
-                  setConnectingPlatform(null);
-                });
+              doExchange(code, waba_id, phone_number_id, 'postMessage-FINISH');
             }
           } else if (data.event === 'CANCEL') {
-            setPlatformError({
-              platformId: 'whatsapp',
-              message: 'WhatsApp signup was cancelled.',
-            });
+            console.log('[WhatsApp] Embedded Signup cancelled by user');
+            setPlatformError({ platformId: 'whatsapp', message: 'WhatsApp signup was cancelled.' });
             setConnectingPlatform(null);
+          } else {
+            console.log('[WhatsApp] postMessage event:', data.event);
           }
         }
       };
       window.addEventListener('message', sessionInfoListener);
 
+      console.log('[WhatsApp] Launching FB.login with config_id:', import.meta.env.VITE_WA_CONFIG_ID, 'ES version: 4, sessionInfoVersion: 3');
+
       window.FB.login(
         function (response) {
           window.removeEventListener('message', sessionInfoListener);
-          console.log('[WhatsApp Embedded Signup] FB.login response:', response);
+          console.log('[WhatsApp] FB.login callback — authResponse:', response.authResponse ? 'present' : 'null', '| grantedScopes:', response.authResponse?.grantedScopes);
 
           if (!response.authResponse) {
             if (!window.__WA_EMBEDDED_DATA__) {
-              setPlatformError({
-                platformId: 'whatsapp',
-                message: 'WhatsApp signup was cancelled or failed. Please try again.',
-              });
+              console.warn('[WhatsApp] No authResponse and no postMessage data — user likely cancelled');
+              setPlatformError({ platformId: 'whatsapp', message: 'WhatsApp signup was cancelled or failed. Please try again.' });
               setConnectingPlatform(null);
+            } else {
+              console.log('[WhatsApp] No authResponse but postMessage data exists — exchange likely already started');
             }
             return;
           }
 
-          // Code flow: FB.login returns the code in authResponse.code
           const code = response.authResponse.code;
+          const embeddedData = window.__WA_EMBEDDED_DATA__ || {};
+
           if (code) {
-            // Grab WABA/phone IDs from postMessage if available
-            const embeddedData = window.__WA_EMBEDDED_DATA__ || {};
-
-            console.log('[WhatsApp Embedded Signup] Exchanging code...', {
-              code: code.substring(0, 20) + '...',
-              waba_id: embeddedData.waba_id,
-              phone_number_id: embeddedData.phone_number_id,
-            });
-
-            api.post('/auth/whatsapp/exchange', {
-              code,
-              waba_id: embeddedData.waba_id || null,
-              phone_number_id: embeddedData.phone_number_id || null,
-            })
-              .then(function () { return fetchAccounts(); })
-              .then(function () { setConnectingPlatform(null); })
-              .catch(function (err) {
-                console.error('WhatsApp exchange failed:', err);
-                setPlatformError({
-                  platformId: 'whatsapp',
-                  message: err.response?.data?.error || 'Failed to connect WhatsApp.',
-                });
-                setConnectingPlatform(null);
-              });
+            doExchange(code, embeddedData.waba_id || null, embeddedData.phone_number_id || null, 'FB.login-code');
             return;
           }
 
-          // Fallback: if somehow we got an access token instead of a code
+          // Fallback: access token (rare, for non-code flows)
           const accessToken = response.authResponse.accessToken;
           if (accessToken) {
-            const embeddedData = window.__WA_EMBEDDED_DATA__ || {};
+            console.log('[WhatsApp] Falling back to accessToken flow (no code in authResponse)');
             const payload = { accessToken };
             if (embeddedData.waba_id) payload.wabaId = embeddedData.waba_id;
             if (embeddedData.phone_number_id) payload.phoneNumberId = embeddedData.phone_number_id;
 
             api.post('/auth/whatsapp/connect-with-token', payload)
-              .then(function () { return fetchAccounts(); })
+              .then(function (res) { console.log('[WhatsApp] ✓ connect-with-token success:', res.data); return fetchAccounts(); })
               .then(function () { setConnectingPlatform(null); })
               .catch(function (err) {
-                console.error('WhatsApp connect failed:', err);
-                setPlatformError({
-                  platformId: 'whatsapp',
-                  message: err.response?.data?.error || 'Failed to connect WhatsApp.',
-                });
+                console.error('[WhatsApp] ✗ connect-with-token failed:', err.response?.data || err.message);
+                setPlatformError({ platformId: 'whatsapp', message: err.response?.data?.error || 'Failed to connect WhatsApp.' });
                 setConnectingPlatform(null);
               });
             return;
           }
 
-          // No code or token — should not happen
-          setPlatformError({
-            platformId: 'whatsapp',
-            message: 'No authorization code received from WhatsApp signup. Please try again.',
-          });
+          console.error('[WhatsApp] No code or accessToken in FB.login response — cannot connect');
+          setPlatformError({ platformId: 'whatsapp', message: 'No authorization code received. Please try again.' });
           setConnectingPlatform(null);
         },
         {
