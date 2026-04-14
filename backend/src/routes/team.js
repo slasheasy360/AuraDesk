@@ -212,13 +212,21 @@ router.post('/accept', async (req, res) => {
         passwordHash,
         role: invite.role,
         inviterUserId: invite.inviterId,
-        // Inherit workspace plan & onboarding so member can use the app immediately
+        // Inherit workspace plan & subscription so member can use the app immediately
         plan: owner?.plan || 'pro',
         subscriptionStatus: owner?.subscriptionStatus || 'active',
+        isSubscribed: owner?.isSubscribed ?? true,
+        trialEndsAt: owner?.trialEndsAt || null,
+        currentPeriodStart: owner?.currentPeriodStart || null,
+        currentPeriodEnd: owner?.currentPeriodEnd || null,
+        gracePeriodEndsAt: owner?.gracePeriodEndsAt || null,
+        billingCycle: owner?.billingCycle || null,
         companyName: owner?.companyName,
         companyLogo: owner?.companyLogo,
         brandColor: owner?.brandColor,
+        // Skip onboarding — the workspace is already set up
         onboardingStep: 4,
+        onboardingCompleted: true,
       },
     });
 

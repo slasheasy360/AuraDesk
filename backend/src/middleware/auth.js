@@ -47,44 +47,51 @@ export async function requireActiveSubscription(req, res, next) {
   const user = req.user;
   if (!user) return res.status(401).json({ error: 'Not authenticated' });
 
+  // Team members inherit their workspace owner's subscription. Look up the
+  // owner and check against their live plan so members automatically gain/lose
+  // access whenever the owner's subscription changes.
+  const subject = user.inviterUserId
+    ? await prisma.user.findUnique({ where: { id: user.inviterUserId } }) || user
+    : user;
+
   const now = new Date();
   const PAID_PLANS = ['starter', 'pro', 'elite'];
 
   // Active or trialing on a paid Stripe subscription
-  if (PAID_PLANS.includes(user.plan) && ['active', 'trialing'].includes(user.subscriptionStatus)) {
+  if (PAID_PLANS.includes(subject.plan) && ['active', 'trialing'].includes(subject.subscriptionStatus)) {
     return next();
   }
 
   // past_due paid plan inside the grace window
   if (
-    PAID_PLANS.includes(user.plan) &&
-    user.subscriptionStatus === 'past_due' &&
-    user.gracePeriodEndsAt &&
-    new Date(user.gracePeriodEndsAt) > now
+    PAID_PLANS.includes(subject.plan) &&
+    subject.subscriptionStatus === 'past_due' &&
+    subject.gracePeriodEndsAt &&
+    new Date(subject.gracePeriodEndsAt) > now
   ) {
     return next();
   }
 
   // Free trial that hasn't elapsed
   if (
-    user.plan === 'trial' &&
-    user.trialEndsAt &&
-    new Date(user.trialEndsAt) > now
+    subject.plan === 'trial' &&
+    subject.trialEndsAt &&
+    new Date(subject.trialEndsAt) > now
   ) {
     return next();
   }
 
   // Anything else is locked out.
   let reason = 'subscription_required';
-  if (user.subscriptionStatus === 'past_due') reason = 'grace_period_expired';
-  else if (user.plan === 'expired') reason = 'trial_expired';
-  else if (user.plan === 'trial' && !user.trialEndsAt) reason = 'trial_not_started';
-  else if (user.subscriptionStatus === 'canceled') reason = 'subscription_canceled';
+  if (subject.subscriptionStatus === 'past_due') reason = 'grace_period_expired';
+  else if (subject.plan === 'expired') reason = 'trial_expired';
+  else if (subject.plan === 'trial' && !subject.trialEndsAt) reason = 'trial_not_started';
+  else if (subject.subscriptionStatus === 'canceled') reason = 'subscription_canceled';
 
   return res.status(402).json({
     error: 'Subscription required to access this feature',
     reason,
-    plan: user.plan,
-    subscriptionStatus: user.subscriptionStatus,
+    plan: subject.plan,
+    subscriptionStatus: subject.subscriptionStatus,
   });
 }

@@ -169,14 +169,22 @@ router.get('/me', authenticate, async (req, res) => {
   const user = await prisma.user.findUnique({ where: { id: req.user.id } });
   if (!user) return res.status(404).json({ error: 'User not found' });
 
-  // Auto-expire trial
-  if (user.plan === 'trial' && user.trialEndsAt && new Date() > new Date(user.trialEndsAt)) {
+  // For team members, resolve subscription data from the workspace owner so
+  // the frontend's hasUsableAccess check always reflects the owner's live plan.
+  let owner = null;
+  if (user.inviterUserId) {
+    owner = await prisma.user.findUnique({ where: { id: user.inviterUserId } });
+  }
+  const subSource = owner || user;
+
+  // Auto-expire trial (only for workspace owners; members inherit owner status)
+  if (!owner && subSource.plan === 'trial' && subSource.trialEndsAt && new Date() > new Date(subSource.trialEndsAt)) {
     await prisma.user.update({
       where: { id: user.id },
       data: { plan: 'expired', subscriptionStatus: 'expired' },
     });
-    user.plan = 'expired';
-    user.subscriptionStatus = 'expired';
+    subSource.plan = 'expired';
+    subSource.subscriptionStatus = 'expired';
   }
 
   // Snapshot plan limits + current usage so the frontend can render plan
@@ -184,7 +192,7 @@ router.get('/me', authenticate, async (req, res) => {
   // round-trip. Failure here is non-fatal — we still return the user.
   let planSnapshot = null;
   try {
-    planSnapshot = await getUsageSnapshot(user);
+    planSnapshot = await getUsageSnapshot(subSource);
   } catch (err) {
     console.error('[auth/me] getUsageSnapshot failed:', err.message);
   }
@@ -194,19 +202,21 @@ router.get('/me', authenticate, async (req, res) => {
   res.json({
     user: {
       id: user.id, email: user.email, name: user.name,
-      plan: user.plan, subscriptionStatus: user.subscriptionStatus,
-      isSubscribed: user.isSubscribed,
-      trialEndsAt: user.trialEndsAt,
+      // Subscription fields always come from the owner for team members
+      plan: subSource.plan, subscriptionStatus: subSource.subscriptionStatus,
+      isSubscribed: subSource.isSubscribed,
+      trialEndsAt: subSource.trialEndsAt,
+      currentPeriodStart: subSource.currentPeriodStart,
+      currentPeriodEnd: subSource.currentPeriodEnd,
+      cancelAtPeriodEnd: subSource.cancelAtPeriodEnd,
+      gracePeriodEndsAt: subSource.gracePeriodEndsAt,
+      billingCycle: subSource.billingCycle,
+      // Profile fields always from the user's own row
       onboardingStep: user.onboardingStep,
       onboardingCompleted: user.onboardingCompleted,
       companyName: user.companyName, companyLogo: companyLogoUrl,
       brandColor: user.brandColor, firstName: user.firstName,
       lastName: user.lastName, cannedResponse: user.cannedResponse,
-      currentPeriodStart: user.currentPeriodStart,
-      currentPeriodEnd: user.currentPeriodEnd,
-      cancelAtPeriodEnd: user.cancelAtPeriodEnd,
-      gracePeriodEndsAt: user.gracePeriodEndsAt,
-      billingCycle: user.billingCycle,
       role: user.role, inviterUserId: user.inviterUserId,
       // Embedded plan data (single source of truth from backend/src/config/plans.js)
       planLimits: planSnapshot?.limits || null,
