@@ -152,24 +152,32 @@ export default function ConnectionsPage() {
     setConnectingPlatform(platform.id);
 
     if (platform.id === 'whatsapp') {
+      console.group('%c[WhatsApp] ── Connect flow started ──', 'color:#25D366;font-weight:bold');
+      console.log('FB SDK available:', typeof window.FB !== 'undefined');
+      console.log('Config ID (VITE_WA_CONFIG_ID):', import.meta.env.VITE_WA_CONFIG_ID || '⚠️ NOT SET');
+      console.log('Meta App ID (VITE_META_APP_ID):', import.meta.env.VITE_META_APP_ID || '⚠️ NOT SET');
+      console.groupEnd();
+
       // Step 1: Try silent direct reconnect using system token + stored WABA.
-      // This bypasses the Embedded Signup dialog entirely and avoids the Meta-side
-      // "phone already registered" error that shows when the number is still in a WABA.
+      console.log('[WhatsApp] Step 1 — attempting direct reconnect (system token + stored WABA)...');
       try {
         const reconnectRes = await api.post('/auth/whatsapp/reconnect-direct');
+        console.log('[WhatsApp] Direct reconnect response:', reconnectRes.data);
         if (reconnectRes.data?.available) {
-          console.log('[WhatsApp] Direct reconnect succeeded, skipping Embedded Signup');
+          console.log('%c[WhatsApp] ✓ Direct reconnect succeeded — no Embedded Signup needed', 'color:#25D366;font-weight:bold');
           await fetchAccounts();
           setConnectingPlatform(null);
           return;
         }
-        console.log('[WhatsApp] Direct reconnect not available:', reconnectRes.data?.reason, '— launching Embedded Signup');
+        console.warn('[WhatsApp] Direct reconnect not available:', reconnectRes.data?.reason, '→ falling back to Embedded Signup');
       } catch (err) {
-        console.log('[WhatsApp] Direct reconnect failed:', err.message, '— launching Embedded Signup');
+        console.warn('[WhatsApp] Direct reconnect request failed:', err.message, '→ falling back to Embedded Signup');
       }
 
       // Step 2: Fall back to Meta Embedded Signup flow
+      console.log('[WhatsApp] Step 2 — launching Meta Embedded Signup dialog');
       if (typeof window.FB === 'undefined') {
+        console.error('[WhatsApp] ✗ window.FB is undefined — Facebook SDK not loaded');
         setPlatformError({
           platformId: 'whatsapp',
           message: 'Facebook SDK not loaded. Please check your Meta App ID configuration and refresh the page.',
@@ -177,6 +185,7 @@ export default function ConnectionsPage() {
         setConnectingPlatform(null);
         return;
       }
+      console.log('[WhatsApp] FB SDK version:', window.FB?.version || 'unknown');
 
       // Reset embedded data before launching the flow
       window.__WA_EMBEDDED_DATA__ = null;
