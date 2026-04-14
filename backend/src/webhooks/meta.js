@@ -3,6 +3,56 @@ import crypto from 'crypto';
 import axios from 'axios';
 import prisma from '../utils/prisma.js';
 import { decrypt } from '../utils/encryption.js';
+import { uploadFile } from '../utils/s3.js';
+
+/**
+ * Download a media URL and upload it to S3 for permanent storage.
+ * Returns the S3 key on success, null on failure (non-fatal).
+ */
+async function mirrorMediaToS3(fileUrl, mimeType, folder) {
+  try {
+    const response = await axios.get(fileUrl, { responseType: 'arraybuffer', timeout: 30000 });
+    const buffer = Buffer.from(response.data);
+    const ext = mimeType === 'video/mp4' ? 'mp4'
+      : mimeType === 'image/jpeg' ? 'jpg'
+      : mimeType === 'audio/mpeg' ? 'mp3'
+      : 'bin';
+    const key = `${folder}/${Date.now()}-${crypto.randomBytes(6).toString('hex')}.${ext}`;
+    await uploadFile(buffer, key, mimeType);
+    return key;
+  } catch (err) {
+    console.warn('[Meta Webhook] S3 mirror failed:', err.message);
+    return null;
+  }
+}
+
+/**
+ * Fire-and-forget: download each CDN attachment and re-host on S3.
+ * Updates the message row once all uploads complete.
+ */
+function mirrorAttachmentsInBackground(messageId, attachments, folder) {
+  if (!attachments?.some((a) => a.fileUrl)) return;
+  (async () => {
+    try {
+      let changed = false;
+      const updated = await Promise.all(
+        attachments.map(async (att) => {
+          if (!att.fileUrl) return att;
+          const s3Key = await mirrorMediaToS3(att.fileUrl, att.mimeType, folder);
+          if (!s3Key) return att;
+          changed = true;
+          return { ...att, s3Key, fileUrl: null };
+        }),
+      );
+      if (changed) {
+        await prisma.message.update({ where: { id: messageId }, data: { attachments: updated } });
+        console.log(`[Meta Webhook] Mirrored media to S3 for message ${messageId}`);
+      }
+    } catch (err) {
+      console.error('[Meta Webhook] Background S3 mirror error:', err.message);
+    }
+  })();
+}
 
 const GRAPH_API = 'https://graph.facebook.com/v21.0';
 
@@ -305,6 +355,9 @@ async function processMessengerWebhook(payload, io) {
         userId: account.userId,
       });
 
+      // Mirror CDN media to S3 so attachments remain accessible after CDN URLs expire
+      mirrorAttachmentsInBackground(message.id, incomingAttachments, `media/facebook/${message.id}`);
+
       // Emit socket events to user
       io.to(`user:${account.userId}`).emit('new_message', {
         message,
@@ -515,6 +568,9 @@ async function processInstagramWebhook(payload, io) {
         conversationId: conversation.id,
         direction: isEcho ? 'outbound' : 'inbound',
       });
+
+      // Mirror CDN media to S3 so attachments remain accessible after CDN URLs expire
+      mirrorAttachmentsInBackground(message.id, igAttachments, `media/instagram/${message.id}`);
 
       io.to(`user:${account.userId}`).emit('new_message', {
         message,

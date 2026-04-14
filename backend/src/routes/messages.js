@@ -347,7 +347,11 @@ router.get('/:messageId/attachments/:index/preview', authenticate, async (req, r
     // Set cache headers for previews
     res.setHeader('Cache-Control', 'private, max-age=3600');
 
-    if (platform === 'whatsapp' && att.mediaId) {
+    if (att.s3Key) {
+      // S3 takes priority — permanent storage, never expires
+      const url = await getPresignedUrl(att.s3Key, 3600);
+      return res.redirect(url);
+    } else if (platform === 'whatsapp' && att.mediaId) {
       const { stream, contentType, contentLength } = await whatsappService.downloadMedia(connectedAccountId, att.mediaId);
       res.setHeader('Content-Type', contentType || att.mimeType || 'application/octet-stream');
       res.setHeader('Content-Disposition', 'inline');
@@ -372,10 +376,6 @@ router.get('/:messageId/attachments/:index/preview', authenticate, async (req, r
       res.setHeader('Content-Disposition', 'inline');
       res.setHeader('Content-Length', buffer.length);
       res.send(buffer);
-    } else if (att.s3Key) {
-      // Outbound attachments stored in S3 — redirect to pre-signed URL
-      const url = await getPresignedUrl(att.s3Key);
-      res.redirect(url);
     } else {
       return res.status(404).json({ error: 'No preview available' });
     }
