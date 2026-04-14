@@ -174,13 +174,115 @@ export default function ConnectionsPage() {
         console.warn('[WhatsApp] Direct reconnect request failed:', err.message, '→ falling back to Embedded Signup');
       }
 
-      // Step 2: Fall back to Meta Embedded Signup flow
-      console.log('[WhatsApp] Step 2 — launching Meta Embedded Signup dialog');
+      // Step 2: Open Meta-hosted Embedded Signup URL in a popup (preferred).
+      // This is the exact URL that Meta generates in its Embedded Signup Builder and
+      // reliably shows the full 5-step flow with Coexistence / existing-WABA options.
+      const appId = import.meta.env.VITE_META_APP_ID;
+      const configId = import.meta.env.VITE_WA_CONFIG_ID;
+
+      if (appId && configId) {
+        const extrasJson = JSON.stringify({
+          featureType: 'whatsapp_business_app_onboarding',
+          sessionInfoVersion: '3',
+          version: 'v4',
+        });
+        const onboardUrl = `https://business.facebook.com/messaging/whatsapp/onboard/?app_id=${appId}&config_id=${configId}&extras=${encodeURIComponent(extrasJson)}`;
+        console.log('[WhatsApp] Step 2 — opening Meta-hosted URL:', onboardUrl);
+
+        const popup = window.open(
+          onboardUrl,
+          'wa_embedded_signup',
+          'width=720,height=840,menubar=0,toolbar=0,location=1,status=0,scrollbars=1,resizable=1'
+        );
+
+        if (popup) {
+          let finalized = false;
+
+          const handlePopupMsg = (event) => {
+            const originOk =
+              event.origin.endsWith('.facebook.com') ||
+              event.origin === 'https://business.facebook.com' ||
+              event.origin === 'https://www.facebook.com';
+            if (!originOk) return;
+
+            let data;
+            try {
+              data = typeof event.data === 'string' ? JSON.parse(event.data) : event.data;
+            } catch { return; }
+            if (!data || data.type !== 'WA_EMBEDDED_SIGNUP') return;
+
+            console.log('[WhatsApp Popup] postMessage ←', event.origin, ':', data);
+
+            if (data.event === 'FINISH' || data.event === 'FINISH_ONLY_WABA') {
+              const sd = data.data || {};
+              const ar = data.authResponse || {};
+              const code = ar.code || sd.code || data.code || null;
+              const waba_id = sd.waba_id || data.waba_id || null;
+              const phone_number_id = sd.phone_number_id || data.phone_number_id || null;
+
+              console.log('[WhatsApp Popup] ✓ FINISH — code:', code ? 'present' : 'absent', '| waba_id:', waba_id, '| phone:', phone_number_id);
+
+              if (finalized) return;
+              finalized = true;
+              try { popup.close(); } catch {}
+
+              // If Meta gave us a code, go through /exchange (it'll do token exchange + save).
+              // Otherwise use /finalize-signup which connects via WHATSAPP_SYSTEM_USER_TOKEN.
+              const endpoint = code ? '/auth/whatsapp/exchange' : '/auth/whatsapp/finalize-signup';
+              const payload = code ? { code, waba_id, phone_number_id } : { waba_id, phone_number_id };
+              console.log('[WhatsApp Popup] Calling backend:', endpoint, 'with', Object.keys(payload).join(', '));
+
+              api.post(endpoint, payload)
+                .then((res) => {
+                  console.log('[WhatsApp Popup] ✓ Backend success:', res.data);
+                  return fetchAccounts();
+                })
+                .then(() => setConnectingPlatform(null))
+                .catch((err) => {
+                  console.error('[WhatsApp Popup] ✗ Backend failed:', err.response?.data || err.message);
+                  setPlatformError({
+                    platformId: 'whatsapp',
+                    message: err.response?.data?.error || 'Failed to connect WhatsApp.',
+                  });
+                  setConnectingPlatform(null);
+                });
+            } else if (data.event === 'CANCEL') {
+              console.log('[WhatsApp Popup] User cancelled');
+              setPlatformError({ platformId: 'whatsapp', message: 'WhatsApp signup was cancelled.' });
+              setConnectingPlatform(null);
+            } else {
+              console.log('[WhatsApp Popup] event:', data.event, data.data);
+            }
+          };
+
+          window.addEventListener('message', handlePopupMsg);
+
+          const pollId = setInterval(() => {
+            if (popup.closed) {
+              clearInterval(pollId);
+              window.removeEventListener('message', handlePopupMsg);
+              if (!finalized) {
+                console.log('[WhatsApp Popup] Closed without completion');
+                setConnectingPlatform(null);
+              }
+            }
+          }, 500);
+
+          return;
+        }
+
+        console.warn('[WhatsApp] Popup blocked — falling back to FB.login');
+      } else {
+        console.warn('[WhatsApp] Missing VITE_META_APP_ID or VITE_WA_CONFIG_ID — falling back to FB.login');
+      }
+
+      // Step 3: FB.login fallback (if popup is blocked or env vars missing)
+      console.log('[WhatsApp] Step 3 — falling back to FB.login dialog');
       if (typeof window.FB === 'undefined') {
         console.error('[WhatsApp] ✗ window.FB is undefined — Facebook SDK not loaded');
         setPlatformError({
           platformId: 'whatsapp',
-          message: 'Facebook SDK not loaded. Please check your Meta App ID configuration and refresh the page.',
+          message: 'Facebook SDK not loaded. Please allow popups or refresh the page.',
         });
         setConnectingPlatform(null);
         return;

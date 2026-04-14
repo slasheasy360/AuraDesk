@@ -303,6 +303,74 @@ router.post('/connect-env', authenticate, async (req, res) => {
   }
 });
 
+// POST /auth/whatsapp/finalize-signup
+// Called by the frontend after the user completes the Meta-hosted Embedded Signup URL popup.
+// The popup sends postMessage with waba_id + phone_number_id (but no OAuth code), and this
+// endpoint uses the server's WHATSAPP_SYSTEM_USER_TOKEN to finish the connection.
+router.post('/finalize-signup', authenticate, async (req, res) => {
+  try {
+    const { waba_id, phone_number_id } = req.body || {};
+    console.log('[WhatsApp Finalize] Request — userId:', req.user.id, 'waba_id:', waba_id, 'phone_number_id:', phone_number_id);
+
+    if (!waba_id) {
+      return res.status(400).json({ error: 'waba_id is required' });
+    }
+
+    const systemToken = process.env.WHATSAPP_SYSTEM_USER_TOKEN;
+    if (!systemToken) {
+      return res.status(400).json({
+        error: 'WHATSAPP_SYSTEM_USER_TOKEN not configured on server. Cannot finalize Meta-hosted signup without it.',
+        code: 'SYSTEM_TOKEN_MISSING',
+      });
+    }
+
+    // Discover phone number from WABA if not provided
+    let phoneId = phone_number_id || null;
+    if (!phoneId) {
+      try {
+        const phoneRes = await axios.get(`${GRAPH_API}/${waba_id}/phone_numbers`, {
+          params: { fields: 'id,display_phone_number,verified_name', access_token: systemToken },
+        });
+        const phones = phoneRes.data?.data || [];
+        if (phones.length > 0) {
+          phoneId = phones[0].id;
+          console.log('[WhatsApp Finalize] Discovered phone:', phones[0].display_phone_number, 'id:', phoneId);
+        }
+      } catch (err) {
+        console.warn('[WhatsApp Finalize] phone discovery failed:', err.response?.data?.error?.message || err.message);
+      }
+    }
+
+    if (!phoneId) {
+      return res.status(400).json({ error: 'No phone number found in WABA. Complete signup with a phone number and try again.' });
+    }
+
+    // Subscribe webhook
+    console.log('[WhatsApp Finalize] Subscribing webhook for WABA:', waba_id);
+    try {
+      await axios.post(`${GRAPH_API}/${waba_id}/subscribed_apps`, null, {
+        params: { access_token: systemToken, subscribed_fields: 'messages' },
+      });
+      console.log('[WhatsApp Finalize] ✓ Webhook subscription OK');
+    } catch (err) {
+      console.error('[WhatsApp Finalize] ✗ Webhook subscription failed:', err.response?.data || err.message);
+    }
+
+    const account = await whatsappService.handleEmbeddedSignup(
+      req.user.id, waba_id, phoneId, systemToken, 'system_user'
+    );
+
+    console.log('[WhatsApp Finalize] ✓ Connection saved, accountId:', account.id);
+    res.json({ success: true, account });
+  } catch (err) {
+    console.error('[WhatsApp Finalize] ✗ Error:', err.response?.data || err.message);
+    if (err.code === 'DUPLICATE_PHONE') {
+      return res.status(409).json({ error: err.message });
+    }
+    res.status(500).json({ error: err.response?.data?.error?.message || err.message });
+  }
+});
+
 // POST /api/whatsapp/reconnect-direct
 // Reconnects WhatsApp using the stored WABA ID + system user token WITHOUT going through
 // the Embedded Signup dialog. This bypasses the "phone already registered" error that
