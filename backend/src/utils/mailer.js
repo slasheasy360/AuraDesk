@@ -1,134 +1,68 @@
-import { SESv2Client, SendEmailCommand } from '@aws-sdk/client-sesv2';
 import nodemailer from 'nodemailer';
 import crypto from 'crypto';
 
-// ── SES client (region from env, falls back to eu-north-1) ──────────────────
-const ses = new SESv2Client({ region: process.env.AWS_REGION || 'eu-north-1' });
+let transporter = null;
 
-function buildMessageId(fromEmail) {
-  const domain = (fromEmail || '').split('@')[1] || 'auradesk.com';
-  return `<${crypto.randomBytes(16).toString('hex')}@${domain}>`;
-}
-
-// ── Build a raw MIME buffer using nodemailer (transport-agnostic) ────────────
-async function buildRawMime({ from, to, subject, html, text, replyTo, headers, messageId, attachments }) {
-  const stream = nodemailer.createTransport({ streamTransport: true, newline: 'unix' });
-  const { message } = await stream.sendMail({
-    from,
-    to,
-    subject,
-    html,
-    text,
-    replyTo,
-    headers: { 'Message-ID': messageId, ...headers },
-    attachments,
-  });
-
-  return new Promise((resolve, reject) => {
-    const chunks = [];
-    message.on('data', (c) => chunks.push(c));
-    message.on('end', () => resolve(Buffer.concat(chunks)));
-    message.on('error', reject);
-  });
-}
-
-// ── sendMail — drop-in replacement for the previous nodemailer/SMTP version ──
-//
-// Params (unchanged from old API):
-//   to          string | string[]
-//   subject     string
-//   html        string  (optional if text provided)
-//   text        string  (optional if html provided)
-//   from        string  (ignored for the actual SES sender — SES_FROM_EMAIL is
-//                        always used; a custom `from` becomes Reply-To instead)
-//   replyTo     string
-//   headers     object  ({ 'In-Reply-To': '...', References: '...' }, etc.)
-//   messageId   string  (custom Message-ID header)
-//   attachments array   (nodemailer attachment objects)
-//
-// Returns: { sent, messageId, response?, accepted?, rejected?, reason? }
-//
-export async function sendMail({ to, subject, html, text, from, replyTo, headers, messageId, attachments } = {}) {
-  const sesFromEmail = process.env.SES_FROM_EMAIL;
-  const sesFromName  = process.env.SES_FROM_NAME || 'AuraDesk';
-  const configSet    = process.env.SES_CONFIGURATION_SET;
-
-  if (!sesFromEmail) {
-    console.warn('[Mailer] SES_FROM_EMAIL is not set — email not sent');
-    return { sent: false, reason: 'SES_FROM_EMAIL not configured' };
+function getTransporter() {
+  if (transporter) return transporter;
+  const { SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, SMTP_SECURE } = process.env;
+  if (!SMTP_HOST || !SMTP_USER || !SMTP_PASS) {
+    console.warn('[Mailer] SMTP env vars not configured — emails will not be sent');
+    return null;
   }
+  transporter = nodemailer.createTransport({
+    host: SMTP_HOST,
+    port: parseInt(SMTP_PORT || '587', 10),
+    secure: SMTP_SECURE === 'true' || parseInt(SMTP_PORT || '587', 10) === 465,
+    auth: { user: SMTP_USER, pass: SMTP_PASS },
+  });
+  return transporter;
+}
 
-  const resolvedFrom      = `"${sesFromName}" <${sesFromEmail}>`;
-  const resolvedMessageId = messageId || buildMessageId(sesFromEmail);
+function buildMessageId(from) {
+  const domain = (from || '').split('@')[1] || 'auradesk.local';
+  return `${crypto.randomBytes(16).toString('hex')}@${domain}`;
+}
 
-  // SES requires the sender to be a verified identity.
-  // If the caller passed a custom `from` (e.g. the user's connected Gmail),
-  // forward it as Reply-To so replies go to the right person.
-  const resolvedReplyTo =
-    replyTo ||
-    (from && from !== sesFromEmail && from !== resolvedFrom ? from : undefined);
-
-  // Use Raw MIME when threading headers or attachments are present;
-  // use Simple format otherwise (cheaper, simpler, no MIME-building needed).
-  const needsRaw = (headers && Object.keys(headers).length > 0) || attachments?.length;
-
+export async function sendMail({
+  to,
+  subject,
+  html,
+  text,
+  from,
+  replyTo,
+  headers,
+  messageId,
+  attachments,
+}) {
+  const t = getTransporter();
+  if (!t) return { sent: false, reason: 'SMTP not configured' };
+  const resolvedFrom = from || process.env.SMTP_FROM || `AuraDesk <${process.env.SMTP_USER}>`;
+  const resolvedMessageId = messageId || buildMessageId(resolvedFrom);
   try {
-    if (needsRaw) {
-      const rawBuffer = await buildRawMime({
-        from: resolvedFrom,
-        to,
-        subject,
-        html,
-        text,
-        replyTo: resolvedReplyTo,
-        headers,
-        messageId: resolvedMessageId,
-        attachments,
-      });
-
-      const result = await ses.send(new SendEmailCommand({
-        Content: {
-          Raw: { Data: rawBuffer },
-        },
-        ConfigurationSetName: configSet || undefined,
-      }));
-
-      const sesId = result.MessageId;
-      console.log(`[Mailer/SES-Raw] Sent to ${Array.isArray(to) ? to.join(', ') : to} — SES MessageId: ${sesId}`);
-      return { sent: true, messageId: resolvedMessageId, response: sesId };
-    }
-
-    // ── Simple format ────────────────────────────────────────────────────────
-    const toAddresses  = Array.isArray(to) ? to : [to];
-    const fallbackText = text || (html || '').replace(/<[^>]*>/g, '').trim();
-
-    const result = await ses.send(new SendEmailCommand({
-      FromEmailAddress: resolvedFrom,
-      Destination: { ToAddresses: toAddresses },
-      ReplyToAddresses: resolvedReplyTo ? [resolvedReplyTo] : undefined,
-      Content: {
-        Simple: {
-          Subject: { Data: subject || '(no subject)', Charset: 'UTF-8' },
-          Body: {
-            ...(html  && { Html: { Data: html,          Charset: 'UTF-8' } }),
-            ...(fallbackText && { Text: { Data: fallbackText, Charset: 'UTF-8' } }),
-          },
-        },
-      },
-      ConfigurationSetName: configSet || undefined,
-    }));
-
-    const sesId = result.MessageId;
-    console.log(`[Mailer/SES] Sent to ${toAddresses.join(', ')} — SES MessageId: ${sesId}`);
-    return { sent: true, messageId: sesId, accepted: toAddresses, rejected: [], response: sesId };
-
+    const info = await t.sendMail({
+      from: resolvedFrom,
+      to,
+      subject,
+      html,
+      text,
+      replyTo,
+      headers,
+      messageId: resolvedMessageId,
+      attachments,
+    });
+    return {
+      sent: true,
+      messageId: info.messageId,
+      accepted: info.accepted,
+      rejected: info.rejected,
+      response: info.response,
+    };
   } catch (err) {
-    console.error('[Mailer/SES] Send failed:', err.message);
+    console.error('[Mailer] Send failed:', err.message);
     return { sent: false, reason: err.message };
   }
 }
-
-// ── Email body builders (unchanged) ─────────────────────────────────────────
 
 export function buildPasswordResetEmail({ resetLink, userName }) {
   const subject = 'Reset your AuraDesk password';
