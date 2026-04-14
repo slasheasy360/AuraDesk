@@ -1,4 +1,4 @@
-import { SESv2Client, SendEmailCommand, SendRawEmailCommand } from '@aws-sdk/client-sesv2';
+import { SESv2Client, SendEmailCommand } from '@aws-sdk/client-sesv2';
 import nodemailer from 'nodemailer';
 import crypto from 'crypto';
 
@@ -86,8 +86,10 @@ export async function sendMail({ to, subject, html, text, from, replyTo, headers
         attachments,
       });
 
-      const result = await ses.send(new SendRawEmailCommand({
-        RawMessage: { Data: rawBuffer },
+      const result = await ses.send(new SendEmailCommand({
+        Content: {
+          Raw: { Data: rawBuffer },
+        },
         ConfigurationSetName: configSet || undefined,
       }));
 
