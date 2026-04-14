@@ -152,7 +152,23 @@ export default function ConnectionsPage() {
     setConnectingPlatform(platform.id);
 
     if (platform.id === 'whatsapp') {
-      // Launch Meta Embedded Signup flow
+      // Step 1: Try silent direct reconnect using system token + stored WABA.
+      // This bypasses the Embedded Signup dialog entirely and avoids the Meta-side
+      // "phone already registered" error that shows when the number is still in a WABA.
+      try {
+        const reconnectRes = await api.post('/auth/whatsapp/reconnect-direct');
+        if (reconnectRes.data?.available) {
+          console.log('[WhatsApp] Direct reconnect succeeded, skipping Embedded Signup');
+          await fetchAccounts();
+          setConnectingPlatform(null);
+          return;
+        }
+        console.log('[WhatsApp] Direct reconnect not available:', reconnectRes.data?.reason, '— launching Embedded Signup');
+      } catch (err) {
+        console.log('[WhatsApp] Direct reconnect failed:', err.message, '— launching Embedded Signup');
+      }
+
+      // Step 2: Fall back to Meta Embedded Signup flow
       if (typeof window.FB === 'undefined') {
         setPlatformError({
           platformId: 'whatsapp',

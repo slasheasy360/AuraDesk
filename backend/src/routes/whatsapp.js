@@ -296,6 +296,72 @@ router.post('/connect-env', authenticate, async (req, res) => {
   }
 });
 
+// POST /api/whatsapp/reconnect-direct
+// Reconnects WhatsApp using the stored WABA ID + system user token WITHOUT going through
+// the Embedded Signup dialog. This bypasses the "phone already registered" error that
+// appears in the Meta dialog when the phone is still in the user's WABA from a prior session.
+router.post('/reconnect-direct', authenticate, async (req, res) => {
+  try {
+    const systemToken = process.env.WHATSAPP_SYSTEM_USER_TOKEN;
+    if (!systemToken) {
+      return res.json({ available: false, reason: 'WHATSAPP_SYSTEM_USER_TOKEN not configured' });
+    }
+
+    // Find any previous WhatsApp connectedAccount (active OR disconnected) to recover WABA ID
+    const prevAccount = await prisma.connectedAccount.findFirst({
+      where: { userId: req.user.id, platform: 'whatsapp' },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    if (!prevAccount) {
+      return res.json({ available: false, reason: 'No previous WhatsApp connection found' });
+    }
+
+    const wabaId = prevAccount.platformAccountId;
+    console.log('[WhatsApp Reconnect] Attempting direct reconnect with WABA:', wabaId);
+
+    // List phone numbers in the WABA using system user token
+    let phoneNumberId = null;
+    let phoneDisplay = null;
+    try {
+      const phoneRes = await axios.get(`${GRAPH_API}/${wabaId}/phone_numbers`, {
+        params: { fields: 'id,display_phone_number,verified_name', access_token: systemToken },
+      });
+      const phones = phoneRes.data?.data || [];
+      if (phones.length > 0) {
+        phoneNumberId = phones[0].id;
+        phoneDisplay = phones[0].display_phone_number;
+        console.log('[WhatsApp Reconnect] Found phone:', phoneDisplay, 'id:', phoneNumberId);
+      }
+    } catch (err) {
+      console.warn('[WhatsApp Reconnect] Could not list WABA phones:', err.response?.data?.error?.message || err.message);
+      return res.json({ available: false, reason: 'Could not retrieve phone numbers from WABA' });
+    }
+
+    if (!phoneNumberId) {
+      return res.json({ available: false, reason: 'No phone numbers registered in WABA' });
+    }
+
+    // Reconnect directly — bypasses Embedded Signup entirely, avoids "already registered" error
+    const account = await whatsappService.handleEmbeddedSignup(
+      req.user.id,
+      wabaId,
+      phoneNumberId,
+      systemToken,
+      'system_user'
+    );
+
+    console.log('[WhatsApp Reconnect] Direct reconnect successful, accountId:', account.id);
+    return res.json({ available: true, account });
+  } catch (err) {
+    console.error('[WhatsApp Reconnect] Error:', err.response?.data || err.message);
+    if (err.code === 'DUPLICATE_PHONE') {
+      return res.status(409).json({ error: err.message });
+    }
+    return res.json({ available: false, reason: err.message });
+  }
+});
+
 // Re-subscribe webhook for an existing WhatsApp account (fixes missing messages after initial connect)
 router.post('/resubscribe', authenticate, async (req, res) => {
   try {
