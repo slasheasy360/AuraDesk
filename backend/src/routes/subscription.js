@@ -18,6 +18,16 @@ import {
 
 const router = Router();
 
+// Team members cannot manage subscriptions — only the workspace owner can.
+// Returns false and sends 403 if the caller is a member; returns true otherwise.
+function rejectIfMember(req, res) {
+  if (req.user?.inviterUserId) {
+    res.status(403).json({ error: 'Plan management is only available to the workspace owner.' });
+    return false;
+  }
+  return true;
+}
+
 // ─────────────────────────────────────────────────────────────────
 // Stripe key validation — runs once on import.
 //
@@ -176,6 +186,7 @@ router.get('/status', authenticate, async (req, res) => {
 // In production we route through Stripe Checkout instead so a card is on file.
 // ────────────────────────────────────────────────────────────────────
 router.post('/start-trial', authenticate, async (req, res) => {
+  if (!rejectIfMember(req, res)) return;
   const user = await prisma.user.findUnique({ where: { id: req.user.id } });
   if (!user) return res.status(404).json({ error: 'User not found' });
 
@@ -224,6 +235,7 @@ router.post('/start-trial', authenticate, async (req, res) => {
 // Always collects a payment method up-front so the trial converts cleanly.
 // ────────────────────────────────────────────────────────────────────
 router.post('/create-checkout', authenticate, async (req, res) => {
+  if (!rejectIfMember(req, res)) return;
   if (!stripe) return res.status(501).json({ error: 'Stripe not configured' });
 
   // The trial flag MUST be a real boolean from the frontend. We coerce here so
@@ -404,6 +416,7 @@ router.post('/sync-session', authenticate, async (req, res) => {
 // Body:  { plan: 'starter'|'pro'|'elite', cycle: 'monthly'|'yearly' }
 // ────────────────────────────────────────────────────────────────────
 router.post('/upgrade-plan', authenticate, async (req, res) => {
+  if (!rejectIfMember(req, res)) return;
   if (!stripe) return res.status(501).json({ error: 'Stripe not configured' });
 
   const { plan: targetPlan, cycle: targetCycle = 'monthly' } = req.body;
@@ -560,6 +573,7 @@ router.post('/upgrade-plan', authenticate, async (req, res) => {
 // Customer keeps full access until currentPeriodEnd.
 // ────────────────────────────────────────────────────────────────────
 router.post('/cancel', authenticate, async (req, res) => {
+  if (!rejectIfMember(req, res)) return;
   if (!stripe) return res.status(501).json({ error: 'Stripe not configured' });
 
   try {
@@ -600,6 +614,7 @@ router.post('/cancel', authenticate, async (req, res) => {
 // current period.
 // ────────────────────────────────────────────────────────────────────
 router.post('/resume', authenticate, async (req, res) => {
+  if (!rejectIfMember(req, res)) return;
   if (!stripe) return res.status(501).json({ error: 'Stripe not configured' });
 
   try {

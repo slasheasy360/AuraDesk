@@ -373,6 +373,26 @@ function fmtDate(dateLike) {
 function PlanTab({ user }) {
   const { refreshUser } = useAuth();
   const navigate = useNavigate();
+
+  // Team members cannot manage the subscription — show a read-only info card.
+  if (user?.inviterUserId) {
+    const planLabel = PLAN_LABELS[user.plan] || user.plan || '—';
+    return (
+      <div className="max-w-md">
+        <div className="bg-blue-50 border border-blue-200 rounded-xl p-6 flex flex-col gap-3">
+          <p className="text-sm font-semibold text-blue-900">Managed by workspace owner</p>
+          <p className="text-xs text-blue-700 leading-relaxed">
+            Your access is provided through the workspace owner's subscription.
+            Plan upgrades and billing changes can only be made by the workspace owner.
+          </p>
+          <div className="flex items-center gap-2 mt-1">
+            <span className="text-xs text-blue-800 font-medium">Current plan:</span>
+            <span className="px-2 py-0.5 bg-blue-100 text-blue-800 rounded-full text-xs font-bold capitalize">{planLabel}</span>
+          </div>
+        </div>
+      </div>
+    );
+  }
   // Seed status from the AuthContext user so the UI renders immediately
   // even before /subscription/status responds (or if it fails).
   const [status, setStatus] = useState(() => user ? {
