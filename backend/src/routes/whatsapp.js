@@ -6,7 +6,7 @@ import { assertCanConnectPlatform } from '../services/planGuard.js';
 import prisma from '../utils/prisma.js';
 
 const router = Router();
-const GRAPH_API = 'https://graph.facebook.com/v20.0';
+const GRAPH_API = 'https://graph.facebook.com/v21.0';
 
 // Handle WhatsApp Embedded Signup result from frontend
 router.post('/connect', authenticate, async (req, res) => {
@@ -119,8 +119,8 @@ router.post('/exchange', authenticate, async (req, res) => {
     const tokenToUse = process.env.WHATSAPP_SYSTEM_USER_TOKEN || accessToken;
     try {
       await axios.post(`${GRAPH_API}/${wabaId}/subscribed_apps`, null, {
-        headers: { Authorization: `Bearer ${tokenToUse}` },
         params: {
+          access_token: tokenToUse,
           subscribed_fields: 'messages,message_status,messaging_postbacks',
         },
       });

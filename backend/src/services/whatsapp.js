@@ -31,7 +31,29 @@ export async function handleEmbeddedSignup(userId, wabaId, phoneNumberId, userAc
     console.warn('[WhatsApp] Could not fetch phone details (non-fatal):', err.response?.data?.error?.message || err.message);
   }
 
-  // Check if this phone number is already connected to another account
+  // Clean up any existing connections for THIS USER with this phoneNumberId (re-connect flow).
+  // This allows reconnecting the same number with a new token or updated WABA without errors.
+  const myExistingWhatsapp = await prisma.whatsappAccount.findFirst({
+    where: {
+      OR: [
+        { phoneNumberId },
+        ...(phoneNumber !== phoneNumberId ? [{ phoneNumber }] : []),
+      ],
+      connectedAccount: { userId },
+    },
+    include: { connectedAccount: true },
+  });
+
+  if (myExistingWhatsapp) {
+    await prisma.whatsappAccount.delete({ where: { id: myExistingWhatsapp.id } });
+    await prisma.connectedAccount.update({
+      where: { id: myExistingWhatsapp.connectedAccountId },
+      data: { status: 'disconnected' },
+    });
+    console.log('[WhatsApp] Cleaned up stale connection for re-connect, phoneNumberId:', phoneNumberId);
+  }
+
+  // Check if this phone number is already connected to a DIFFERENT user/workspace
   const existingWhatsapp = await prisma.whatsappAccount.findFirst({
     where: {
       OR: [
