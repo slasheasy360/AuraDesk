@@ -454,8 +454,8 @@ router.post('/send', authenticate, upload.array('attachments', 10), async (req, 
               size: file.size,
               platformId: result.message_id || null,
             };
-            // Persist image files to S3 for outbound preview
-            if (file.mimetype.startsWith('image/') && file.buffer) {
+            // Persist all media to S3 so outbound previews remain available
+            if (file.buffer) {
               try { meta.s3Key = await persistOutboundAttachment(file); } catch { /* skip */ }
             }
             attachmentMeta.push(meta);
@@ -488,8 +488,8 @@ router.post('/send', authenticate, upload.array('attachments', 10), async (req, 
               size: file.size,
               platformId: result.message_id || null,
             };
-            // Persist image files to S3 for outbound preview
-            if (file.mimetype.startsWith('image/') && file.buffer) {
+            // Persist all media to S3 so outbound previews remain available
+            if (file.buffer) {
               try { meta.s3Key = await persistOutboundAttachment(file); } catch { /* skip */ }
             }
             attachmentMeta.push(meta);
@@ -668,8 +668,8 @@ router.post('/send', authenticate, upload.array('attachments', 10), async (req, 
               mimeType: file.mimetype,
               size: file.size,
             };
-            // Persist image files to S3 for outbound preview
-            if (file.mimetype.startsWith('image/') && file.buffer) {
+            // Persist all media to S3 so outbound previews remain available
+            if (file.buffer) {
               try { meta.s3Key = await persistOutboundAttachment(file); } catch { /* skip */ }
             }
             attachmentMeta.push(meta);
