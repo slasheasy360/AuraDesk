@@ -22,7 +22,7 @@ export async function sendPasswordResetEmail({ user, resetToken, expiresInMinute
   if (!user?.email) throw new Error('sendPasswordResetEmail: user.email is required');
   if (!resetToken) throw new Error('sendPasswordResetEmail: resetToken is required');
 
-  const resetUrl = `${getFrontendUrl()}/reset-password?token=${encodeURIComponent(resetToken)}`;
+  const resetUrl = `${getFrontendUrl()}/reset-password/${encodeURIComponent(resetToken)}`;
 
   const { subject, html } = passwordResetEmailTemplate({
     firstName: user.firstName || user.name?.split(' ')[0] || user.email.split('@')[0],

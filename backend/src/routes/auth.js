@@ -4,7 +4,8 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import prisma from '../utils/prisma.js';
 import { authenticate } from '../middleware/auth.js';
-import { sendMail, buildPasswordResetEmail } from '../utils/mailer.js';
+import { sendWelcomeEmail } from '../emails/senders/sendWelcomeEmail.js';
+import { sendPasswordResetEmail } from '../emails/senders/sendPasswordResetEmail.js';
 import { getOrCreateStripeCustomer } from '../utils/stripe.js';
 import { getUsageSnapshot } from '../services/planGuard.js';
 import { getPresignedUrl } from '../utils/s3.js';
@@ -26,12 +27,6 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 // (bcrypt is overkill for short-lived high-entropy tokens.)
 function hashResetToken(rawToken) {
   return crypto.createHash('sha256').update(rawToken).digest('hex');
-}
-
-function frontendBaseUrl() {
-  return (process.env.FRONTEND_URL || 'http://localhost:5173')
-    .split(',')[0]
-    .replace(/\/$/, '');
 }
 
 // Mirror of the frontend rules so the server can never be bypassed.
@@ -97,6 +92,11 @@ router.post('/register', async (req, res) => {
     } catch (e) {
       console.warn(`[auth/register] Stripe customer creation deferred for ${user.email}: ${e.message}`);
     }
+
+    // Fire welcome email non-blocking — registration must not fail if email delivery fails
+    sendWelcomeEmail(user).catch((err) => {
+      console.error('[auth/register] welcome email failed (non-blocking):', err.message);
+    });
 
     const token = jwt.sign({ userId: user.id }, process.env.JWT_SECRET, { expiresIn: '7d' });
 
@@ -248,13 +248,7 @@ router.post('/forgot-password', async (req, res) => {
         },
       });
 
-      const resetLink = `${frontendBaseUrl()}/reset-password/${rawToken}`;
-      const mail = buildPasswordResetEmail({ resetLink, userName: user.firstName || user.name });
-      const result = await sendMail({ to: user.email, ...mail });
-      if (!result.sent) {
-        // Log but DON'T leak failure details to the client.
-        console.warn(`[auth] forgot-password email NOT sent to ${user.email}: ${result.reason}`);
-      }
+      await sendPasswordResetEmail({ user, resetToken: rawToken, expiresInMinutes: 10 });
     }
 
     // Identical response regardless of email existence.

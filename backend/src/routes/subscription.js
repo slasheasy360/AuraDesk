@@ -1,6 +1,8 @@
 import { Router } from 'express';
 import prisma from '../utils/prisma.js';
 import { authenticate } from '../middleware/auth.js';
+import { sendTrialExpiryEmail } from '../emails/senders/sendTrialExpiryEmail.js';
+import { sendPaymentConfirmedEmail } from '../emails/senders/sendPaymentConfirmedEmail.js';
 import {
   getStripe,
   getOrCreateStripeCustomer,
@@ -722,8 +724,13 @@ router.post('/webhook', async (req, res) => {
           where: { stripeSubscriptionId: sub.id },
         });
         if (user) {
-          console.log(`[Stripe] Trial ending soon for user ${user.id} (${user.email})`);
-          // Hook for sending an email notification, etc.
+          const daysLeft = sub.trial_end
+            ? Math.max(1, Math.ceil((sub.trial_end * 1000 - Date.now()) / 86400000))
+            : 3;
+          console.log(`[Stripe] Trial ending soon for user ${user.id} (${user.email}), daysLeft=${daysLeft}`);
+          sendTrialExpiryEmail({ user, daysLeft }).catch((err) => {
+            console.error('[Stripe] trial_will_end email failed:', err.message);
+          });
         }
         break;
       }
@@ -792,6 +799,24 @@ router.post('/webhook', async (req, res) => {
           }
         }
         console.log(`[Stripe] invoice.payment_succeeded → user ${user.id}`);
+
+        // Send payment confirmation email non-blocking
+        try {
+          const line = invoice.lines?.data?.[0];
+          const planName = line?.description || user.plan || 'Pro';
+          const amount = invoice.amount_paid ? invoice.amount_paid / 100 : 0;
+          const currency = (invoice.currency || 'usd').toUpperCase();
+          const interval = line?.price?.recurring?.interval;
+          const billingCycle = interval === 'year' ? 'yearly' : 'monthly';
+          const nextBillingDate = line?.period?.end
+            ? new Date(line.period.end * 1000)
+            : null;
+          sendPaymentConfirmedEmail({ user, planName, amount, currency, billingCycle, nextBillingDate }).catch((err) => {
+            console.error('[Stripe] payment_confirmed email failed:', err.message);
+          });
+        } catch (err) {
+          console.error('[Stripe] payment_confirmed email setup failed:', err.message);
+        }
         break;
       }
 

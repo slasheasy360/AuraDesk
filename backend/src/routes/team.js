@@ -4,7 +4,7 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import prisma from '../utils/prisma.js';
 import { authenticate } from '../middleware/auth.js';
-import { sendMail, buildInviteEmail } from '../utils/mailer.js';
+import { sendInviteEmail } from '../emails/senders/sendInviteEmail.js';
 import { assertCanInviteTeamMember } from '../services/planGuard.js';
 
 const router = Router();
@@ -90,16 +90,24 @@ router.post('/invite', authenticate, async (req, res) => {
     const frontendUrl = (process.env.FRONTEND_URL || 'http://localhost:5173').split(',')[0].trim();
     const inviteLink = `${frontendUrl}/invite/${token}`;
 
-    // Send invite email via SMTP (nodemailer). If SMTP isn't configured, the
-    // link is still returned so the admin can copy it manually from the modal.
-    const { subject, html, text } = buildInviteEmail({
-      inviteLink,
-      companyName: me.companyName,
-      inviterName: me.name || me.firstName || me.email,
-    });
-    const mailResult = await sendMail({ to: email, subject, html, text });
+    // Send invite email via SES. If delivery fails, the invite link is still
+    // returned so the admin can copy it manually from the modal.
+    let emailSent = false;
+    let emailError = null;
+    try {
+      await sendInviteEmail({
+        to: email,
+        inviteLink,
+        companyName: me.companyName,
+        inviterName: me.name || me.firstName || me.email,
+      });
+      emailSent = true;
+    } catch (err) {
+      console.error('[team/invite] invite email failed:', err.message);
+      emailError = err.message;
+    }
 
-    res.json({ invite, inviteLink, emailSent: mailResult.sent, emailError: mailResult.sent ? null : mailResult.reason });
+    res.json({ invite, inviteLink, emailSent, emailError });
   } catch (err) {
     console.error('team/invite:', err);
     res.status(500).json({ error: 'Failed to send invite' });
