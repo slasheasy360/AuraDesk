@@ -264,9 +264,9 @@ export default function LinkAccountsSheet({ open, onClose }) {
         scope: 'whatsapp_business_messaging,business_management,whatsapp_business_management',
         extras: {
           feature: 'whatsapp_embedded_signup',
-          version: 4,
-          sessionInfoVersion: 3,
-          setup: {},
+          featureType: 'whatsapp_business_app_onboarding',
+          version: 'v4',
+          sessionInfoVersion: '3',
         },
       }
     );

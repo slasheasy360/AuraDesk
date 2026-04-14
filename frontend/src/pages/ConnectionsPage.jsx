@@ -217,41 +217,57 @@ export default function ConnectionsPage() {
           });
       }
 
-      // Listen for Embedded Signup postMessage events (FINISH / CANCEL)
+      // Listen for Embedded Signup postMessage events (FINISH / CANCEL).
+      // Origin can be www.facebook.com (FB.login dialog) OR business.facebook.com (Meta-hosted URL).
+      const VALID_ORIGINS = [
+        'https://www.facebook.com',
+        'https://business.facebook.com',
+        'https://m.facebook.com',
+        'https://web.facebook.com',
+      ];
       const sessionInfoListener = (event) => {
-        if (!event.origin.includes('facebook.com') && !event.origin.includes('fbcdn.net') && !event.origin.includes('meta.com')) return;
+        const originOk =
+          VALID_ORIGINS.includes(event.origin) ||
+          event.origin.endsWith('.facebook.com') ||
+          event.origin.endsWith('.fbcdn.net') ||
+          event.origin.endsWith('.meta.com');
+        if (!originOk) return;
+
         let data;
         try {
           data = typeof event.data === 'string' ? JSON.parse(event.data) : event.data;
         } catch {
           return;
         }
+        if (!data || typeof data !== 'object') return;
 
-        console.log('[WhatsApp] postMessage from', event.origin, ':', JSON.stringify(data).substring(0, 300));
+        console.log('[WhatsApp] postMessage ← %s | raw:', event.origin, data);
 
-        if (data.type === 'WA_EMBEDDED_SIGNUP') {
-          if (data.event === 'FINISH' || data.event === 'FINISH_ONLY_WABA') {
-            const sessionData = data.data || {};
-            const authResp = data.authResponse || {};
+        if (data.type !== 'WA_EMBEDDED_SIGNUP') return;
 
-            const code = authResp.code;
-            const waba_id = sessionData.waba_id || data.waba_id;
-            const phone_number_id = sessionData.phone_number_id || data.phone_number_id;
+        if (data.event === 'FINISH' || data.event === 'FINISH_ONLY_WABA') {
+          // sessionInfoVersion 3 may place fields at different positions — extract defensively.
+          const sessionData = data.data || {};
+          const authResp = data.authResponse || {};
+          const code = authResp.code || sessionData.code || data.code || null;
+          const waba_id = sessionData.waba_id || data.waba_id || authResp.waba_id || null;
+          const phone_number_id = sessionData.phone_number_id || data.phone_number_id || authResp.phone_number_id || null;
+          const business_id = sessionData.business_id || data.business_id || null;
 
-            window.__WA_EMBEDDED_DATA__ = { code, waba_id, phone_number_id };
-            console.log('[WhatsApp] FINISH event captured — code:', code ? 'present' : 'absent', 'waba_id:', waba_id, 'phone_number_id:', phone_number_id);
+          window.__WA_EMBEDDED_DATA__ = { code, waba_id, phone_number_id, business_id };
+          console.log('[WhatsApp] ✓ FINISH captured — code:', code ? code.substring(0, 12) + '...' : 'absent', '| waba_id:', waba_id, '| phone_number_id:', phone_number_id, '| business_id:', business_id);
 
-            // ES v4: code comes from FB.login callback, not postMessage. Only call here if code present.
-            if (code) {
-              doExchange(code, waba_id, phone_number_id, 'postMessage-FINISH');
-            }
-          } else if (data.event === 'CANCEL') {
-            console.log('[WhatsApp] Embedded Signup cancelled by user');
-            setPlatformError({ platformId: 'whatsapp', message: 'WhatsApp signup was cancelled.' });
-            setConnectingPlatform(null);
+          if (code) {
+            doExchange(code, waba_id, phone_number_id, 'postMessage-FINISH');
           } else {
-            console.log('[WhatsApp] postMessage event:', data.event);
+            console.log('[WhatsApp] No code in postMessage — waiting for FB.login callback to provide it');
           }
+        } else if (data.event === 'CANCEL') {
+          console.log('[WhatsApp] Embedded Signup cancelled by user at step:', data.data?.current_step || 'unknown');
+          setPlatformError({ platformId: 'whatsapp', message: 'WhatsApp signup was cancelled.' });
+          setConnectingPlatform(null);
+        } else {
+          console.log('[WhatsApp] postMessage event (non-terminal):', data.event, data.data);
         }
       };
       window.addEventListener('message', sessionInfoListener);
@@ -310,11 +326,14 @@ export default function ConnectionsPage() {
           response_type: 'code',
           override_default_response_type: true,
           scope: 'whatsapp_business_messaging,business_management,whatsapp_business_management',
+          // Match the exact extras format that Meta's hosted URL uses — this unlocks the
+          // full 5-step Embedded Signup flow with Coexistence/QR scan and existing-WABA
+          // selection. Keys and value types must match exactly (strings, not numbers).
           extras: {
             feature: 'whatsapp_embedded_signup',
-            version: 4,
-            sessionInfoVersion: 3,
-            setup: {},
+            featureType: 'whatsapp_business_app_onboarding',
+            version: 'v4',
+            sessionInfoVersion: '3',
           },
         }
       );
