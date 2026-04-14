@@ -1625,14 +1625,16 @@ export default function InboxPage() {
 
       {/* Main content */}
       <div className="flex-1 flex flex-col min-w-0">
-        {/* Toolbar row */}
+        {/* Toolbar row — hidden when there is nothing to show */}
         <div className="flex items-center gap-3 px-4 sm:px-6 py-2.5 border-b border-gray-100 min-h-[48px]">
+          {filteredConversations.length > 0 && (
           <input
             type="checkbox"
             checked={selectedMessages.size > 0 && selectedMessages.size === paginatedConversations.length}
             onChange={toggleSelectAll}
             className="w-4 h-4 rounded border-gray-300 bg-white text-[#1787FE] focus:ring-[#1787FE] focus:ring-offset-0 cursor-pointer flex-shrink-0"
           />
+          )}
 
           {selectedMessages.size > 0 ? (
             <>
@@ -1659,11 +1661,11 @@ export default function InboxPage() {
                 </button>
               )}
             </>
-          ) : (
+          ) : filteredConversations.length > 0 ? (
             <span className="text-xs text-gray-400 select-none">
               {filteredConversations.length} conversation{filteredConversations.length !== 1 ? 's' : ''}
             </span>
-          )}
+          ) : null}
         </div>
 
         {/* Message rows */}
@@ -1671,43 +1673,31 @@ export default function InboxPage() {
           {showConversationSkeleton && filteredConversations.length === 0 ? (
             <InboxListSkeleton />
           ) : filteredConversations.length === 0 && !loadingConversations ? (
-            conversations.length === 0 ? (
-              /* Truly empty inbox — no messages anywhere */
-              <div className="flex flex-col items-center justify-center h-full px-6 select-none">
-                {/* Animated waveform bars */}
-                <div className="flex items-end gap-1 mb-5" style={{ height: 48 }}>
-                  {[0.6, 1, 0.75, 1.15, 0.5].map((scale, i) => (
-                    <div
-                      key={i}
-                      className="w-3 rounded-full bg-[#1787FE]"
-                      style={{
-                        height: `${Math.round(scale * 28)}px`,
-                        animation: `inboxBarBounce 1.1s ease-in-out ${i * 0.18}s infinite alternate`,
-                      }}
-                    />
-                  ))}
-                </div>
-                <style>{`
-                  @keyframes inboxBarBounce {
-                    from { transform: scaleY(0.45); opacity: 0.55; }
-                    to   { transform: scaleY(1);    opacity: 1; }
-                  }
-                `}</style>
-                <p className="text-base font-semibold text-gray-700 mt-1">Awaiting your first message</p>
-                <p className="text-xs text-gray-400 mt-1.5 text-center leading-relaxed">
-                  Your inbox is live and listening.<br />Connect a platform to get started.
-                </p>
+            /* Empty state — same animated template regardless of reason */
+            <div className="flex flex-col items-center justify-center h-full px-6 select-none">
+              <div className="flex items-end gap-1 mb-5" style={{ height: 48 }}>
+                {[0.6, 1, 0.75, 1.15, 0.5].map((scale, i) => (
+                  <div
+                    key={i}
+                    className="w-3 rounded-full bg-[#1787FE]"
+                    style={{
+                      height: `${Math.round(scale * 28)}px`,
+                      animation: `inboxBarBounce 1.1s ease-in-out ${i * 0.18}s infinite alternate`,
+                    }}
+                  />
+                ))}
               </div>
-            ) : (
-              /* Messages exist but active filter / search returned nothing */
-              <div className="flex flex-col items-center justify-center h-full text-gray-500 px-6">
-                <MessageSquare size={40} className="mb-3 text-gray-300" />
-                <p className="text-sm font-medium text-gray-600">No conversations found</p>
-                <p className="text-xs mt-1 text-gray-400 text-center">
-                  {search ? 'Try a different search term' : 'Adjust your filters to see conversations'}
-                </p>
-              </div>
-            )
+              <style>{`
+                @keyframes inboxBarBounce {
+                  from { transform: scaleY(0.45); opacity: 0.55; }
+                  to   { transform: scaleY(1);    opacity: 1; }
+                }
+              `}</style>
+              <p className="text-base font-semibold text-gray-700 mt-1">Awaiting your first message</p>
+              <p className="text-xs text-gray-400 mt-1.5 text-center leading-relaxed">
+                Your inbox is live and listening.<br />Connect a platform to get started.
+              </p>
+            </div>
           ) : (
             paginatedConversations.map((conv, rowIdx) => {
               const lastMessage = conv.messages?.[0];
