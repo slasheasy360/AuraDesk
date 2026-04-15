@@ -795,14 +795,19 @@ async function processWhatsAppWebhook(payload, io) {
           }
 
           const direction = isOutboundFromMobile ? 'outbound' : 'inbound';
-          const contactName =
-            value.contacts?.find((c) => c.wa_id === customerPhone)?.profile?.name || customerPhone;
+          // Profile name from the webhook payload — may be absent, especially for
+          // smb_message_echoes (outbound to new contacts where we never received
+          // their profile).
+          const webhookName = value.contacts?.find((c) => c.wa_id === customerPhone)?.profile?.name || null;
           const senderLabel = isOutboundFromMobile
             ? (waAccount.businessName || 'Business')
-            : contactName;
+            : (webhookName || customerPhone);
 
-          console.log('[WhatsApp Webhook] Message direction:', direction, '| customer:', customerPhone, '| outbound from mobile:', isOutboundFromMobile);
+          console.log('[WhatsApp Webhook] Message direction:', direction, '| customer:', customerPhone, '| outbound from mobile:', isOutboundFromMobile, '| webhook name:', webhookName);
 
+          // Contact upsert: only write `name` when we actually have a real profile
+          // name from the webhook. Otherwise, fall back to the phone number on CREATE
+          // only — never overwrite a previously-saved real name with the phone.
           const contact = await prisma.contact.upsert({
             where: {
               userId_platform_platformUserId: {
@@ -811,12 +816,12 @@ async function processWhatsAppWebhook(payload, io) {
                 platformUserId: customerPhone,
               },
             },
-            update: { name: contactName },
+            update: webhookName ? { name: webhookName } : {},
             create: {
               userId: account.userId,
               platform: 'whatsapp',
               platformUserId: customerPhone,
-              name: contactName,
+              name: webhookName || customerPhone,
             },
           });
 

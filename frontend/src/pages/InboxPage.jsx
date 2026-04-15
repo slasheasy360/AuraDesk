@@ -1737,6 +1737,14 @@ export default function InboxPage() {
                     <Star size={16} fill={isStarred ? 'currentColor' : 'none'} />
                   </button>
 
+                  {/* Avatar (initials fallback — WhatsApp API does not expose profile pictures) */}
+                  <ContactAvatar
+                    name={getContactDisplayName(conv.contact, convPlatform)}
+                    avatarUrl={conv.contact?.avatarUrl}
+                    platform={convPlatform}
+                    size={8}
+                  />
+
                   {/* Sender name */}
                   <span className={`w-36 truncate text-sm flex-shrink-0 ${isUnread ? 'font-semibold text-gray-900' : 'text-gray-700'}`}>
                     {getContactDisplayName(conv.contact, convPlatform)}
