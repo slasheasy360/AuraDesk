@@ -8,7 +8,7 @@ import {
   Smile, X, FileText, Image as ImageIcon, Reply, ChevronDown,
   ChevronUp, Download, UploadCloud, Play, Music, File as FileIcon, AlertCircle, RefreshCw,
   Star, Inbox, Clock, Sparkles, FileEdit, Trash2, ChevronLeft, ChevronRight,
-  RotateCw, Archive, MoreHorizontal, MoreVertical, Bot, Link2, Users, Undo2, Menu, Camera, Mic, Pencil,
+  RotateCw, Archive, MoreHorizontal, MoreVertical, Bot, Link2, Users, Undo2, Menu, Camera, Mic, Pencil, SlidersHorizontal,
 } from 'lucide-react';
 import PlatformBadge, { PlatformIcon } from '../components/PlatformBadge.jsx';
 import { useLinkAccounts } from '../context/LinkAccountsContext.jsx';
@@ -112,6 +112,7 @@ export default function InboxPage() {
   // ── Mobile UI state ──
   const { openLinkAccounts, onAccountsChanged } = useLinkAccounts();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [showMobileFilter, setShowMobileFilter] = useState(false);
   const draftTimerRef = useRef(null);
   const lastSavedDraftRef = useRef('');
 
@@ -1619,6 +1620,14 @@ export default function InboxPage() {
               className="w-full pl-9 pr-3 py-2 lg:py-2.5 bg-[#0F1D33] border border-white/5 rounded-full text-sm text-white placeholder-white/40 focus:border-[#1787FE] focus:ring-1 focus:ring-[#1787FE] outline-none transition"
             />
           </div>
+          {/* Mobile: filter icon */}
+          <button
+            onClick={() => setShowMobileFilter(true)}
+            className="lg:hidden w-10 h-10 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center flex-shrink-0 transition"
+            aria-label="Filters"
+          >
+            <SlidersHorizontal size={18} />
+          </button>
           {/* Mobile: round icon-only Link button */}
           <button
             onClick={openLinkAccounts}
@@ -1637,6 +1646,44 @@ export default function InboxPage() {
           </button>
         </div>
       </div>
+
+      {/* Mobile Filter Drawer — slides in from the left */}
+      {showMobileFilter && (
+        <>
+          {/* Backdrop */}
+          <div
+            className="fixed inset-0 bg-black/60 z-40 lg:hidden"
+            onClick={() => setShowMobileFilter(false)}
+          />
+          {/* Drawer panel */}
+          <div className="fixed inset-y-0 left-0 w-72 bg-[#0B1628] z-50 lg:hidden shadow-2xl flex flex-col overflow-y-auto">
+            {/* Drawer header */}
+            <div className="flex items-center justify-between px-5 py-4 border-b border-white/10 flex-shrink-0">
+              <h2 className="text-white font-semibold text-base">Filters</h2>
+              <button
+                onClick={() => setShowMobileFilter(false)}
+                className="text-white/50 hover:text-white transition p-1"
+              >
+                <X size={20} />
+              </button>
+            </div>
+            <div className="flex-1 overflow-y-auto">
+              <FilterPanel
+                activeFilter={activeFilter}
+                setActiveFilter={(f) => { setActiveFilter(f); setShowMobileFilter(false); }}
+                filterCounts={filterCounts}
+                sourceFilters={sourceFilters}
+                toggleSourceFilter={toggleSourceFilter}
+                sourceCounts={sourceCounts}
+                availableSourceFilters={availableSourceFilters}
+                conversationId={null}
+                navigate={navigate}
+                dark
+              />
+            </div>
+          </div>
+        </>
+      )}
 
       {/* Inbox card */}
       <div className="flex flex-1 min-h-0 bg-white rounded-2xl border border-gray-200 overflow-hidden shadow-xl">
@@ -1878,8 +1925,24 @@ export default function InboxPage() {
 // FILTER PANEL COMPONENT
 // ═══════════════════════════════════════════════════════════════════
 
-const FilterPanel = memo(function FilterPanel({ activeFilter, setActiveFilter, filterCounts, sourceFilters, toggleSourceFilter, sourceCounts, availableSourceFilters, conversationId, navigate }) {
+const FilterPanel = memo(function FilterPanel({ activeFilter, setActiveFilter, filterCounts, sourceFilters, toggleSourceFilter, sourceCounts, availableSourceFilters, conversationId, navigate, dark = false }) {
   const { openLinkAccounts } = useLinkAccounts();
+
+  // Theme tokens — light (desktop sidebar) vs dark (mobile drawer)
+  const t = {
+    inactive:    dark ? 'text-white/70 hover:bg-white/10 hover:text-white' : 'text-gray-700 hover:bg-gray-100 hover:text-gray-900',
+    inactiveIcon: dark ? 'text-white/40' : 'text-gray-400',
+    inactiveCnt:  dark ? 'text-white/40' : 'text-gray-400',
+    sectionHdr:   dark ? 'text-white/40' : 'text-gray-500',
+    srcInactive:  dark ? 'text-white/70 hover:bg-white/10' : 'text-gray-700 hover:bg-gray-50 hover:text-gray-900',
+    srcChecked:   dark ? 'bg-white/10 text-white' : 'bg-blue-50 text-gray-900',
+    srcCntChk:    dark ? 'bg-white/20 text-white' : 'bg-blue-100 text-blue-700',
+    srcCntUncChk: dark ? 'text-white/40' : 'text-gray-400',
+    connectBtn:   dark ? 'text-white/50 hover:text-white' : 'text-gray-500 hover:text-[#1787FE]',
+    chkBorder:    dark ? 'border-white/20' : 'border-gray-300',
+    chkBg:        dark ? 'bg-white/5' : 'bg-white',
+  };
+
   return (
     <div className="flex flex-col h-full py-4">
       {/* Filter categories */}
@@ -1897,16 +1960,16 @@ const FilterPanel = memo(function FilterPanel({ activeFilter, setActiveFilter, f
               className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-sm transition ${
                 isActive
                   ? 'bg-[#1787FE] text-white shadow-lg shadow-[#1787FE]/20'
-                  : 'text-gray-700 hover:bg-gray-100 hover:text-gray-900'
+                  : t.inactive
               }`}
             >
               <div className="flex items-center gap-3">
-                <Icon size={18} className={isActive ? 'text-white' : 'text-gray-400'} />
+                <Icon size={18} className={isActive ? 'text-white' : t.inactiveIcon} />
                 <span className={isActive ? 'font-semibold' : ''}>{label}</span>
               </div>
               {count > 0 && (
                 <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${
-                  isActive ? 'bg-white/25 text-white' : 'text-gray-400'
+                  isActive ? 'bg-white/25 text-white' : t.inactiveCnt
                 }`}>
                   {count}
                 </span>
@@ -1919,34 +1982,28 @@ const FilterPanel = memo(function FilterPanel({ activeFilter, setActiveFilter, f
       {/* Source section — only connected platforms, clickable filters */}
       {availableSourceFilters.length > 0 && (
         <div className="mt-6 px-3">
-          <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider px-3 mb-2">Source</h3>
+          <h3 className={`text-xs font-semibold uppercase tracking-wider px-3 mb-2 ${t.sectionHdr}`}>Source</h3>
           <div className="space-y-0.5">
             {availableSourceFilters.map(({ key, label }) => {
               const isChecked = sourceFilters.has(key);
               const count = sourceCounts[key] || 0;
-              const dotColor = key === 'instagram' ? 'bg-pink-500' :
-                               key === 'facebook'  ? 'bg-blue-500' :
-                               key === 'whatsapp'  ? 'bg-green-500' :
-                               key === 'gmail'     ? 'bg-red-500' : 'bg-gray-500';
               return (
                 <button
                   key={key}
                   onClick={() => toggleSourceFilter(key)}
                   className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-sm transition ${
-                    isChecked
-                      ? 'bg-blue-50 text-gray-900'
-                      : 'text-gray-700 hover:bg-gray-50 hover:text-gray-900'
+                    isChecked ? t.srcChecked : t.srcInactive
                   }`}
                 >
                   <div className="flex items-center gap-3">
                     <span className={`w-4 h-4 rounded flex-shrink-0 flex items-center justify-center border ${
                       isChecked
                         ? key === 'instagram' ? 'bg-orange-500 border-orange-500' :
-                          key === 'facebook' ? 'bg-blue-500 border-blue-500' :
-                          key === 'whatsapp' ? 'bg-green-500 border-green-500' :
-                          key === 'gmail' ? 'bg-red-500 border-red-500' :
-                          key === 'linkedin' ? 'bg-sky-500 border-sky-500' : 'bg-gray-500 border-gray-500'
-                        : 'bg-white border-gray-300'
+                          key === 'facebook'  ? 'bg-blue-500  border-blue-500'  :
+                          key === 'whatsapp'  ? 'bg-green-500 border-green-500' :
+                          key === 'gmail'     ? 'bg-red-500   border-red-500'   :
+                          key === 'linkedin'  ? 'bg-sky-500   border-sky-500'   : 'bg-gray-500 border-gray-500'
+                        : `${t.chkBg} ${t.chkBorder}`
                     }`}>
                       {isChecked && <span className="text-white text-[10px] leading-none">✓</span>}
                     </span>
@@ -1954,7 +2011,7 @@ const FilterPanel = memo(function FilterPanel({ activeFilter, setActiveFilter, f
                   </div>
                   {count > 0 && (
                     <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${
-                      isChecked ? 'bg-blue-100 text-blue-700' : 'text-gray-400'
+                      isChecked ? t.srcCntChk : t.srcCntUncChk
                     }`}>
                       {count}
                     </span>
@@ -1971,7 +2028,7 @@ const FilterPanel = memo(function FilterPanel({ activeFilter, setActiveFilter, f
         <button
           type="button"
           onClick={openLinkAccounts}
-          className="flex items-center gap-2 text-sm text-gray-500 hover:text-[#1787FE] transition"
+          className={`flex items-center gap-2 text-sm transition ${t.connectBtn}`}
         >
           <span className="text-lg leading-none">+</span>
           Connect account
