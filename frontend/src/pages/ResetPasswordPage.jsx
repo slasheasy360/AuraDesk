@@ -17,6 +17,7 @@ export default function ResetPasswordPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState(false);
+  const [mismatchVisible, setMismatchVisible] = useState(false);
 
   const evaluation = useMemo(() => evaluatePassword(password), [password]);
   const passwordsMatch = confirm.length > 0 && password === confirm;
@@ -29,12 +30,23 @@ export default function ResetPasswordPage() {
     return () => clearTimeout(t);
   }, [success, navigate]);
 
-  // Auto-clear error after 5 s
+  // Auto-clear banner error after 5 s
   useEffect(() => {
     if (!error) return;
     const t = setTimeout(() => setError(''), 5000);
     return () => clearTimeout(t);
   }, [error]);
+
+  // Show inline mismatch hint and auto-hide after 5 s
+  useEffect(() => {
+    if (confirm.length === 0) { setMismatchVisible(false); return; }
+    if (!passwordsMatch) {
+      setMismatchVisible(true);
+      const t = setTimeout(() => setMismatchVisible(false), 5000);
+      return () => clearTimeout(t);
+    }
+    setMismatchVisible(false);
+  }, [confirm, passwordsMatch]);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -129,7 +141,7 @@ export default function ResetPasswordPage() {
                 onChange={(e) => setConfirm(e.target.value)}
                 required
               />
-              {confirm.length > 0 && !passwordsMatch && (
+              {mismatchVisible && (
                 <p className="mt-1.5 text-[12px] text-red-400 lg:text-red-600">
                   Passwords do not match.
                 </p>

@@ -13,20 +13,31 @@ export default function RegisterPage() {
   const [confirmPassword, setConfirmPassword] = useState('');
   const [showPw, setShowPw] = useState(false);
   const [showCPw, setShowCPw] = useState(false);
-  const [pwTouched, setPwTouched] = useState(false);
   const [error, setError] = useState('');
+  const [mismatchVisible, setMismatchVisible] = useState(false);
   const [loading, setLoading] = useState(false);
 
-  // Auto-clear error after 5 s
+  const evaluation = useMemo(() => evaluatePassword(password), [password]);
+  const passwordsMatch = confirmPassword.length > 0 && password === confirmPassword;
+  const canSubmit = evaluation.allValid && passwordsMatch && !loading;
+
+  // Auto-clear banner error after 5 s
   useEffect(() => {
     if (!error) return;
     const t = setTimeout(() => setError(''), 5000);
     return () => clearTimeout(t);
   }, [error]);
 
-  const evaluation = useMemo(() => evaluatePassword(password), [password]);
-  const passwordsMatch = confirmPassword.length > 0 && password === confirmPassword;
-  const canSubmit = evaluation.allValid && passwordsMatch && !loading;
+  // Show inline mismatch hint and auto-hide it after 5 s
+  useEffect(() => {
+    if (confirmPassword.length === 0) { setMismatchVisible(false); return; }
+    if (!passwordsMatch) {
+      setMismatchVisible(true);
+      const t = setTimeout(() => setMismatchVisible(false), 5000);
+      return () => clearTimeout(t);
+    }
+    setMismatchVisible(false);
+  }, [confirmPassword, passwordsMatch]);
   const { register } = useAuth();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -46,7 +57,6 @@ export default function RegisterPage() {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    setPwTouched(true);
     setError('');
 
     if (!evaluation.allValid) {
@@ -136,12 +146,12 @@ export default function RegisterPage() {
             show={showPw}
             onToggle={() => setShowPw((s) => !s)}
             value={password}
-            onChange={(e) => { setPassword(e.target.value); setPwTouched(true); }}
+            onChange={(e) => setPassword(e.target.value)}
             placeholder="Min. 8 characters"
             autoComplete="new-password"
             required
           />
-          {pwTouched && <PasswordStrengthChecker evaluation={evaluation} dark />}
+          <PasswordStrengthChecker evaluation={evaluation} dark />
         </div>
         <div>
           <AuthInput
@@ -155,7 +165,7 @@ export default function RegisterPage() {
             autoComplete="new-password"
             required
           />
-          {pwTouched && confirmPassword.length > 0 && !passwordsMatch && (
+          {mismatchVisible && (
             <p className="mt-1.5 text-[12px] text-red-400 lg:text-red-600">
               Passwords do not match.
             </p>
