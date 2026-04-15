@@ -467,4 +467,67 @@ router.post('/resubscribe', authenticate, async (req, res) => {
   }
 });
 
+// GET /auth/whatsapp/status — diagnostic: webhook subscription + recent events
+router.get('/status', authenticate, async (req, res) => {
+  try {
+    const waAccount = await prisma.whatsappAccount.findFirst({
+      where: { connectedAccount: { userId: req.user.id, status: 'active' } },
+      include: { connectedAccount: true },
+    });
+
+    if (!waAccount) {
+      return res.json({ connected: false });
+    }
+
+    // Recent webhook events received for this WABA
+    const recentEvents = await prisma.webhookEventLog.findMany({
+      where: { platform: 'whatsapp' },
+      orderBy: { receivedAt: 'desc' },
+      take: 5,
+      select: { id: true, receivedAt: true, payload: true },
+    });
+
+    // Filter to only events for this WABA
+    const wabaEvents = recentEvents.filter((e) => {
+      try {
+        const p = e.payload;
+        return (p?.entry || []).some((en) => en.id === waAccount.wabaId);
+      } catch { return false; }
+    });
+
+    // Check WABA subscription status via Meta API
+    let subscriptionStatus = null;
+    const systemToken = process.env.WHATSAPP_SYSTEM_USER_TOKEN;
+    if (systemToken) {
+      try {
+        const subRes = await axios.get(`${GRAPH_API}/${waAccount.wabaId}/subscribed_apps`, {
+          params: { access_token: systemToken },
+        });
+        subscriptionStatus = subRes.data;
+      } catch (err) {
+        subscriptionStatus = { error: err.response?.data?.error?.message || err.message };
+      }
+    }
+
+    res.json({
+      connected: true,
+      account: {
+        phoneNumberId: waAccount.phoneNumberId,
+        wabaId: waAccount.wabaId,
+        phoneNumber: waAccount.phoneNumber,
+        businessName: waAccount.businessName,
+        connectedAt: waAccount.connectedAccount.createdAt,
+      },
+      webhookUrl: `${process.env.APP_URL}/webhooks/meta`,
+      verifyToken: process.env.META_WEBHOOK_VERIFY_TOKEN,
+      recentEventsCount: wabaEvents.length,
+      lastEventAt: wabaEvents[0]?.receivedAt || null,
+      subscriptionStatus,
+    });
+  } catch (err) {
+    console.error('WhatsApp status error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 export default router;

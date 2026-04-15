@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import api from '../services/api.js';
 import { PlatformIcon } from '../components/PlatformBadge.jsx';
-import { Link2, CheckCircle, Trash2, Loader2, AlertCircle } from 'lucide-react';
+import { Link2, CheckCircle, Trash2, Loader2, AlertCircle, RefreshCw, Wifi, WifiOff } from 'lucide-react';
 
 const platforms = [
   {
@@ -54,6 +54,9 @@ export default function ConnectionsPage() {
   const [connectingPlatform, setConnectingPlatform] = useState(null);
   const [platformError, setPlatformError] = useState(null); // { platformId, message }
   const [disconnecting, setDisconnecting] = useState(null); // accountId being disconnected
+  const [waStatus, setWaStatus] = useState(null); // WhatsApp webhook status
+  const [waStatusLoading, setWaStatusLoading] = useState(false);
+  const [resubscribing, setResubscribing] = useState(false);
 
   // Auto-dismiss per-platform error after 5s
   useEffect(() => {
@@ -94,6 +97,37 @@ export default function ConnectionsPage() {
       setLoading(false);
     }
   }, []);
+
+  const fetchWaStatus = useCallback(async () => {
+    setWaStatusLoading(true);
+    try {
+      const res = await api.get('/auth/whatsapp/status');
+      setWaStatus(res.data);
+    } catch (err) {
+      console.error('Failed to fetch WhatsApp status:', err);
+    } finally {
+      setWaStatusLoading(false);
+    }
+  }, []);
+
+  // Auto-fetch WhatsApp status when accounts load and WhatsApp is connected
+  useEffect(() => {
+    if (!loading && accounts.some((a) => a.platform === 'whatsapp' && a.status === 'active')) {
+      fetchWaStatus();
+    }
+  }, [loading, accounts, fetchWaStatus]);
+
+  const handleWaResubscribe = useCallback(async () => {
+    setResubscribing(true);
+    try {
+      await api.post('/auth/whatsapp/resubscribe');
+      await fetchWaStatus();
+    } catch (err) {
+      console.error('Resubscribe failed:', err);
+    } finally {
+      setResubscribing(false);
+    }
+  }, [fetchWaStatus]);
 
   const openAuthPopup = useCallback(async (platformId) => {
     const endpoint = platforms.find((p) => p.id === platformId)?.authEndpoint;
@@ -594,6 +628,88 @@ export default function ConnectionsPage() {
                     <div className="mt-3 flex items-center gap-2 text-xs text-red-600 bg-red-50 px-3 py-2 rounded-lg">
                       <AlertCircle size={14} className="flex-shrink-0" />
                       {error}
+                    </div>
+                  )}
+
+                  {/* WhatsApp webhook status panel */}
+                  {platform.id === 'whatsapp' && connected && (
+                    <div className="mt-4 border-t border-gray-100 pt-4">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-xs font-semibold text-gray-600 uppercase tracking-wide">Webhook Status</span>
+                        <button
+                          onClick={fetchWaStatus}
+                          disabled={waStatusLoading}
+                          className="text-xs text-gray-400 hover:text-gray-600 flex items-center gap-1 disabled:opacity-50"
+                        >
+                          <RefreshCw size={12} className={waStatusLoading ? 'animate-spin' : ''} />
+                          Refresh
+                        </button>
+                      </div>
+
+                      {waStatusLoading && !waStatus ? (
+                        <div className="text-xs text-gray-400">Checking webhook status...</div>
+                      ) : waStatus?.connected ? (
+                        <div className="space-y-2">
+                          {/* Receiving events indicator */}
+                          <div className="flex items-center gap-2">
+                            {waStatus.recentEventsCount > 0 ? (
+                              <>
+                                <Wifi size={14} className="text-green-500 flex-shrink-0" />
+                                <span className="text-xs text-green-700 font-medium">
+                                  Webhooks arriving — {waStatus.recentEventsCount} recent event{waStatus.recentEventsCount !== 1 ? 's' : ''}
+                                  {waStatus.lastEventAt && ` (last: ${new Date(waStatus.lastEventAt).toLocaleTimeString()})`}
+                                </span>
+                              </>
+                            ) : (
+                              <>
+                                <WifiOff size={14} className="text-amber-500 flex-shrink-0" />
+                                <span className="text-xs text-amber-700 font-medium">
+                                  No webhook events received yet — configure Meta webhook URL below
+                                </span>
+                              </>
+                            )}
+                          </div>
+
+                          {/* Subscription status */}
+                          {waStatus.subscriptionStatus && !waStatus.subscriptionStatus.error ? (
+                            <div className="text-xs text-gray-500">
+                              Subscription: <span className="text-green-600 font-medium">active</span>
+                            </div>
+                          ) : waStatus.subscriptionStatus?.error ? (
+                            <div className="text-xs text-red-500">
+                              Subscription error: {waStatus.subscriptionStatus.error}
+                            </div>
+                          ) : null}
+
+                          {/* Webhook URL config */}
+                          <div className="bg-gray-50 rounded-lg p-3 space-y-1.5">
+                            <p className="text-xs font-medium text-gray-600">Meta Developer Portal → App → Webhooks → WhatsApp:</p>
+                            <div>
+                              <span className="text-xs text-gray-500">Callback URL: </span>
+                              <code className="text-xs bg-white border border-gray-200 px-1.5 py-0.5 rounded text-gray-800 select-all">
+                                {waStatus.webhookUrl}
+                              </code>
+                            </div>
+                            <div>
+                              <span className="text-xs text-gray-500">Verify Token: </span>
+                              <code className="text-xs bg-white border border-gray-200 px-1.5 py-0.5 rounded text-gray-800 select-all">
+                                {waStatus.verifyToken}
+                              </code>
+                            </div>
+                            <p className="text-xs text-gray-400">Subscribe to: <strong>messages</strong></p>
+                          </div>
+
+                          {/* Re-subscribe button */}
+                          <button
+                            onClick={handleWaResubscribe}
+                            disabled={resubscribing}
+                            className="flex items-center gap-1.5 text-xs text-green-700 hover:text-green-800 bg-green-50 hover:bg-green-100 border border-green-200 px-3 py-1.5 rounded-lg transition disabled:opacity-50"
+                          >
+                            <RefreshCw size={12} className={resubscribing ? 'animate-spin' : ''} />
+                            {resubscribing ? 'Re-subscribing...' : 'Re-subscribe Webhook'}
+                          </button>
+                        </div>
+                      ) : null}
                     </div>
                   )}
                 </div>
