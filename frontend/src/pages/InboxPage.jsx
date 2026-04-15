@@ -639,21 +639,36 @@ export default function InboxPage() {
     setAiError(null);
     setAiSuggestion(null);
     try {
-      const res = await api.post('/api/ai/generate-reply', {
+      // 1. Generate the AI reply
+      const genRes = await api.post('/api/ai/generate-reply', {
         conversationId: activeId,
         prompt,
         platform: activeConversationRef.current?.connectedAccount?.platform,
       });
-      setAiSuggestion(res.data.reply);
+      const reply = genRes.data.reply;
+      if (!reply) throw new Error('Empty AI reply');
+      setAiSuggestion(reply);
+
+      // 2. Immediately send it to the customer via the platform API
+      const sendRes = await api.post('/api/messages/send', {
+        conversationId: activeId,
+        content: reply,
+      });
+      const realMessage = sendRes.data.message;
+      if (realMessage?.id) knownMessageIds.current.add(realMessage.id);
+      setMessages((prev) => [...prev, realMessage]);
+      messageCache.current.set(activeId, null);
+
+      // 3. Auto-dismiss the suggestion box after a brief confirmation display
+      setTimeout(() => setAiSuggestion(null), 2500);
     } catch (err) {
       const status = err.response?.status;
       const serverMsg = err.response?.data?.error;
-      // For 402/403 (plan limits) or known server messages, show them directly.
-      // For network/5xx errors, show a generic user-friendly message.
       const msg = serverMsg && status && status < 500
         ? serverMsg
         : 'Something went wrong. Please try again.';
       setAiError(msg);
+      setAiSuggestion(null);
       setTimeout(() => setAiError(null), 5000);
     } finally {
       setAiLoading(false);
@@ -2000,7 +2015,6 @@ const ChatComposer = memo(function ChatComposer({
   onAiRespond, aiLoading, aiSuggestion, aiError, onAiUse, onAiDismiss,
 }) {
   const hasContent = newMessage.trim() || attachments.length > 0;
-  const [autoSend, setAutoSend] = useState(false);
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const inputRef = useRef(null);
 
@@ -2021,15 +2035,7 @@ const ChatComposer = memo(function ChatComposer({
   }, [setNewMessage]);
 
   const handleUseSuggestion = () => {
-    if (autoSend) {
-      onAiUse(aiSuggestion);
-      // Trigger send after state update
-      setTimeout(() => {
-        document.getElementById('chat-send-btn')?.click();
-      }, 50);
-    } else {
-      onAiUse(aiSuggestion);
-    }
+    onAiUse(aiSuggestion);
   };
 
   return (
@@ -2089,27 +2095,16 @@ const ChatComposer = memo(function ChatComposer({
       )}
 
       <form onSubmit={handleSend} className="flex items-center gap-3">
-        {/* AI Respond pill + persistent Auto-send toggle */}
-        <div className="flex items-center gap-2 flex-shrink-0">
-          <button
-            type="button"
-            onClick={onAiRespond}
-            disabled={aiLoading}
-            className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-[#1787FE] bg-blue-50 hover:bg-blue-100 rounded-full transition whitespace-nowrap disabled:opacity-50"
-          >
-            <Sparkles size={14} className={aiLoading ? 'animate-pulse' : ''} />
-            AI Respond
-          </button>
-          <label className="flex items-center gap-1 text-xs text-gray-400 cursor-pointer select-none whitespace-nowrap" title="Auto-send AI reply">
-            <input
-              type="checkbox"
-              checked={autoSend}
-              onChange={e => setAutoSend(e.target.checked)}
-              className="w-3 h-3 accent-[#1787FE]"
-            />
-            Auto
-          </label>
-        </div>
+        {/* AI Respond — generates and sends the reply in one click */}
+        <button
+          type="button"
+          onClick={onAiRespond}
+          disabled={aiLoading}
+          className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-[#1787FE] bg-blue-50 hover:bg-blue-100 rounded-full transition whitespace-nowrap disabled:opacity-50 flex-shrink-0"
+        >
+          <Sparkles size={14} className={aiLoading ? 'animate-pulse' : ''} />
+          AI Respond
+        </button>
 
         {/* Input */}
         <div className="flex-1 relative">
