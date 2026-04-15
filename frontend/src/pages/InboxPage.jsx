@@ -630,10 +630,19 @@ export default function InboxPage() {
   const handleAiRespond = useCallback(async () => {
     const activeId = conversationIdRef.current;
     if (!activeId || aiLoading) return;
-    // Find the last inbound message to use as the prompt
+
+    // Prefer the last inbound (customer) message; fall back to the last message
+    // of any direction so the AI can still generate a reply even when the
+    // business initiated the conversation. Also accept any text already typed.
     const lastInbound = [...messages].reverse().find(m => m.direction === 'inbound');
-    const prompt = lastInbound?.content || newMessage.trim();
-    if (!prompt) return;
+    const lastAny = messages.length > 0 ? messages[messages.length - 1] : null;
+    const prompt = lastInbound?.content || newMessage.trim() || lastAny?.content;
+
+    if (!prompt) {
+      setAiError('No message to reply to yet.');
+      setTimeout(() => setAiError(null), 4000);
+      return;
+    }
 
     setAiLoading(true);
     setAiError(null);
