@@ -53,10 +53,14 @@ router.get('/', authenticate, async (req, res) => {
       eligibleAccounts = accounts.filter((a) => pidSet.has(a.id));
     }
 
-    // Build per-account filter: conversation must have lastMessageAt >= account.createdAt
+    // Build per-account filter: conversation must have lastMessageAt >= account.createdAt.
+    // Allow 60s before createdAt to handle clock skew between Meta's servers and ours —
+    // a message whose sentAt is 30s before our server recorded createdAt can legitimately
+    // belong to this account window.
+    const GRACE_MS = 60 * 1000;
     const accountFilter = eligibleAccounts.map((acc) => ({
       connectedAccountId: acc.id,
-      lastMessageAt: { gte: acc.createdAt },
+      lastMessageAt: { gte: new Date(new Date(acc.createdAt).getTime() - GRACE_MS) },
     }));
 
     if (accountFilter.length === 0) {
@@ -100,14 +104,13 @@ router.get('/', authenticate, async (req, res) => {
       orderBy: { lastMessageAt: 'desc' },
     });
 
-    // Secondary filter: the conversation-level lastMessageAt is set to server
-    // time at sync, so old conversations can slip through. Verify that the
-    // latest message's actual sentAt is >= the account connection time.
+    // Secondary filter: verify the latest message's actual sentAt falls within the
+    // account window (with the same 60s grace period used in the DB query above).
     const postConnectionConversations = conversations.filter((c) => {
       const connectedAt = c.connectedAccount?.createdAt;
       const latestMsgSentAt = c.messages?.[0]?.sentAt;
       if (!connectedAt || !latestMsgSentAt) return false;
-      return new Date(latestMsgSentAt) >= new Date(connectedAt);
+      return new Date(latestMsgSentAt) >= new Date(new Date(connectedAt).getTime() - GRACE_MS);
     });
 
     // Add hasDraft flag for frontend convenience

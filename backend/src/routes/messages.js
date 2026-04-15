@@ -229,11 +229,12 @@ router.get('/:conversationId', authenticate, async (req, res) => {
     }
 
     // Only return messages sent after the platform was connected.
-    // This prevents historical pre-connection messages from appearing.
+    // Allow 60s before createdAt to handle clock skew between Meta's servers and ours.
     const connectedAt = conversation.connectedAccount?.createdAt;
     const msgWhere = { conversationId: conversation.id };
     if (connectedAt) {
-      msgWhere.sentAt = { gte: connectedAt };
+      const GRACE_MS = 60 * 1000;
+      msgWhere.sentAt = { gte: new Date(new Date(connectedAt).getTime() - GRACE_MS) };
     }
 
     const messages = await prisma.message.findMany({

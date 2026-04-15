@@ -158,6 +158,20 @@ export default function ConnectionsPage() {
       console.log('Meta App ID (VITE_META_APP_ID):', import.meta.env.VITE_META_APP_ID || '⚠️ NOT SET');
       console.groupEnd();
 
+      // Step 0: Try connect-env — uses server env vars (WHATSAPP_WABA_ID + WHATSAPP_PHONE_NUMBER_ID +
+      // WHATSAPP_SYSTEM_USER_TOKEN). Fastest path — no OAuth or popup needed.
+      console.log('[WhatsApp] Step 0 — trying connect-env (server env vars)...');
+      try {
+        const envRes = await api.post('/auth/whatsapp/connect-env');
+        console.log('%c[WhatsApp] ✓ connect-env succeeded — no Embedded Signup needed', 'color:#25D366;font-weight:bold', envRes.data);
+        await fetchAccounts();
+        setConnectingPlatform(null);
+        return;
+      } catch (err) {
+        const msg = err.response?.data?.error || err.message;
+        console.warn('[WhatsApp] connect-env not available:', msg, '→ falling back to reconnect-direct');
+      }
+
       // Step 1: Try silent direct reconnect using system token + stored WABA.
       console.log('[WhatsApp] Step 1 — attempting direct reconnect (system token + stored WABA)...');
       try {
