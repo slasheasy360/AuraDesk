@@ -1598,14 +1598,15 @@ export default function InboxPage() {
       {/* Page header */}
       <div className="flex items-center justify-between gap-2 lg:gap-3 flex-shrink-0">
         <div className="flex items-center gap-2 min-w-0">
-          {/* Hamburger — mobile only — opens filter drawer */}
+          {/* Hamburger — mobile only — toggles filter drawer */}
           <button
             type="button"
-            onClick={() => setShowMobileFilter(true)}
-            className="lg:hidden text-white p-1.5 flex-shrink-0"
-            aria-label="Open filters"
+            onClick={() => setShowMobileFilter((v) => !v)}
+            className="lg:hidden text-white p-1.5 flex-shrink-0 transition-transform duration-300"
+            aria-label="Toggle filters"
+            style={{ transform: showMobileFilter ? 'rotate(90deg)' : 'rotate(0deg)' }}
           >
-            <Menu size={22} />
+            {showMobileFilter ? <X size={22} /> : <Menu size={22} />}
           </button>
           <h1 className="text-xl sm:text-2xl lg:text-3xl font-bold text-white truncate">Smart Inbox</h1>
         </div>
@@ -1640,42 +1641,40 @@ export default function InboxPage() {
       </div>
 
       {/* Mobile Filter Drawer — slides in from the left */}
-      {showMobileFilter && (
-        <>
-          {/* Backdrop */}
-          <div
-            className="fixed inset-0 bg-black/60 z-40 lg:hidden"
+      {/* Backdrop */}
+      <div
+        className={`fixed inset-0 bg-black/60 z-40 lg:hidden transition-opacity duration-300 ${showMobileFilter ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'}`}
+        onClick={() => setShowMobileFilter(false)}
+      />
+      {/* Drawer panel */}
+      <div
+        className={`fixed inset-y-0 left-0 w-72 bg-[#0B1628] z-50 lg:hidden shadow-2xl flex flex-col overflow-hidden transition-transform duration-300 ease-in-out ${showMobileFilter ? 'translate-x-0' : '-translate-x-full'}`}
+      >
+        {/* Drawer header */}
+        <div className="flex items-center justify-between px-5 py-4 border-b border-white/10 flex-shrink-0">
+          <h2 className="text-white font-semibold text-base">Filters</h2>
+          <button
             onClick={() => setShowMobileFilter(false)}
+            className="text-white/50 hover:text-white transition p-1"
+          >
+            <X size={20} />
+          </button>
+        </div>
+        <div className="flex-1 overflow-y-auto">
+          <FilterPanel
+            activeFilter={activeFilter}
+            setActiveFilter={(f) => { setActiveFilter(f); setShowMobileFilter(false); }}
+            filterCounts={filterCounts}
+            sourceFilters={sourceFilters}
+            toggleSourceFilter={toggleSourceFilter}
+            sourceCounts={sourceCounts}
+            availableSourceFilters={availableSourceFilters}
+            conversationId={null}
+            navigate={navigate}
+            dark
           />
-          {/* Drawer panel */}
-          <div className="fixed inset-y-0 left-0 w-72 bg-[#0B1628] z-50 lg:hidden shadow-2xl flex flex-col overflow-y-auto">
-            {/* Drawer header */}
-            <div className="flex items-center justify-between px-5 py-4 border-b border-white/10 flex-shrink-0">
-              <h2 className="text-white font-semibold text-base">Filters</h2>
-              <button
-                onClick={() => setShowMobileFilter(false)}
-                className="text-white/50 hover:text-white transition p-1"
-              >
-                <X size={20} />
-              </button>
-            </div>
-            <div className="flex-1 overflow-y-auto">
-              <FilterPanel
-                activeFilter={activeFilter}
-                setActiveFilter={(f) => { setActiveFilter(f); setShowMobileFilter(false); }}
-                filterCounts={filterCounts}
-                sourceFilters={sourceFilters}
-                toggleSourceFilter={toggleSourceFilter}
-                sourceCounts={sourceCounts}
-                availableSourceFilters={availableSourceFilters}
-                conversationId={null}
-                navigate={navigate}
-                dark
-              />
-            </div>
-          </div>
-        </>
-      )}
+        </div>
+      </div>
 
       {/* Inbox card */}
       <div className="flex flex-1 min-h-0 bg-white rounded-2xl border border-gray-200 overflow-hidden shadow-xl">
