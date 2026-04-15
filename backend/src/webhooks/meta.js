@@ -741,12 +741,18 @@ async function processWhatsAppWebhook(payload, io) {
           // ── Detect outbound messages sent from the business's own mobile app ──
           // Two signals:
           // 1. The change arrived on the 'smb_message_echoes' field — always outbound.
-          // 2. msg.from digits match the registered business phone number.
-          // Strip all non-digits for comparison — waAccount.phoneNumber may have spaces/+/-
+          // 2. msg.from digits match the registered business phone number — with a
+          //    tolerant match because waAccount.phoneNumber may be stored as
+          //    "9580341946" (no country code) while the webhook sends "919580341946".
+          //    Use endsWith in both directions so local and E.164 formats both match.
           const businessPhoneDigits = (waAccount.phoneNumber || '').replace(/\D/g, '');
           const senderPhoneDigits = (msg.from || '').replace(/\D/g, '');
-          const isOutboundFromMobile = isEchoField ||
-            (businessPhoneDigits.length > 0 && senderPhoneDigits === businessPhoneDigits);
+          const phoneMatches = businessPhoneDigits.length >= 7 && senderPhoneDigits.length >= 7 && (
+            businessPhoneDigits === senderPhoneDigits ||
+            businessPhoneDigits.endsWith(senderPhoneDigits) ||
+            senderPhoneDigits.endsWith(businessPhoneDigits)
+          );
+          const isOutboundFromMobile = isEchoField || phoneMatches;
 
           // customerPhone = the phone number of the OTHER party (not the business).
           // For outbound mobile replies the recipient field varies by payload type:
