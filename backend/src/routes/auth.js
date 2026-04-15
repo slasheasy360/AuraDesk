@@ -9,6 +9,7 @@ import { sendPasswordResetEmail } from '../emails/senders/sendPasswordResetEmail
 import { getOrCreateStripeCustomer } from '../utils/stripe.js';
 import { getUsageSnapshot } from '../services/planGuard.js';
 import { getPresignedUrl } from '../utils/s3.js';
+import { validatePassword } from '../utils/passwordValidator.js';
 
 // If companyLogo is an S3 key (not already a URL), resolve it to a fresh presigned URL.
 async function resolveLogoUrl(companyLogo) {
@@ -29,27 +30,8 @@ function hashResetToken(rawToken) {
   return crypto.createHash('sha256').update(rawToken).digest('hex');
 }
 
-// Mirror of the frontend rules so the server can never be bypassed.
-// Keep these in sync with frontend/src/pages/ResetPasswordPage.jsx.
-function validatePasswordRules(pw) {
-  if (typeof pw !== 'string') return 'Password is required';
-  if (pw.length < 8) return 'Password must be at least 8 characters';
-  if (!/[A-Z]/.test(pw)) return 'Password must include an uppercase letter';
-  if (!/[a-z]/.test(pw)) return 'Password must include a lowercase letter';
-  if (!/[0-9]/.test(pw)) return 'Password must include a number';
-  if (!/[^A-Za-z0-9]/.test(pw)) return 'Password must include a special character';
-  // No three+ ascending sequential digits anywhere (e.g. 123, 456, 789)
-  for (let i = 0; i <= pw.length - 3; i++) {
-    const a = pw.charCodeAt(i);
-    const b = pw.charCodeAt(i + 1);
-    const c = pw.charCodeAt(i + 2);
-    const isDigit = (code) => code >= 48 && code <= 57;
-    if (isDigit(a) && isDigit(b) && isDigit(c) && b === a + 1 && c === b + 1) {
-      return 'Password must not contain sequential numbers';
-    }
-  }
-  return null;
-}
+// validatePassword is imported from ../utils/passwordValidator.js
+// (centralized — shared with profile.js and mirrored on the frontend)
 
 // Register
 router.post('/register', async (req, res) => {
@@ -58,6 +40,9 @@ router.post('/register', async (req, res) => {
     if (!email || !name || !password) {
       return res.status(400).json({ error: 'Email, name, and password are required' });
     }
+
+    const pwError = validatePassword(password);
+    if (pwError) return res.status(400).json({ error: pwError });
 
     const existing = await prisma.user.findUnique({ where: { email } });
     if (existing) {
@@ -285,7 +270,7 @@ router.post('/reset-password', async (req, res) => {
       return res.status(400).json({ error: 'Reset token is required' });
     }
 
-    const ruleError = validatePasswordRules(password);
+    const ruleError = validatePassword(password);
     if (ruleError) {
       return res.status(400).json({ error: ruleError });
     }

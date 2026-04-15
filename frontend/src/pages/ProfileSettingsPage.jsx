@@ -1,10 +1,12 @@
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState, useRef, useMemo } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext.jsx';
 import { useLinkAccounts } from '../context/LinkAccountsContext.jsx';
 import api from '../services/api.js';
 import { redirectToStripeCheckout } from '../services/stripe.js';
-import { UserPlus, X, Copy, Check, Trash2, Loader2, Zap, Upload } from 'lucide-react';
+import { UserPlus, X, Copy, Check, Trash2, Loader2, Zap, Upload, Eye, EyeOff } from 'lucide-react';
+import PasswordStrengthChecker from '../components/PasswordStrengthChecker.jsx';
+import { evaluatePassword } from '../utils/passwordValidation.js';
 
 const TABS = ['Personal', 'Company', 'Integrations', 'Plan', 'Team'];
 
@@ -106,6 +108,12 @@ function PersonalTab({ user, refreshUser, showSuccess, showError }) {
   const [pwForm, setPwForm] = useState({ currentPassword: '', newPassword: '' });
   const [pwOpen, setPwOpen] = useState(false);
   const [pwSaving, setPwSaving] = useState(false);
+  const [showCurPw, setShowCurPw] = useState(false);
+  const [showNewPw, setShowNewPw] = useState(false);
+  const [pwTouched, setPwTouched] = useState(false);
+
+  const pwEvaluation = useMemo(() => evaluatePassword(pwForm.newPassword), [pwForm.newPassword]);
+  const canSavePw = pwForm.currentPassword.length > 0 && pwEvaluation.allValid && !pwSaving;
 
   const save = async () => {
     setSaving(true);
@@ -150,16 +158,61 @@ function PersonalTab({ user, refreshUser, showSuccess, showError }) {
         </Field>
         <div>
           <button
-            onClick={() => setPwOpen(!pwOpen)}
+            onClick={() => { setPwOpen(!pwOpen); setPwTouched(false); }}
             className="text-xs font-semibold text-gray-600 tracking-wide uppercase hover:text-primary-600"
           >
             Password ✎
           </button>
           {pwOpen && (
             <div className="mt-3 space-y-3 p-4 bg-gray-50 rounded-lg">
-              <input type="password" placeholder="Current password" className="input" value={pwForm.currentPassword} onChange={(e) => setPwForm({ ...pwForm, currentPassword: e.target.value })} />
-              <input type="password" placeholder="New password (min 6)" className="input" value={pwForm.newPassword} onChange={(e) => setPwForm({ ...pwForm, newPassword: e.target.value })} />
-              <button disabled={pwSaving} onClick={savePw} className="px-4 py-2 bg-primary-600 text-white text-sm rounded-lg disabled:opacity-50">
+              {/* Current password */}
+              <div className="relative">
+                <input
+                  type={showCurPw ? 'text' : 'password'}
+                  placeholder="Current password"
+                  className="input pr-10"
+                  value={pwForm.currentPassword}
+                  onChange={(e) => setPwForm({ ...pwForm, currentPassword: e.target.value })}
+                  autoComplete="current-password"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowCurPw((s) => !s)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                  tabIndex={-1}
+                  aria-label={showCurPw ? 'Hide password' : 'Show password'}
+                >
+                  {showCurPw ? <EyeOff size={15} /> : <Eye size={15} />}
+                </button>
+              </div>
+              {/* New password */}
+              <div>
+                <div className="relative">
+                  <input
+                    type={showNewPw ? 'text' : 'password'}
+                    placeholder="New password"
+                    className="input pr-10"
+                    value={pwForm.newPassword}
+                    onChange={(e) => { setPwForm({ ...pwForm, newPassword: e.target.value }); setPwTouched(true); }}
+                    autoComplete="new-password"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowNewPw((s) => !s)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                    tabIndex={-1}
+                    aria-label={showNewPw ? 'Hide password' : 'Show password'}
+                  >
+                    {showNewPw ? <EyeOff size={15} /> : <Eye size={15} />}
+                  </button>
+                </div>
+                {pwTouched && <PasswordStrengthChecker evaluation={pwEvaluation} />}
+              </div>
+              <button
+                disabled={!canSavePw}
+                onClick={savePw}
+                className="px-4 py-2 bg-primary-600 text-white text-sm rounded-lg disabled:opacity-50 disabled:cursor-not-allowed transition"
+              >
                 {pwSaving ? 'Saving…' : 'Update password'}
               </button>
             </div>

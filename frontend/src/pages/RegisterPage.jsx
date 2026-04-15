@@ -1,7 +1,9 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext.jsx';
 import AuthLayout, { AuthInput, GradientButton, GoogleButton } from '../components/AuthLayout.jsx';
+import PasswordStrengthChecker from '../components/PasswordStrengthChecker.jsx';
+import { evaluatePassword } from '../utils/passwordValidation.js';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
 
@@ -11,8 +13,13 @@ export default function RegisterPage() {
   const [confirmPassword, setConfirmPassword] = useState('');
   const [showPw, setShowPw] = useState(false);
   const [showCPw, setShowCPw] = useState(false);
+  const [pwTouched, setPwTouched] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+
+  const evaluation = useMemo(() => evaluatePassword(password), [password]);
+  const passwordsMatch = confirmPassword.length > 0 && password === confirmPassword;
+  const canSubmit = evaluation.allValid && passwordsMatch && !loading;
   const { register } = useAuth();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -32,8 +39,13 @@ export default function RegisterPage() {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    setPwTouched(true);
     setError('');
 
+    if (!evaluation.allValid) {
+      setError('Please fix the password issues highlighted below.');
+      return;
+    }
     if (password !== confirmPassword) {
       setError('Passwords do not match');
       return;
@@ -110,31 +122,40 @@ export default function RegisterPage() {
           autoComplete="email"
           required
         />
-        <AuthInput
-          label="Password"
-          hasToggle
-          show={showPw}
-          onToggle={() => setShowPw((s) => !s)}
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          placeholder="Min. 8 characters"
-          autoComplete="new-password"
-          required
-          minLength={8}
-        />
-        <AuthInput
-          label="Confirm Password"
-          hasToggle
-          show={showCPw}
-          onToggle={() => setShowCPw((s) => !s)}
-          value={confirmPassword}
-          onChange={(e) => setConfirmPassword(e.target.value)}
-          placeholder="Re-enter your password"
-          autoComplete="new-password"
-          required
-        />
+        <div>
+          <AuthInput
+            label="Password"
+            hasToggle
+            show={showPw}
+            onToggle={() => setShowPw((s) => !s)}
+            value={password}
+            onChange={(e) => { setPassword(e.target.value); setPwTouched(true); }}
+            placeholder="Min. 8 characters"
+            autoComplete="new-password"
+            required
+          />
+          {pwTouched && <PasswordStrengthChecker evaluation={evaluation} dark />}
+        </div>
+        <div>
+          <AuthInput
+            label="Confirm Password"
+            hasToggle
+            show={showCPw}
+            onToggle={() => setShowCPw((s) => !s)}
+            value={confirmPassword}
+            onChange={(e) => setConfirmPassword(e.target.value)}
+            placeholder="Re-enter your password"
+            autoComplete="new-password"
+            required
+          />
+          {pwTouched && confirmPassword.length > 0 && !passwordsMatch && (
+            <p className="mt-1.5 text-[12px] text-red-400 lg:text-red-600">
+              Passwords do not match.
+            </p>
+          )}
+        </div>
         <div className="pt-2">
-          <GradientButton type="submit" disabled={loading}>
+          <GradientButton type="submit" disabled={!canSubmit}>
             {loading ? 'CREATING...' : <>CONTINUE <span className="text-lg leading-none">›</span></>}
           </GradientButton>
         </div>

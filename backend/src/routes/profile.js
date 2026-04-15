@@ -3,6 +3,7 @@ import bcrypt from 'bcryptjs';
 import prisma from '../utils/prisma.js';
 import { authenticate } from '../middleware/auth.js';
 import { getPresignedUrl } from '../utils/s3.js';
+import { validatePassword } from '../utils/passwordValidator.js';
 
 const router = Router();
 
@@ -46,9 +47,9 @@ router.put('/personal', authenticate, async (req, res) => {
 router.put('/password', authenticate, async (req, res) => {
   try {
     const { currentPassword, newPassword } = req.body;
-    if (!currentPassword || !newPassword || newPassword.length < 6) {
-      return res.status(400).json({ error: 'Invalid password input' });
-    }
+    if (!currentPassword) return res.status(400).json({ error: 'Current password is required' });
+    const pwError = validatePassword(newPassword);
+    if (pwError) return res.status(400).json({ error: pwError });
     const u = await prisma.user.findUnique({ where: { id: req.user.id } });
     const ok = await bcrypt.compare(currentPassword, u.passwordHash);
     if (!ok) return res.status(401).json({ error: 'Current password incorrect' });
