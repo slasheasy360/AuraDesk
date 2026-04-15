@@ -708,6 +708,50 @@ export default function ConnectionsPage() {
                             <RefreshCw size={12} className={resubscribing ? 'animate-spin' : ''} />
                             {resubscribing ? 'Re-subscribing...' : 'Re-subscribe Webhook'}
                           </button>
+
+                          {/* Recent webhook events — shows what Meta is actually sending */}
+                          {waStatus.eventsSummary?.length > 0 && (
+                            <div className="mt-2">
+                              <div className="text-xs font-medium text-gray-600 mb-1.5">
+                                Last {waStatus.eventsSummary.length} webhook event{waStatus.eventsSummary.length !== 1 ? 's' : ''} received:
+                              </div>
+                              <div className="space-y-1 max-h-64 overflow-y-auto bg-gray-50 rounded-lg p-2 border border-gray-200">
+                                {waStatus.eventsSummary.map((e, idx) => {
+                                  const isForThisWaba = e.wabaId === waStatus.account.wabaId;
+                                  const isEcho = e.field === 'smb_message_echoes';
+                                  return (
+                                    <div key={idx} className={`text-xs font-mono p-1.5 rounded border ${isForThisWaba ? 'bg-white border-gray-200' : 'bg-amber-50 border-amber-200'}`}>
+                                      <div className="flex items-center gap-2 flex-wrap">
+                                        <span className="text-gray-400">{new Date(e.receivedAt).toLocaleTimeString()}</span>
+                                        <span className={`px-1.5 py-0.5 rounded ${isEcho ? 'bg-blue-100 text-blue-700' : e.field === 'messages' ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-700'}`}>
+                                          {e.field || 'unknown'}
+                                        </span>
+                                        {!isForThisWaba && (
+                                          <span className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-800" title={`Event WABA: ${e.wabaId}, yours: ${waStatus.account.wabaId}`}>
+                                            ≠ your WABA
+                                          </span>
+                                        )}
+                                      </div>
+                                      {e.messageSummary && (
+                                        <div className="mt-0.5 text-gray-600">
+                                          {e.messageSummary.type} — from {e.messageSummary.from || '?'} → to {e.messageSummary.to || e.messageSummary.recipient_id || '?'}
+                                          {e.messageSummary.text && <span className="text-gray-400"> — "{e.messageSummary.text}"</span>}
+                                        </div>
+                                      )}
+                                      {e.hasStatuses && !e.messageSummary && (
+                                        <div className="mt-0.5 text-gray-400">status update</div>
+                                      )}
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                              {waStatus.totalRecentEventsCount > waStatus.recentEventsCount && (
+                                <div className="text-xs text-amber-600 mt-1">
+                                  ⚠ {waStatus.totalRecentEventsCount - waStatus.recentEventsCount} event(s) arrived with a different WABA ID — Meta may be sending to the wrong app.
+                                </div>
+                              )}
+                            </div>
+                          )}
                         </div>
                       ) : null}
                     </div>

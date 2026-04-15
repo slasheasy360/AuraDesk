@@ -479,20 +479,43 @@ router.get('/status', authenticate, async (req, res) => {
       return res.json({ connected: false });
     }
 
-    // Recent webhook events received for this WABA
+    // Recent webhook events — return ALL recent WA events so the user can see
+    // what Meta is actually sending, including events that didn't match this WABA.
     const recentEvents = await prisma.webhookEventLog.findMany({
       where: { platform: 'whatsapp' },
       orderBy: { receivedAt: 'desc' },
-      take: 5,
+      take: 10,
       select: { id: true, receivedAt: true, payload: true },
     });
 
-    // Filter to only events for this WABA
     const wabaEvents = recentEvents.filter((e) => {
       try {
         const p = e.payload;
         return (p?.entry || []).some((en) => en.id === waAccount.wabaId);
       } catch { return false; }
+    });
+
+    // Summarize each event for easy inspection in the UI
+    const eventsSummary = recentEvents.map((e) => {
+      const entry = e.payload?.entry?.[0];
+      const change = entry?.changes?.[0];
+      const val = change?.value || {};
+      const msg = val.messages?.[0];
+      return {
+        receivedAt: e.receivedAt,
+        wabaId: entry?.id,
+        field: change?.field,
+        phoneNumberId: val.metadata?.phone_number_id,
+        messageSummary: msg ? {
+          id: msg.id,
+          type: msg.type,
+          from: msg.from,
+          to: msg.to,
+          recipient_id: msg.recipient_id,
+          text: msg.text?.body?.substring(0, 60),
+        } : null,
+        hasStatuses: Boolean(val.statuses?.length),
+      };
     });
 
     // Check WABA subscription status via Meta API
@@ -521,8 +544,10 @@ router.get('/status', authenticate, async (req, res) => {
       webhookUrl: `${process.env.APP_URL}/webhooks/meta`,
       verifyToken: process.env.META_WEBHOOK_VERIFY_TOKEN,
       recentEventsCount: wabaEvents.length,
+      totalRecentEventsCount: recentEvents.length,
       lastEventAt: wabaEvents[0]?.receivedAt || null,
       subscriptionStatus,
+      eventsSummary,
     });
   } catch (err) {
     console.error('WhatsApp status error:', err.message);

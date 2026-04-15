@@ -673,7 +673,18 @@ async function processWhatsAppWebhook(payload, io) {
       const connectedAtMs = new Date(account.createdAt).getTime() - GRACE_MS;
 
       for (const msg of value.messages) {
-        console.log('[WhatsApp Webhook] Processing message:', { id: msg.id, type: msg.type, from: msg.from, timestamp: msg.timestamp });
+        // Dump the full message object — helps diagnose when mobile replies don't show up.
+        // smb_message_echoes uses msg.to for the recipient; regular messages use msg.from for the sender.
+        console.log('[WhatsApp Webhook] Processing message (full object):', JSON.stringify({
+          field: change.field,
+          id: msg.id,
+          type: msg.type,
+          from: msg.from,
+          to: msg.to,
+          recipient_id: msg.recipient_id,
+          timestamp: msg.timestamp,
+          keys: Object.keys(msg),
+        }));
 
         try {
           // Skip non-content message types that would create empty bubbles
@@ -737,13 +748,31 @@ async function processWhatsAppWebhook(payload, io) {
           const isOutboundFromMobile = isEchoField ||
             (businessPhoneDigits.length > 0 && senderPhoneDigits === businessPhoneDigits);
 
-          // customerPhone = the phone number of the OTHER party (not the business)
-          const customerPhone = isOutboundFromMobile
-            ? (msg.recipient_id || null)   // Meta sets recipient_id for mobile-sent outbound
-            : msg.from;
+          // customerPhone = the phone number of the OTHER party (not the business).
+          // For outbound mobile replies the recipient field varies by payload type:
+          //   - smb_message_echoes:  msg.to
+          //   - Cloud API echoes:    msg.recipient_id
+          // Try every known field and fall back to the first contact entry.
+          let customerPhone;
+          if (isOutboundFromMobile) {
+            customerPhone =
+              msg.to ||
+              msg.recipient_id ||
+              value.contacts?.[0]?.wa_id ||
+              null;
+          } else {
+            customerPhone = msg.from;
+          }
 
           if (!customerPhone) {
-            console.log('[WhatsApp Webhook] Cannot determine customer phone — skipping msg:', msg.id, { isOutboundFromMobile, from: msg.from, recipient_id: msg.recipient_id });
+            console.log('[WhatsApp Webhook] ✗ Cannot determine customer phone — skipping msg:', msg.id, {
+              isOutboundFromMobile,
+              field: change.field,
+              from: msg.from,
+              to: msg.to,
+              recipient_id: msg.recipient_id,
+              contacts: value.contacts,
+            });
             continue;
           }
 
