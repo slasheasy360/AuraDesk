@@ -719,33 +719,59 @@ async function processWhatsAppWebhook(payload, io) {
             continue;
           }
 
-          const senderPhone = msg.from;
+          // ── Detect outbound messages sent from the business's own mobile app ──
+          // When the business owner replies from their WhatsApp mobile app, Meta sends
+          // a webhook with msg.from = the business phone number (same as the WABA number)
+          // and msg.recipient_id = the customer's phone number.
+          // Strip all non-digits for comparison — waAccount.phoneNumber may have spaces/+/-
+          const businessPhoneDigits = (waAccount.phoneNumber || '').replace(/\D/g, '');
+          const senderPhoneDigits = (msg.from || '').replace(/\D/g, '');
+          const isOutboundFromMobile = businessPhoneDigits.length > 0 && senderPhoneDigits === businessPhoneDigits;
+
+          // customerPhone = the phone number of the OTHER party (not the business)
+          const customerPhone = isOutboundFromMobile
+            ? (msg.recipient_id || null)   // Meta sets recipient_id for mobile-sent outbound
+            : msg.from;
+
+          if (!customerPhone) {
+            console.log('[WhatsApp Webhook] Cannot determine customer phone — skipping msg:', msg.id, { isOutboundFromMobile, from: msg.from, recipient_id: msg.recipient_id });
+            continue;
+          }
+
+          const direction = isOutboundFromMobile ? 'outbound' : 'inbound';
           const contactName =
-            value.contacts?.find((c) => c.wa_id === senderPhone)?.profile?.name || senderPhone;
+            value.contacts?.find((c) => c.wa_id === customerPhone)?.profile?.name || customerPhone;
+          const senderLabel = isOutboundFromMobile
+            ? (waAccount.businessName || 'Business')
+            : contactName;
+
+          console.log('[WhatsApp Webhook] Message direction:', direction, '| customer:', customerPhone, '| outbound from mobile:', isOutboundFromMobile);
 
           const contact = await prisma.contact.upsert({
             where: {
               userId_platform_platformUserId: {
                 userId: account.userId,
                 platform: 'whatsapp',
-                platformUserId: senderPhone,
+                platformUserId: customerPhone,
               },
             },
             update: { name: contactName },
             create: {
               userId: account.userId,
               platform: 'whatsapp',
-              platformUserId: senderPhone,
+              platformUserId: customerPhone,
               name: contactName,
             },
           });
 
-          // Upsert conversation WITHOUT incrementing unread (increment after message is confirmed new)
+          // Upsert conversation — keyed on customerPhone so inbound and outbound
+          // messages for the same customer always land in the same conversation.
+          // Do NOT increment unread here; do it after we confirm the message is new.
           const conversation = await prisma.conversation.upsert({
             where: {
               connectedAccountId_platformConversationId: {
                 connectedAccountId: account.id,
-                platformConversationId: senderPhone,
+                platformConversationId: customerPhone,
               },
             },
             update: {
@@ -753,7 +779,7 @@ async function processWhatsAppWebhook(payload, io) {
             },
             create: {
               connectedAccountId: account.id,
-              platformConversationId: senderPhone,
+              platformConversationId: customerPhone,
               contactId: contact.id,
               lastMessageAt: new Date(),
               unreadCount: 0,
@@ -766,8 +792,8 @@ async function processWhatsAppWebhook(payload, io) {
             data: {
               conversationId: conversation.id,
               platformMessageId: msg.id,
-              direction: 'inbound',
-              sender: contactName,
+              direction,
+              sender: senderLabel,
               content,
               contentType: WA_CONTENT_TYPE[msg.type] || 'text',
               attachments: waAttachments.length > 0 ? waAttachments : undefined,
@@ -777,16 +803,21 @@ async function processWhatsAppWebhook(payload, io) {
             },
           });
 
-          // Increment unread count AFTER message is confirmed new
-          const updatedConversation = await prisma.conversation.update({
-            where: { id: conversation.id },
-            data: { unreadCount: { increment: 1 } },
-          });
+          // Only increment unread for inbound messages (outbound replies don't add unread)
+          let unreadCount = conversation.unreadCount;
+          if (direction === 'inbound') {
+            const updatedConversation = await prisma.conversation.update({
+              where: { id: conversation.id },
+              data: { unreadCount: { increment: 1 } },
+            });
+            unreadCount = updatedConversation.unreadCount;
+          }
 
           console.log('[WhatsApp Webhook] ✓ Message saved', {
             messageId: message.id,
             conversationId: conversation.id,
-            from: senderPhone,
+            direction,
+            customer: customerPhone,
             content: content.substring(0, 80),
             contentType: WA_CONTENT_TYPE[msg.type] || 'text',
             attachments: waAttachments.length,
@@ -805,7 +836,7 @@ async function processWhatsAppWebhook(payload, io) {
           io.to(socketRoom).emit('conversation_update', {
             conversationId: conversation.id,
             lastMessageAt: new Date(),
-            unreadCount: updatedConversation.unreadCount,
+            unreadCount,
           });
         } catch (msgErr) {
           console.error('[WhatsApp Webhook] ✗ Failed to process message:', msg.id, 'type:', msg.type, 'error:', msgErr.message, msgErr.stack?.split('\n')[1]);
