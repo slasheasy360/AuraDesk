@@ -630,13 +630,25 @@ async function processWhatsAppWebhook(payload, io) {
         }
       }
 
-      if (!value.messages) continue;
+      // Meta delivers payloads under different keys depending on the field:
+      //   'messages'            → value.messages
+      //   'smb_message_echoes'  → value.message_echoes  (NOT value.messages!)
+      // Accept both so mobile-replies from the WhatsApp Business App coexistence
+      // feature get processed too.
+      const incomingMessages = value.messages || value.message_echoes || [];
+
+      if (!incomingMessages.length) {
+        console.log('[WhatsApp Webhook] No messages/message_echoes in value — value keys:', Object.keys(value));
+        continue;
+      }
 
       console.log('[WhatsApp Webhook] Processing messages', {
         wabaId,
         phoneNumberId,
-        messageCount: value.messages.length,
-        messageTypes: value.messages.map((m) => m.type),
+        field: change.field,
+        messageCount: incomingMessages.length,
+        messageTypes: incomingMessages.map((m) => m.type),
+        source: value.messages ? 'value.messages' : 'value.message_echoes',
       });
 
       // Route to correct tenant using both wabaId AND phoneNumberId for precise multi-tenant matching
@@ -672,7 +684,7 @@ async function processWhatsAppWebhook(payload, io) {
       const GRACE_MS = 60 * 1000;
       const connectedAtMs = new Date(account.createdAt).getTime() - GRACE_MS;
 
-      for (const msg of value.messages) {
+      for (const msg of incomingMessages) {
         // Dump the full message object — helps diagnose when mobile replies don't show up.
         // smb_message_echoes uses msg.to for the recipient; regular messages use msg.from for the sender.
         console.log('[WhatsApp Webhook] Processing message (full object):', JSON.stringify({

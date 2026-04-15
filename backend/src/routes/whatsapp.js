@@ -503,7 +503,8 @@ router.get('/status', authenticate, async (req, res) => {
       for (const entry of entries) {
         for (const change of entry.changes || []) {
           const val = change.value || {};
-          const messages = val.messages || [];
+          // smb_message_echoes uses value.message_echoes, not value.messages
+          const messages = val.messages || val.message_echoes || [];
           const statuses = val.statuses || [];
           if (messages.length === 0 && statuses.length === 0) {
             rows.push({
