@@ -639,28 +639,12 @@ export default function InboxPage() {
     setAiError(null);
     setAiSuggestion(null);
     try {
-      // 1. Generate the AI reply
-      const genRes = await api.post('/api/ai/generate-reply', {
+      const res = await api.post('/api/ai/generate-reply', {
         conversationId: activeId,
         prompt,
         platform: activeConversationRef.current?.connectedAccount?.platform,
       });
-      const reply = genRes.data.reply;
-      if (!reply) throw new Error('Empty AI reply');
-      setAiSuggestion(reply);
-
-      // 2. Immediately send it to the customer via the platform API
-      const sendRes = await api.post('/api/messages/send', {
-        conversationId: activeId,
-        content: reply,
-      });
-      const realMessage = sendRes.data.message;
-      if (realMessage?.id) knownMessageIds.current.add(realMessage.id);
-      setMessages((prev) => [...prev, realMessage]);
-      messageCache.current.set(activeId, null);
-
-      // 3. Auto-dismiss the suggestion box after a brief confirmation display
-      setTimeout(() => setAiSuggestion(null), 2500);
+      setAiSuggestion(res.data.reply);
     } catch (err) {
       const status = err.response?.status;
       const serverMsg = err.response?.data?.error;
@@ -668,7 +652,6 @@ export default function InboxPage() {
         ? serverMsg
         : 'Something went wrong. Please try again.';
       setAiError(msg);
-      setAiSuggestion(null);
       setTimeout(() => setAiError(null), 5000);
     } finally {
       setAiLoading(false);
@@ -1559,6 +1542,10 @@ export default function InboxPage() {
                       onAttachClick={() => fileInputRef.current?.click()}
                       onAiRespond={handleAiRespond}
                       aiLoading={aiLoading}
+                      aiSuggestion={aiSuggestion}
+                      aiError={aiError}
+                      onAiUse={(text) => { handleNewMessageChange(text); setAiSuggestion(null); }}
+                      onAiDismiss={() => setAiSuggestion(null)}
                     />
                   </div>
                 </>
@@ -2095,7 +2082,7 @@ const ChatComposer = memo(function ChatComposer({
       )}
 
       <form onSubmit={handleSend} className="flex items-center gap-3">
-        {/* AI Respond — generates and sends the reply in one click */}
+        {/* AI Respond — generates a suggestion; user reviews then clicks Use Reply */}
         <button
           type="button"
           onClick={onAiRespond}
@@ -2165,11 +2152,57 @@ const ChatComposer = memo(function ChatComposer({
 // MOBILE CHAT COMPOSER — dark navy bottom bar matching mockup
 // ═══════════════════════════════════════════════════════════════════
 
-function MobileChatComposer({ newMessage, setNewMessage, handleSend, sending, attachments, onAttachClick, onAiRespond, aiLoading }) {
+function MobileChatComposer({
+  newMessage, setNewMessage, handleSend, sending, attachments, onAttachClick,
+  onAiRespond, aiLoading, aiSuggestion, aiError, onAiUse, onAiDismiss,
+}) {
   const hasContent = newMessage.trim() || attachments.length > 0;
 
   return (
-    <div className="bg-[#0B1628] px-3 py-3 border-t border-white/5">
+    <div className="bg-[#0B1628] px-3 py-3 border-t border-white/5 space-y-2">
+      {/* AI Suggestion Box — same Copy / Use Reply flow as desktop */}
+      {(aiSuggestion || aiLoading || aiError) && (
+        <div className="rounded-xl border border-[#1787FE]/40 bg-[#0F1D33] px-3 py-2.5 flex flex-col gap-2">
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-1.5 text-xs font-semibold text-[#1787FE]">
+              <Sparkles size={13} className={aiLoading ? 'animate-pulse' : ''} />
+              AI Suggestion
+            </div>
+            {(aiSuggestion || aiError) && (
+              <button
+                type="button"
+                onClick={onAiDismiss}
+                className="text-white/40 hover:text-white/70 transition flex-shrink-0"
+                title="Dismiss"
+              >
+                <X size={14} />
+              </button>
+            )}
+          </div>
+          {aiLoading && <p className="text-sm text-white/60">Generating AI reply…</p>}
+          {aiError && <p className="text-sm text-red-400">{aiError}</p>}
+          {aiSuggestion && <p className="text-sm text-white/90 leading-relaxed">{aiSuggestion}</p>}
+          {aiSuggestion && (
+            <div className="flex items-center justify-end gap-2 pt-1 border-t border-white/10">
+              <button
+                type="button"
+                onClick={() => navigator.clipboard.writeText(aiSuggestion)}
+                className="px-3 py-1.5 text-xs font-semibold border border-white/20 bg-transparent text-white/80 rounded-lg hover:bg-white/10 transition"
+              >
+                Copy Text
+              </button>
+              <button
+                type="button"
+                onClick={() => onAiUse(aiSuggestion)}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-[#1787FE] text-white rounded-lg hover:bg-[#1377e0] transition"
+              >
+                Use Reply <Send size={11} />
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
       <form onSubmit={handleSend} className="flex items-center gap-2">
         {/* Attach */}
         <button
