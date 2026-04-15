@@ -57,6 +57,8 @@ export default function ConnectionsPage() {
   const [waStatus, setWaStatus] = useState(null); // WhatsApp webhook status
   const [waStatusLoading, setWaStatusLoading] = useState(false);
   const [resubscribing, setResubscribing] = useState(false);
+  const [waAutoPoll, setWaAutoPoll] = useState(false); // live-tail webhook events
+  const [expandedEventIdx, setExpandedEventIdx] = useState(null);
 
   // Auto-dismiss per-platform error after 5s
   useEffect(() => {
@@ -116,6 +118,13 @@ export default function ConnectionsPage() {
       fetchWaStatus();
     }
   }, [loading, accounts, fetchWaStatus]);
+
+  // Auto-poll webhook status every 3 seconds when live-tail is enabled
+  useEffect(() => {
+    if (!waAutoPoll) return;
+    const timer = setInterval(() => { fetchWaStatus(); }, 3000);
+    return () => clearInterval(timer);
+  }, [waAutoPoll, fetchWaStatus]);
 
   const handleWaResubscribe = useCallback(async () => {
     setResubscribing(true);
@@ -709,49 +718,92 @@ export default function ConnectionsPage() {
                             {resubscribing ? 'Re-subscribing...' : 'Re-subscribe Webhook'}
                           </button>
 
-                          {/* Recent webhook events — shows what Meta is actually sending */}
-                          {waStatus.eventsSummary?.length > 0 && (
-                            <div className="mt-2">
-                              <div className="text-xs font-medium text-gray-600 mb-1.5">
-                                Last {waStatus.eventsSummary.length} webhook event{waStatus.eventsSummary.length !== 1 ? 's' : ''} received:
+                          {/* Live webhook event tail — your window into what Meta is actually sending */}
+                          <div className="mt-2">
+                            <div className="flex items-center justify-between mb-1.5">
+                              <div className="text-xs font-medium text-gray-600">
+                                Recent webhook events
+                                {waStatus.eventsSummary?.length > 0 && ` (${waStatus.eventsSummary.length})`}
                               </div>
-                              <div className="space-y-1 max-h-64 overflow-y-auto bg-gray-50 rounded-lg p-2 border border-gray-200">
-                                {waStatus.eventsSummary.map((e, idx) => {
-                                  const isForThisWaba = e.wabaId === waStatus.account.wabaId;
-                                  const isEcho = e.field === 'smb_message_echoes';
-                                  return (
-                                    <div key={idx} className={`text-xs font-mono p-1.5 rounded border ${isForThisWaba ? 'bg-white border-gray-200' : 'bg-amber-50 border-amber-200'}`}>
-                                      <div className="flex items-center gap-2 flex-wrap">
-                                        <span className="text-gray-400">{new Date(e.receivedAt).toLocaleTimeString()}</span>
-                                        <span className={`px-1.5 py-0.5 rounded ${isEcho ? 'bg-blue-100 text-blue-700' : e.field === 'messages' ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-700'}`}>
-                                          {e.field || 'unknown'}
-                                        </span>
-                                        {!isForThisWaba && (
-                                          <span className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-800" title={`Event WABA: ${e.wabaId}, yours: ${waStatus.account.wabaId}`}>
-                                            ≠ your WABA
-                                          </span>
+                              <label className="flex items-center gap-1.5 text-xs text-gray-500 cursor-pointer">
+                                <input
+                                  type="checkbox"
+                                  checked={waAutoPoll}
+                                  onChange={(ev) => setWaAutoPoll(ev.target.checked)}
+                                  className="w-3 h-3"
+                                />
+                                Live tail (3s)
+                              </label>
+                            </div>
+
+                            {!waStatus.eventsSummary || waStatus.eventsSummary.length === 0 ? (
+                              <div className="text-xs bg-red-50 border border-red-200 rounded-lg p-3 text-red-700">
+                                <div className="font-semibold mb-1">No webhook events recorded yet.</div>
+                                <div className="text-red-600">
+                                  Meta isn't sending anything to this server. Check:
+                                  <ul className="list-disc ml-4 mt-1 space-y-0.5">
+                                    <li>Is <code className="bg-red-100 px-1 rounded">{waStatus.webhookUrl}</code> reachable from the public internet?</li>
+                                    <li>In Meta portal → App → WhatsApp → Configuration, is the URL verified (green checkmark)?</li>
+                                    <li>Is the <strong>messages</strong> field subscribed?</li>
+                                    <li>Did you click <strong>Re-subscribe Webhook</strong> above?</li>
+                                  </ul>
+                                </div>
+                              </div>
+                            ) : (
+                              <>
+                                <div className="space-y-1 max-h-80 overflow-y-auto bg-gray-50 rounded-lg p-2 border border-gray-200">
+                                  {waStatus.eventsSummary.map((e, idx) => {
+                                    const isForThisWaba = e.wabaId === waStatus.account.wabaId;
+                                    const isEcho = e.field === 'smb_message_echoes';
+                                    const isExpanded = expandedEventIdx === idx;
+                                    return (
+                                      <div key={idx} className={`text-xs font-mono rounded border ${isForThisWaba ? 'bg-white border-gray-200' : 'bg-amber-50 border-amber-200'}`}>
+                                        <div
+                                          className="p-1.5 cursor-pointer hover:bg-gray-50"
+                                          onClick={() => setExpandedEventIdx(isExpanded ? null : idx)}
+                                        >
+                                          <div className="flex items-center gap-2 flex-wrap">
+                                            <span className="text-gray-400">{new Date(e.receivedAt).toLocaleTimeString()}</span>
+                                            <span className={`px-1.5 py-0.5 rounded ${isEcho ? 'bg-blue-100 text-blue-700' : e.field === 'messages' ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-700'}`}>
+                                              {e.field || 'unknown'}
+                                            </span>
+                                            {!isForThisWaba && (
+                                              <span className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-800" title={`Event WABA: ${e.wabaId}, yours: ${waStatus.account.wabaId}`}>
+                                                ≠ your WABA
+                                              </span>
+                                            )}
+                                            <span className="text-gray-300 ml-auto">{isExpanded ? '▼' : '▶'}</span>
+                                          </div>
+                                          {e.messageSummary && (
+                                            <div className="mt-0.5 text-gray-600">
+                                              {e.messageSummary.type} · from <strong>{e.messageSummary.from || '?'}</strong> → to <strong>{e.messageSummary.to || e.messageSummary.recipient_id || '?'}</strong>
+                                              {e.messageSummary.text && <div className="text-gray-500 italic">"{e.messageSummary.text}"</div>}
+                                            </div>
+                                          )}
+                                          {e.hasStatuses && (
+                                            <div className="mt-0.5 text-gray-400">
+                                              status: {e.statusSummary?.status} · recipient: {e.statusSummary?.recipient_id}
+                                            </div>
+                                          )}
+                                        </div>
+                                        {isExpanded && (
+                                          <pre className="bg-gray-900 text-green-300 text-[10px] p-2 overflow-x-auto rounded-b max-h-64">
+                                            {JSON.stringify(e.rawPayload, null, 2)}
+                                          </pre>
                                         )}
                                       </div>
-                                      {e.messageSummary && (
-                                        <div className="mt-0.5 text-gray-600">
-                                          {e.messageSummary.type} — from {e.messageSummary.from || '?'} → to {e.messageSummary.to || e.messageSummary.recipient_id || '?'}
-                                          {e.messageSummary.text && <span className="text-gray-400"> — "{e.messageSummary.text}"</span>}
-                                        </div>
-                                      )}
-                                      {e.hasStatuses && !e.messageSummary && (
-                                        <div className="mt-0.5 text-gray-400">status update</div>
-                                      )}
-                                    </div>
-                                  );
-                                })}
-                              </div>
-                              {waStatus.totalRecentEventsCount > waStatus.recentEventsCount && (
-                                <div className="text-xs text-amber-600 mt-1">
-                                  ⚠ {waStatus.totalRecentEventsCount - waStatus.recentEventsCount} event(s) arrived with a different WABA ID — Meta may be sending to the wrong app.
+                                    );
+                                  })}
                                 </div>
-                              )}
-                            </div>
-                          )}
+                                {waStatus.totalRecentEventsCount > waStatus.recentEventsCount && (
+                                  <div className="text-xs text-amber-600 mt-1">
+                                    ⚠ Some events arrived with a different WABA ID — Meta may be sending to the wrong app. (Amber rows above.)
+                                  </div>
+                                )}
+                                <div className="text-xs text-gray-400 mt-1">Click any row to expand full JSON payload.</div>
+                              </>
+                            )}
+                          </div>
                         </div>
                       ) : null}
                     </div>

@@ -495,27 +495,64 @@ router.get('/status', authenticate, async (req, res) => {
       } catch { return false; }
     });
 
-    // Summarize each event for easy inspection in the UI
-    const eventsSummary = recentEvents.map((e) => {
-      const entry = e.payload?.entry?.[0];
-      const change = entry?.changes?.[0];
-      const val = change?.value || {};
-      const msg = val.messages?.[0];
-      return {
-        receivedAt: e.receivedAt,
-        wabaId: entry?.id,
-        field: change?.field,
-        phoneNumberId: val.metadata?.phone_number_id,
-        messageSummary: msg ? {
-          id: msg.id,
-          type: msg.type,
-          from: msg.from,
-          to: msg.to,
-          recipient_id: msg.recipient_id,
-          text: msg.text?.body?.substring(0, 60),
-        } : null,
-        hasStatuses: Boolean(val.statuses?.length),
-      };
+    // Summarize each event for easy inspection in the UI.
+    // Iterate ALL entries and ALL changes — one webhook event can carry many.
+    const eventsSummary = recentEvents.flatMap((e) => {
+      const entries = e.payload?.entry || [];
+      const rows = [];
+      for (const entry of entries) {
+        for (const change of entry.changes || []) {
+          const val = change.value || {};
+          const messages = val.messages || [];
+          const statuses = val.statuses || [];
+          if (messages.length === 0 && statuses.length === 0) {
+            rows.push({
+              id: e.id,
+              receivedAt: e.receivedAt,
+              wabaId: entry.id,
+              field: change.field,
+              phoneNumberId: val.metadata?.phone_number_id,
+              messageSummary: null,
+              hasStatuses: false,
+              rawPayload: e.payload,
+            });
+            continue;
+          }
+          for (const msg of messages) {
+            rows.push({
+              id: e.id,
+              receivedAt: e.receivedAt,
+              wabaId: entry.id,
+              field: change.field,
+              phoneNumberId: val.metadata?.phone_number_id,
+              messageSummary: {
+                id: msg.id,
+                type: msg.type,
+                from: msg.from,
+                to: msg.to,
+                recipient_id: msg.recipient_id,
+                text: msg.text?.body?.substring(0, 80),
+              },
+              hasStatuses: false,
+              rawPayload: e.payload,
+            });
+          }
+          for (const st of statuses) {
+            rows.push({
+              id: e.id,
+              receivedAt: e.receivedAt,
+              wabaId: entry.id,
+              field: change.field,
+              phoneNumberId: val.metadata?.phone_number_id,
+              messageSummary: null,
+              statusSummary: { id: st.id, status: st.status, recipient_id: st.recipient_id },
+              hasStatuses: true,
+              rawPayload: e.payload,
+            });
+          }
+        }
+      }
+      return rows;
     });
 
     // Check WABA subscription status via Meta API
