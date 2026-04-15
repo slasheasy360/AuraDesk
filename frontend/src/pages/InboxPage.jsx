@@ -113,6 +113,15 @@ export default function InboxPage() {
   const { openLinkAccounts, onAccountsChanged } = useLinkAccounts();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [showMobileFilter, setShowMobileFilter] = useState(false);
+
+  // Both the DashboardLayout top hamburger and the in-page hamburger dispatch
+  // this event so they share identical state and animation.
+  useEffect(() => {
+    const handler = () => setShowMobileFilter((v) => !v);
+    window.addEventListener('toggle-inbox-filter', handler);
+    return () => window.removeEventListener('toggle-inbox-filter', handler);
+  }, []);
+
   const draftTimerRef = useRef(null);
   const lastSavedDraftRef = useRef('');
 
@@ -1598,10 +1607,10 @@ export default function InboxPage() {
       {/* Page header */}
       <div className="flex items-center justify-between gap-2 lg:gap-3 flex-shrink-0">
         <div className="flex items-center gap-2 min-w-0">
-          {/* Hamburger — mobile only — toggles filter drawer */}
+          {/* Hamburger — mobile only — toggles filter drawer (shared with DashboardLayout top hamburger) */}
           <button
             type="button"
-            onClick={() => setShowMobileFilter((v) => !v)}
+            onClick={() => window.dispatchEvent(new CustomEvent('toggle-inbox-filter'))}
             className="lg:hidden text-white p-1.5 flex-shrink-0 transition-transform duration-300"
             aria-label="Toggle filters"
             style={{ transform: showMobileFilter ? 'rotate(90deg)' : 'rotate(0deg)' }}

@@ -171,7 +171,13 @@ function DashboardLayoutInner() {
           </button>
           <div className="flex items-center gap-2">
             <button
-              onClick={() => setSidebarOpen(true)}
+              onClick={() => {
+                if (location.pathname === '/inbox') {
+                  window.dispatchEvent(new CustomEvent('toggle-inbox-filter'));
+                } else {
+                  setSidebarOpen(true);
+                }
+              }}
               className="text-gray-300 hover:text-white transition p-1.5"
               aria-label="Open menu"
             >
