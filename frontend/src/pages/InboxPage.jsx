@@ -1126,8 +1126,8 @@ export default function InboxPage() {
     return filteredConversations.slice(start, start + ITEMS_PER_PAGE);
   }, [filteredConversations, currentPage]);
 
-  // Reset page when filter changes
-  useEffect(() => { setCurrentPage(1); }, [activeFilter, search]);
+  // Reset page and selection when filter/search changes
+  useEffect(() => { setCurrentPage(1); setSelectedMessages(new Set()); }, [activeFilter, search]);
 
   const toggleSelectAll = useCallback(() => {
     setSelectedMessages((prev) => {
