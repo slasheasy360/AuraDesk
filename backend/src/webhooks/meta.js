@@ -798,7 +798,14 @@ async function processWhatsAppWebhook(payload, io) {
           // Profile name from the webhook payload — may be absent, especially for
           // smb_message_echoes (outbound to new contacts where we never received
           // their profile).
-          const webhookName = value.contacts?.find((c) => c.wa_id === customerPhone)?.profile?.name || null;
+          // Use the same endsWith tolerance as phone matching: wa_id may omit the
+          // country code prefix (e.g. "8381820507") while customerPhone includes it
+          // ("918381820507"), or vice-versa.
+          const cpDigits = (customerPhone || '').replace(/\D/g, '');
+          const webhookName = value.contacts?.find((c) => {
+            const cDigits = (c.wa_id || '').replace(/\D/g, '');
+            return cDigits === cpDigits || cDigits.endsWith(cpDigits) || cpDigits.endsWith(cDigits);
+          })?.profile?.name || null;
           const senderLabel = isOutboundFromMobile
             ? (waAccount.businessName || 'Business')
             : (webhookName || customerPhone);
