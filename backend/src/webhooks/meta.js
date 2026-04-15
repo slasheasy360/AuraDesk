@@ -593,7 +593,15 @@ async function processWhatsAppWebhook(payload, io) {
     const changes = entry.changes || [];
 
     for (const change of changes) {
-      if (change.field !== 'messages') continue;
+      // 'messages'         — incoming messages from customers
+      // 'smb_message_echoes' — outbound messages sent from the business's WhatsApp mobile app
+      const isEchoField = change.field === 'smb_message_echoes';
+      if (change.field !== 'messages' && !isEchoField) {
+        console.log('[WhatsApp Webhook] Skipping change field:', change.field);
+        continue;
+      }
+
+      console.log('[WhatsApp Webhook] Processing change field:', change.field);
 
       const value = change.value;
       const phoneNumberId = value.metadata?.phone_number_id;
@@ -720,13 +728,14 @@ async function processWhatsAppWebhook(payload, io) {
           }
 
           // ── Detect outbound messages sent from the business's own mobile app ──
-          // When the business owner replies from their WhatsApp mobile app, Meta sends
-          // a webhook with msg.from = the business phone number (same as the WABA number)
-          // and msg.recipient_id = the customer's phone number.
+          // Two signals:
+          // 1. The change arrived on the 'smb_message_echoes' field — always outbound.
+          // 2. msg.from digits match the registered business phone number.
           // Strip all non-digits for comparison — waAccount.phoneNumber may have spaces/+/-
           const businessPhoneDigits = (waAccount.phoneNumber || '').replace(/\D/g, '');
           const senderPhoneDigits = (msg.from || '').replace(/\D/g, '');
-          const isOutboundFromMobile = businessPhoneDigits.length > 0 && senderPhoneDigits === businessPhoneDigits;
+          const isOutboundFromMobile = isEchoField ||
+            (businessPhoneDigits.length > 0 && senderPhoneDigits === businessPhoneDigits);
 
           // customerPhone = the phone number of the OTHER party (not the business)
           const customerPhone = isOutboundFromMobile
