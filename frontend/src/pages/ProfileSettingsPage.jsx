@@ -40,39 +40,41 @@ export default function ProfileSettingsPage() {
   };
 
   return (
-    <div className="h-full overflow-y-auto bg-[#f0f4ff] p-6">
+    <div className="h-full overflow-y-auto bg-[#f0f4ff] px-3 py-4 sm:p-6">
       <Toast msg={toast.msg} type={toast.type} onClose={() => setToast({ msg: '', type: 'success' })} />
-      <div className="flex items-center justify-between mb-6">
-        <h1 className="text-2xl font-bold text-gray-900">Profile Settings</h1>
+      <div className="flex flex-wrap items-center justify-between gap-2 mb-4 sm:mb-6">
+        <h1 className="text-xl sm:text-2xl font-bold text-gray-900">Profile Settings</h1>
         {tab === 'Team' && isAdmin && (
           <button
             onClick={() => setInviteOpen(true)}
-            className="flex items-center gap-2 px-4 py-2 bg-primary-600 hover:bg-primary-700 text-white text-sm font-semibold rounded-lg shadow transition"
+            className="flex items-center gap-2 px-3 py-2 sm:px-4 bg-primary-600 hover:bg-primary-700 text-white text-sm font-semibold rounded-lg shadow transition"
           >
-            <UserPlus size={16} /> INVITE TEAM
+            <UserPlus size={16} /> Invite
           </button>
         )}
       </div>
 
-      <div className="bg-white rounded-2xl shadow-sm p-6">
-        {/* Tabs */}
-        <div className="flex gap-1 bg-gray-50 p-1 rounded-lg w-fit mb-6">
-          {TABS.map((t) => (
-            <button
-              key={t}
-              onClick={() => switchTab(t)}
-              className={`px-5 py-2 text-sm font-medium rounded-md transition ${
-                tab === t ? 'bg-primary-600 text-white shadow' : 'text-gray-600 hover:text-gray-900'
-              }`}
-            >
-              {t}
-              {t === 'Plan' && user?.plan && user.plan !== 'expired' && (
-                <span className="ml-1.5 text-[9px] px-1.5 py-0.5 bg-emerald-100 text-emerald-700 rounded font-bold uppercase">
-                  {user.plan === 'trial' ? 'TRIAL' : user.plan}
-                </span>
-              )}
-            </button>
-          ))}
+      <div className="bg-white rounded-2xl shadow-sm p-4 sm:p-6">
+        {/* Tabs — scrollable on mobile */}
+        <div className="overflow-x-auto -mx-1 mb-5">
+          <div className="flex gap-1 bg-gray-50 p-1 rounded-lg w-max min-w-full sm:w-fit mx-1">
+            {TABS.map((t) => (
+              <button
+                key={t}
+                onClick={() => switchTab(t)}
+                className={`px-3 sm:px-5 py-2 text-xs sm:text-sm font-medium rounded-md transition whitespace-nowrap ${
+                  tab === t ? 'bg-primary-600 text-white shadow' : 'text-gray-600 hover:text-gray-900'
+                }`}
+              >
+                {t}
+                {t === 'Plan' && user?.plan && user.plan !== 'expired' && (
+                  <span className="ml-1 sm:ml-1.5 text-[9px] px-1.5 py-0.5 bg-emerald-100 text-emerald-700 rounded font-bold uppercase">
+                    {user.plan === 'trial' ? 'TRIAL' : user.plan}
+                  </span>
+                )}
+              </button>
+            ))}
+          </div>
         </div>
 
         {tab === 'Personal' && <PersonalTab user={user} refreshUser={refreshUser} showSuccess={showSuccess} showError={showError} />}
@@ -730,17 +732,17 @@ function TeamTab({ user, isAdmin, showSuccess, showError }) {
 
   return (
     <div className="max-w-5xl space-y-6">
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3 sm:gap-4">
         {data.members.map((m) => (
-          <div key={m.id} className="bg-gray-50 rounded-xl p-5 flex flex-col items-center text-center border border-gray-100">
-            <div className="w-20 h-20 rounded-full bg-gradient-to-br from-primary-300 to-primary-500 flex items-center justify-center text-2xl font-bold text-white mb-3">
+          <div key={m.id} className="bg-gray-50 rounded-xl p-4 sm:p-5 flex flex-col items-center text-center border border-gray-100">
+            <div className="w-14 h-14 sm:w-20 sm:h-20 rounded-full bg-gradient-to-br from-primary-300 to-primary-500 flex items-center justify-center text-xl sm:text-2xl font-bold text-white mb-2 sm:mb-3">
               {m.name?.[0]?.toUpperCase()}
             </div>
-            <p className="font-semibold text-gray-900 truncate w-full">{m.name}</p>
+            <p className="font-semibold text-gray-900 text-sm truncate w-full">{m.name}</p>
             <p className="text-xs text-gray-500 capitalize">{m.role}</p>
             <p className="text-xs text-gray-400 mt-1 truncate w-full">{m.email}</p>
             {isAdmin && !m.isOwner && m.id !== user?.id && (
-              <button onClick={() => removeMember(m.id)} className="mt-3 text-xs text-red-500 hover:text-red-700 flex items-center gap-1">
+              <button onClick={() => removeMember(m.id)} className="mt-2 sm:mt-3 text-xs text-red-500 hover:text-red-700 flex items-center gap-1">
                 <Trash2 size={12} /> Remove
               </button>
             )}
@@ -753,13 +755,13 @@ function TeamTab({ user, isAdmin, showSuccess, showError }) {
           <h3 className="text-sm font-semibold text-gray-700 mb-3">Pending Invites</h3>
           <div className="space-y-2">
             {data.pending.map((inv) => (
-              <div key={inv.id} className="flex items-center justify-between bg-amber-50 border border-amber-100 rounded-lg px-4 py-3">
-                <div>
-                  <p className="text-sm font-medium text-gray-900">{inv.email}</p>
+              <div key={inv.id} className="flex items-start sm:items-center justify-between gap-3 bg-amber-50 border border-amber-100 rounded-lg px-3 sm:px-4 py-3">
+                <div className="min-w-0">
+                  <p className="text-sm font-medium text-gray-900 truncate">{inv.email}</p>
                   <p className="text-xs text-gray-500">Pending • expires {new Date(inv.expiresAt).toLocaleDateString()}</p>
                 </div>
                 {isAdmin && (
-                  <button onClick={() => revokeInvite(inv.id)} className="text-xs text-red-500 hover:text-red-700">Revoke</button>
+                  <button onClick={() => revokeInvite(inv.id)} className="flex-shrink-0 text-xs text-red-500 hover:text-red-700 font-medium">Revoke</button>
                 )}
               </div>
             ))}

@@ -1652,12 +1652,12 @@ export default function InboxPage() {
       {/* Mobile Filter Drawer — slides in from the left */}
       {/* Backdrop */}
       <div
-        className={`fixed inset-0 bg-black/60 z-40 lg:hidden transition-opacity duration-300 ${showMobileFilter ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'}`}
+        className={`fixed inset-0 bg-black/60 z-[55] lg:hidden transition-opacity duration-300 ${showMobileFilter ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'}`}
         onClick={() => setShowMobileFilter(false)}
       />
       {/* Drawer panel */}
       <div
-        className={`fixed inset-y-0 left-0 w-72 bg-[#0B1628] z-50 lg:hidden shadow-2xl flex flex-col overflow-hidden transition-transform duration-300 ease-in-out ${showMobileFilter ? 'translate-x-0' : '-translate-x-full'}`}
+        className={`fixed inset-y-0 left-0 w-72 bg-[#0B1628] z-[60] lg:hidden shadow-2xl flex flex-col overflow-hidden transition-transform duration-300 ease-in-out ${showMobileFilter ? 'translate-x-0' : '-translate-x-full'}`}
       >
         {/* Drawer header */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-white/10 flex-shrink-0">
