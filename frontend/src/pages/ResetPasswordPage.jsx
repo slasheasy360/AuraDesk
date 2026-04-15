@@ -14,7 +14,6 @@ export default function ResetPasswordPage() {
   const [confirm, setConfirm] = useState('');
   const [showPw, setShowPw] = useState(false);
   const [showCPw, setShowCPw] = useState(false);
-  const [touched, setTouched] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState(false);
@@ -23,16 +22,22 @@ export default function ResetPasswordPage() {
   const passwordsMatch = confirm.length > 0 && password === confirm;
   const canSubmit = evaluation.allValid && passwordsMatch && !loading && !success;
 
-  // Auto-redirect to login a few seconds after a successful reset.
+  // Auto-redirect to login after a successful reset.
   useEffect(() => {
     if (!success) return;
     const t = setTimeout(() => navigate('/login', { replace: true }), 2500);
     return () => clearTimeout(t);
   }, [success, navigate]);
 
+  // Auto-clear error after 5 s
+  useEffect(() => {
+    if (!error) return;
+    const t = setTimeout(() => setError(''), 5000);
+    return () => clearTimeout(t);
+  }, [error]);
+
   const handleSubmit = async (e) => {
     e.preventDefault();
-    setTouched(true);
     setError('');
     if (!canSubmit) return;
 
@@ -124,7 +129,7 @@ export default function ResetPasswordPage() {
                 onChange={(e) => setConfirm(e.target.value)}
                 required
               />
-              {touched && confirm.length > 0 && !passwordsMatch && (
+              {confirm.length > 0 && !passwordsMatch && (
                 <p className="mt-1.5 text-[12px] text-red-400 lg:text-red-600">
                   Passwords do not match.
                 </p>

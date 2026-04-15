@@ -17,6 +17,13 @@ export default function RegisterPage() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
+  // Auto-clear error after 5 s
+  useEffect(() => {
+    if (!error) return;
+    const t = setTimeout(() => setError(''), 5000);
+    return () => clearTimeout(t);
+  }, [error]);
+
   const evaluation = useMemo(() => evaluatePassword(password), [password]);
   const passwordsMatch = confirmPassword.length > 0 && password === confirmPassword;
   const canSubmit = evaluation.allValid && passwordsMatch && !loading;
@@ -43,11 +50,11 @@ export default function RegisterPage() {
     setError('');
 
     if (!evaluation.allValid) {
-      setError('Please fix the password issues highlighted below.');
+      setError('Please choose a stronger password.');
       return;
     }
     if (password !== confirmPassword) {
-      setError('Passwords do not match');
+      setError('Passwords do not match.');
       return;
     }
 

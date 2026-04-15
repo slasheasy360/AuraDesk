@@ -13,7 +13,7 @@ const TABS = ['Personal', 'Company', 'Integrations', 'Plan', 'Team'];
 function Toast({ msg, type, onClose }) {
   useEffect(() => {
     if (!msg) return;
-    const t = setTimeout(onClose, 3000);
+    const t = setTimeout(onClose, 5000);
     return () => clearTimeout(t);
   }, [msg, onClose]);
   if (!msg) return null;
@@ -110,7 +110,6 @@ function PersonalTab({ user, refreshUser, showSuccess, showError }) {
   const [pwSaving, setPwSaving] = useState(false);
   const [showCurPw, setShowCurPw] = useState(false);
   const [showNewPw, setShowNewPw] = useState(false);
-  const [pwTouched, setPwTouched] = useState(false);
 
   const pwEvaluation = useMemo(() => evaluatePassword(pwForm.newPassword), [pwForm.newPassword]);
   const canSavePw = pwForm.currentPassword.length > 0 && pwEvaluation.allValid && !pwSaving;
@@ -158,7 +157,7 @@ function PersonalTab({ user, refreshUser, showSuccess, showError }) {
         </Field>
         <div>
           <button
-            onClick={() => { setPwOpen(!pwOpen); setPwTouched(false); }}
+            onClick={() => setPwOpen(!pwOpen)}
             className="text-xs font-semibold text-gray-600 tracking-wide uppercase hover:text-primary-600"
           >
             Password ✎
@@ -193,7 +192,7 @@ function PersonalTab({ user, refreshUser, showSuccess, showError }) {
                     placeholder="New password"
                     className="input pr-10"
                     value={pwForm.newPassword}
-                    onChange={(e) => { setPwForm({ ...pwForm, newPassword: e.target.value }); setPwTouched(true); }}
+                    onChange={(e) => setPwForm({ ...pwForm, newPassword: e.target.value })}
                     autoComplete="new-password"
                   />
                   <button
@@ -206,7 +205,7 @@ function PersonalTab({ user, refreshUser, showSuccess, showError }) {
                     {showNewPw ? <EyeOff size={15} /> : <Eye size={15} />}
                   </button>
                 </div>
-                {pwTouched && <PasswordStrengthChecker evaluation={pwEvaluation} />}
+                {pwForm.newPassword.length > 0 && <PasswordStrengthChecker evaluation={pwEvaluation} />}
               </div>
               <button
                 disabled={!canSavePw}
