@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import api from '../services/api.js';
 import { PlatformIcon } from '../components/PlatformBadge.jsx';
-import { Link2, CheckCircle, Trash2, Loader2, AlertCircle, RefreshCw, Wifi, WifiOff } from 'lucide-react';
+import { useAuth } from '../context/AuthContext.jsx';
+import { Link2, CheckCircle, Trash2, Loader2, AlertCircle, RefreshCw, Wifi, WifiOff, Lock } from 'lucide-react';
 
 const platforms = [
   {
@@ -47,6 +48,11 @@ const platforms = [
 ];
 
 export default function ConnectionsPage() {
+  const { user } = useAuth();
+  // Only admins and owners can connect or disconnect platforms.
+  // Members have read-only visibility.
+  const isAdmin = user?.role === 'admin' || user?.role === 'owner';
+
   const [accounts, setAccounts] = useState([]);
   const [loading, setLoading] = useState(true);
   const syncTriggeredRef = useRef(false);
@@ -541,9 +547,17 @@ export default function ConnectionsPage() {
           <Link2 size={28} className="text-primary-600 hidden sm:block" />
           <div>
             <h1 className="text-xl sm:text-2xl font-bold text-gray-900">Connected Accounts</h1>
-            <p className="text-gray-500 text-xs sm:text-sm">Connect your messaging platforms to AuraDesk</p>
+            <p className="text-gray-500 text-xs sm:text-sm">Messaging platforms connected to your workspace</p>
           </div>
         </div>
+
+        {/* Read-only notice for team members */}
+        {!isAdmin && (
+          <div className="flex items-center gap-2 text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-4 py-3 mb-5">
+            <Lock size={15} className="flex-shrink-0" />
+            <span>You can view connected platforms but only admins can connect or disconnect them.</span>
+          </div>
+        )}
 
         {/* Loading skeleton */}
         {loading ? (
@@ -606,28 +620,37 @@ export default function ConnectionsPage() {
                     </div>
 
                     <div className="flex items-center sm:flex-shrink-0">
-                      {connected ? (
-                        <button
-                          onClick={() => handleDisconnect(account.id, platform.name)}
-                          disabled={isDisconnecting}
-                          className="flex items-center gap-2 px-4 py-2 text-sm text-red-600 hover:bg-red-50 border border-red-200 rounded-lg transition w-full sm:w-auto justify-center disabled:opacity-50"
-                        >
-                          {isDisconnecting ? (
-                            <Loader2 size={16} className="animate-spin" />
-                          ) : (
-                            <Trash2 size={16} />
-                          )}
-                          {isDisconnecting ? 'Disconnecting...' : 'Disconnect'}
-                        </button>
+                      {isAdmin ? (
+                        /* Admin / owner: full connect + disconnect controls */
+                        connected ? (
+                          <button
+                            onClick={() => handleDisconnect(account.id, platform.name)}
+                            disabled={isDisconnecting}
+                            className="flex items-center gap-2 px-4 py-2 text-sm text-red-600 hover:bg-red-50 border border-red-200 rounded-lg transition w-full sm:w-auto justify-center disabled:opacity-50"
+                          >
+                            {isDisconnecting ? (
+                              <Loader2 size={16} className="animate-spin" />
+                            ) : (
+                              <Trash2 size={16} />
+                            )}
+                            {isDisconnecting ? 'Disconnecting...' : 'Disconnect'}
+                          </button>
+                        ) : (
+                          <button
+                            onClick={() => handleConnect(platform)}
+                            disabled={isConnecting}
+                            className={`px-6 py-2.5 ${platform.btnColor} text-white text-sm font-medium rounded-lg transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 w-full sm:w-auto justify-center`}
+                          >
+                            {isConnecting && <Loader2 size={16} className="animate-spin" />}
+                            {isConnecting ? 'Connecting...' : 'Connect'}
+                          </button>
+                        )
                       ) : (
-                        <button
-                          onClick={() => handleConnect(platform)}
-                          disabled={isConnecting}
-                          className={`px-6 py-2.5 ${platform.btnColor} text-white text-sm font-medium rounded-lg transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 w-full sm:w-auto justify-center`}
-                        >
-                          {isConnecting && <Loader2 size={16} className="animate-spin" />}
-                          {isConnecting ? 'Connecting...' : 'Connect'}
-                        </button>
+                        /* Team member: read-only — no connect/disconnect allowed */
+                        <span className="flex items-center gap-1.5 text-xs text-gray-400 px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg">
+                          <Lock size={13} />
+                          Admin only
+                        </span>
                       )}
                     </div>
                   </div>

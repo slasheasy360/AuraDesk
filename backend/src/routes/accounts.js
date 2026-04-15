@@ -1,16 +1,18 @@
 import { Router } from 'express';
 import axios from 'axios';
-import { authenticate } from '../middleware/auth.js';
+import { authenticate, getWorkspaceOwnerId, requireAdmin } from '../middleware/auth.js';
 import prisma from '../utils/prisma.js';
 import { decrypt } from '../utils/encryption.js';
 
 const router = Router();
 
-// Get all connected accounts for the current user
+// Get all connected accounts for the workspace
+// All team members can view — returns the owner's connected platforms
 router.get('/', authenticate, async (req, res) => {
   try {
+    const ownerId = getWorkspaceOwnerId(req.user);
     const accounts = await prisma.connectedAccount.findMany({
-      where: { userId: req.user.id },
+      where: { userId: ownerId },
       select: {
         id: true,
         platform: true,
@@ -30,11 +32,12 @@ router.get('/', authenticate, async (req, res) => {
   }
 });
 
-// Disconnect an account
-router.delete('/:id', authenticate, async (req, res) => {
+// Disconnect an account — admin/owner only
+router.delete('/:id', authenticate, requireAdmin, async (req, res) => {
   try {
+    const ownerId = getWorkspaceOwnerId(req.user);
     const account = await prisma.connectedAccount.findFirst({
-      where: { id: req.params.id, userId: req.user.id },
+      where: { id: req.params.id, userId: ownerId },
     });
 
     if (!account) {

@@ -3,7 +3,7 @@ import { google } from 'googleapis';
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
-import { authenticate } from '../middleware/auth.js';
+import { authenticate, requireAdmin } from '../middleware/auth.js';
 import * as gmailService from '../services/gmail.js';
 import * as gmailSyncService from '../services/gmail.service.js';
 import prisma from '../utils/prisma.js';
@@ -27,8 +27,8 @@ router.get('/', (req, res) => {
   res.redirect(url);
 });
 
-// GET /auth/gmail/start — Gmail channel connection (authenticated, returns JSON)
-router.get('/start', authenticate, async (req, res) => {
+// GET /auth/gmail/start — Gmail channel connection — admin/owner only
+router.get('/start', authenticate, requireAdmin, async (req, res) => {
   // Phase 1: log-only plan guard (never blocks).
   try { await assertCanConnectPlatform(req.user, 'gmail', { context: 'gmail/start' }); } catch (_) {}
   const popup = String(req.query.popup || '') === '1';
@@ -37,8 +37,8 @@ router.get('/start', authenticate, async (req, res) => {
   res.json({ url });
 });
 
-// GET /auth/gmail/connect — Gmail channel connection via browser redirect
-router.get('/connect', (req, res) => {
+// GET /auth/gmail/connect — Gmail channel connection via browser redirect — admin/owner only
+router.get('/connect', async (req, res) => {
   const { token } = req.query;
   const popup = String(req.query.popup || '') === '1';
   if (!token) {
@@ -47,6 +47,11 @@ router.get('/connect', (req, res) => {
 
   try {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    // Enforce admin-only: look up the user's role before allowing the OAuth flow
+    const user = await prisma.user.findUnique({ where: { id: decoded.userId }, select: { role: true } });
+    if (!user || (user.role !== 'admin' && user.role !== 'owner')) {
+      return res.redirect(`${getFrontendUrl()}/connections?error=forbidden`);
+    }
     const state = Buffer.from(JSON.stringify({ userId: decoded.userId, mode: 'connect', popup })).toString('base64url');
     const url = gmailService.getAuthUrl(state);
     res.redirect(url);

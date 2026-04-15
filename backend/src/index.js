@@ -89,11 +89,19 @@ app.set('io', io);
 io.on('connection', (socket) => {
   console.log(`[Socket.io] Connected: ${socket.id}, transport=${socket.conn.transport.name}`);
 
-  socket.on('register', (userId) => {
+  socket.on('register', async (userId) => {
     if (!userId) return;
-    socket.join(`user:${userId}`);
-    const roomSize = io.sockets.adapter.rooms.get(`user:${userId}`)?.size || 0;
-    console.log(`[Socket.io] User ${userId} joined room on socket ${socket.id} (${roomSize} socket(s) in room)`);
+    // Team members join the workspace owner's room so they receive the same
+    // real-time events (new messages, conversation updates) as the owner.
+    // Owners join their own room (inviterUserId is null for them).
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { inviterUserId: true },
+    });
+    const roomId = user?.inviterUserId || userId;
+    socket.join(`user:${roomId}`);
+    const roomSize = io.sockets.adapter.rooms.get(`user:${roomId}`)?.size || 0;
+    console.log(`[Socket.io] User ${userId} joined room user:${roomId} on socket ${socket.id} (${roomSize} socket(s) in room)`);
   });
 
   // Client sends this every 30s to keep Render's proxy from killing the connection

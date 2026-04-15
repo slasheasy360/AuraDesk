@@ -1,6 +1,29 @@
 import jwt from 'jsonwebtoken';
 import prisma from '../utils/prisma.js';
 
+/**
+ * Returns the workspace owner's userId for any user (synchronous).
+ * - If the user is a team member (inviterUserId set), returns inviterUserId.
+ * - If the user is the owner, returns their own id.
+ * Call this on an already-loaded req.user object after `authenticate`.
+ */
+export function getWorkspaceOwnerId(user) {
+  return user.inviterUserId || user.id;
+}
+
+/**
+ * Admin gate. Mount AFTER `authenticate`.
+ * Permits: role = 'owner' or role = 'admin'
+ * Blocks:  role = 'member'  (HTTP 403)
+ */
+export function requireAdmin(req, res, next) {
+  const role = req.user?.role;
+  if (role !== 'admin' && role !== 'owner') {
+    return res.status(403).json({ error: 'Only admins can perform this action' });
+  }
+  next();
+}
+
 export async function authenticate(req, res, next) {
   try {
     const header = req.headers.authorization;

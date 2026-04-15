@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import axios from 'axios';
-import { authenticate } from '../middleware/auth.js';
+import { authenticate, requireAdmin } from '../middleware/auth.js';
 import * as whatsappService from '../services/whatsapp.js';
 import { assertCanConnectPlatform } from '../services/planGuard.js';
 import prisma from '../utils/prisma.js';
@@ -8,8 +8,8 @@ import prisma from '../utils/prisma.js';
 const router = Router();
 const GRAPH_API = 'https://graph.facebook.com/v21.0';
 
-// Handle WhatsApp Embedded Signup result from frontend
-router.post('/connect', authenticate, async (req, res) => {
+// Handle WhatsApp Embedded Signup result from frontend — admin/owner only
+router.post('/connect', authenticate, requireAdmin, async (req, res) => {
   try {
     // Phase 1: log-only plan guard (never blocks).
     try { await assertCanConnectPlatform(req.user, 'whatsapp', { context: 'whatsapp/connect' }); } catch (_) {}
@@ -35,8 +35,8 @@ router.post('/connect', authenticate, async (req, res) => {
   }
 });
 
-// Exchange authorization code from Embedded Signup for access token, then connect
-router.post('/exchange', authenticate, async (req, res) => {
+// Exchange authorization code from Embedded Signup for access token, then connect — admin/owner only
+router.post('/exchange', authenticate, requireAdmin, async (req, res) => {
   try {
     // Phase 1: log-only plan guard (never blocks).
     try { await assertCanConnectPlatform(req.user, 'whatsapp', { context: 'whatsapp/exchange' }); } catch (_) {}
@@ -161,8 +161,8 @@ router.post('/exchange', authenticate, async (req, res) => {
   }
 });
 
-// Connect WhatsApp via Embedded Signup — auto-discovers WABA and phone from the user access token
-router.post('/connect-with-token', authenticate, async (req, res) => {
+// Connect WhatsApp via Embedded Signup — auto-discovers WABA and phone from the user access token — admin/owner only
+router.post('/connect-with-token', authenticate, requireAdmin, async (req, res) => {
   try {
     const { accessToken, wabaId: frontendWabaId, phoneNumberId: frontendPhoneNumberId } = req.body;
     if (!accessToken) {
@@ -268,8 +268,8 @@ router.post('/connect-with-token', authenticate, async (req, res) => {
   }
 });
 
-// One-click connect using server env vars (WHATSAPP_WABA_ID, WHATSAPP_PHONE_NUMBER_ID, WHATSAPP_SYSTEM_USER_TOKEN)
-router.post('/connect-env', authenticate, async (req, res) => {
+// One-click connect using server env vars — admin/owner only
+router.post('/connect-env', authenticate, requireAdmin, async (req, res) => {
   try {
     const wabaId = process.env.WHATSAPP_WABA_ID;
     const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID;
@@ -304,10 +304,8 @@ router.post('/connect-env', authenticate, async (req, res) => {
 });
 
 // POST /auth/whatsapp/finalize-signup
-// Called by the frontend after the user completes the Meta-hosted Embedded Signup URL popup.
-// The popup sends postMessage with waba_id + phone_number_id (but no OAuth code), and this
-// endpoint uses the server's WHATSAPP_SYSTEM_USER_TOKEN to finish the connection.
-router.post('/finalize-signup', authenticate, async (req, res) => {
+// Called by the frontend after the user completes the Meta-hosted Embedded Signup URL popup — admin/owner only.
+router.post('/finalize-signup', authenticate, requireAdmin, async (req, res) => {
   try {
     const { waba_id, phone_number_id } = req.body || {};
     console.log('[WhatsApp Finalize] Request — userId:', req.user.id, 'waba_id:', waba_id, 'phone_number_id:', phone_number_id);
@@ -372,10 +370,8 @@ router.post('/finalize-signup', authenticate, async (req, res) => {
 });
 
 // POST /api/whatsapp/reconnect-direct
-// Reconnects WhatsApp using the stored WABA ID + system user token WITHOUT going through
-// the Embedded Signup dialog. This bypasses the "phone already registered" error that
-// appears in the Meta dialog when the phone is still in the user's WABA from a prior session.
-router.post('/reconnect-direct', authenticate, async (req, res) => {
+// Reconnects WhatsApp directly using stored WABA + system token — admin/owner only
+router.post('/reconnect-direct', authenticate, requireAdmin, async (req, res) => {
   try {
     const systemToken = process.env.WHATSAPP_SYSTEM_USER_TOKEN;
     if (!systemToken) {

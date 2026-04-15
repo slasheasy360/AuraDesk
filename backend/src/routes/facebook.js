@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { authenticate } from '../middleware/auth.js';
+import { authenticate, requireAdmin } from '../middleware/auth.js';
 import * as facebookService from '../services/facebook.js';
 import { syncFacebookMessages } from '../services/facebook.sync.js';
 import prisma from '../utils/prisma.js';
@@ -14,15 +14,15 @@ function getFrontendUrl() {
   return (urls.length > 1 ? urls[urls.length - 1] : urls[0]).replace(/\/$/, '');
 }
 
-// Backward-compatible shortcut for old clients that still call /auth/facebook.
-router.get('/', authenticate, (req, res) => {
+// Backward-compatible shortcut — admin/owner only
+router.get('/', authenticate, requireAdmin, (req, res) => {
   const state = facebookService.encodeConnectState(req.user.id);
   const url = facebookService.getLoginUrl(state);
   res.redirect(url);
 });
 
-// Start Facebook OAuth for page connection (authenticated)
-router.get('/start', authenticate, async (req, res) => {
+// Start Facebook OAuth for page connection — admin/owner only
+router.get('/start', authenticate, requireAdmin, async (req, res) => {
   try {
     // Phase 1: log-only plan guard. Never blocks — surfaces violations to
     // logs so we can audit real user impact before flipping to enforce.
