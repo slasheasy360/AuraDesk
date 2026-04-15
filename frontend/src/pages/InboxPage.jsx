@@ -1752,31 +1752,42 @@ export default function InboxPage() {
           {showConversationSkeleton && filteredConversations.length === 0 ? (
             <InboxListSkeleton />
           ) : filteredConversations.length === 0 && !loadingConversations ? (
-            /* Empty state — same animated template regardless of reason */
-            <div className="flex flex-col items-center justify-center h-full px-6 select-none">
-              <div className="flex items-end gap-1 mb-5" style={{ height: 48 }}>
-                {[0.6, 1, 0.75, 1.15, 0.5].map((scale, i) => (
-                  <div
-                    key={i}
-                    className="w-3 rounded-full bg-[#1787FE]"
-                    style={{
-                      height: `${Math.round(scale * 28)}px`,
-                      animation: `inboxBarBounce 1.1s ease-in-out ${i * 0.18}s infinite alternate`,
-                    }}
-                  />
-                ))}
-              </div>
-              <style>{`
-                @keyframes inboxBarBounce {
-                  from { transform: scaleY(0.45); opacity: 0.55; }
-                  to   { transform: scaleY(1);    opacity: 1; }
-                }
-              `}</style>
-              <p className="text-base font-semibold text-gray-700 mt-1">Awaiting your first message</p>
-              <p className="text-xs text-gray-400 mt-1.5 text-center leading-relaxed">
-                Your inbox is live and listening.<br />Connect a platform to get started.
-              </p>
-            </div>
+            /* Empty state — context-aware per filter tab */
+            (() => {
+              const emptyCopy = {
+                all:         { title: 'No conversations yet',        sub: 'Connect a platform to start receiving messages.' },
+                unread:      { title: 'All caught up!',              sub: 'You have no unread messages right now.' },
+                starred:     { title: 'No starred messages',         sub: 'Mark important conversations to access them quickly.' },
+                ai_responded:{ title: 'No AI-handled messages yet',  sub: 'Messages responded to by AI will appear here.' },
+                draft:       { title: 'No drafts available',         sub: 'Start typing a message and save it as a draft.' },
+                bin:         { title: 'Bin is empty',                sub: 'Deleted messages will appear here.' },
+              };
+              const { title, sub } = emptyCopy[activeFilter] || emptyCopy.all;
+              return (
+                <div className="flex flex-col items-center justify-center h-full px-6 select-none">
+                  <div className="flex items-end gap-1 mb-5" style={{ height: 48 }}>
+                    {[0.6, 1, 0.75, 1.15, 0.5].map((scale, i) => (
+                      <div
+                        key={i}
+                        className="w-3 rounded-full bg-[#1787FE]"
+                        style={{
+                          height: `${Math.round(scale * 28)}px`,
+                          animation: `inboxBarBounce 1.1s ease-in-out ${i * 0.18}s infinite alternate`,
+                        }}
+                      />
+                    ))}
+                  </div>
+                  <style>{`
+                    @keyframes inboxBarBounce {
+                      from { transform: scaleY(0.45); opacity: 0.55; }
+                      to   { transform: scaleY(1);    opacity: 1; }
+                    }
+                  `}</style>
+                  <p className="text-base font-semibold text-gray-700 mt-1">{title}</p>
+                  <p className="text-xs text-gray-400 mt-1.5 text-center leading-relaxed">{sub}</p>
+                </div>
+              );
+            })()
           ) : (
             paginatedConversations.map((conv, rowIdx) => {
               const lastMessage = conv.messages?.[0];
