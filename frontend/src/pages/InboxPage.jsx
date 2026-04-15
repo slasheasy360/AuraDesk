@@ -8,7 +8,7 @@ import {
   Smile, X, FileText, Image as ImageIcon, Reply, ChevronDown,
   ChevronUp, Download, UploadCloud, Play, Music, File as FileIcon, AlertCircle, RefreshCw,
   Star, Inbox, Clock, Sparkles, FileEdit, Trash2, ChevronLeft, ChevronRight,
-  RotateCw, Archive, MoreHorizontal, MoreVertical, Bot, Link2, Users, Undo2, Menu, Camera, Mic, Pencil, SlidersHorizontal,
+  RotateCw, Archive, MoreHorizontal, MoreVertical, Bot, Link2, Users, Undo2, Menu, Camera, Mic, Pencil,
 } from 'lucide-react';
 import PlatformBadge, { PlatformIcon } from '../components/PlatformBadge.jsx';
 import { useLinkAccounts } from '../context/LinkAccountsContext.jsx';
@@ -1598,12 +1598,12 @@ export default function InboxPage() {
       {/* Page header */}
       <div className="flex items-center justify-between gap-2 lg:gap-3 flex-shrink-0">
         <div className="flex items-center gap-2 min-w-0">
-          {/* Hamburger — mobile only — toggles DashboardLayout sidebar via custom event */}
+          {/* Hamburger — mobile only — opens filter drawer */}
           <button
             type="button"
-            onClick={() => window.dispatchEvent(new CustomEvent('toggle-mobile-sidebar'))}
+            onClick={() => setShowMobileFilter(true)}
             className="lg:hidden text-white p-1.5 flex-shrink-0"
-            aria-label="Open menu"
+            aria-label="Open filters"
           >
             <Menu size={22} />
           </button>
@@ -1620,14 +1620,6 @@ export default function InboxPage() {
               className="w-full pl-9 pr-3 py-2 lg:py-2.5 bg-[#0F1D33] border border-white/5 rounded-full text-sm text-white placeholder-white/40 focus:border-[#1787FE] focus:ring-1 focus:ring-[#1787FE] outline-none transition"
             />
           </div>
-          {/* Mobile: filter icon */}
-          <button
-            onClick={() => setShowMobileFilter(true)}
-            className="lg:hidden w-10 h-10 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center flex-shrink-0 transition"
-            aria-label="Filters"
-          >
-            <SlidersHorizontal size={18} />
-          </button>
           {/* Mobile: round icon-only Link button */}
           <button
             onClick={openLinkAccounts}
