@@ -31,6 +31,7 @@ import teamRoutes from './routes/team.js';
 import planRoutes from './routes/plan.js';
 import aiRoutes from './routes/ai.js';
 import aiTrainingRoutes from './routes/ai-training.js';
+import contactRoutes from './routes/contacts.js';
 import metaWebhook from './webhooks/meta.js';
 import gmailWebhook from './webhooks/gmail.js';
 import { renewExpiringWatches, reRegisterAllWatches } from './services/gmail.js';
@@ -132,6 +133,7 @@ app.use('/auth/whatsapp', whatsappRoutes);
 app.use('/api/conversations', requirePaidAccess, conversationRoutes);
 app.use('/api/messages',      requirePaidAccess, messageRoutes);
 app.use('/api/accounts',      requirePaidAccess, accountRoutes);
+app.use('/api/contacts',      requirePaidAccess, contactRoutes);
 app.use('/api/leads',         requirePaidAccess, leadRoutes);
 // Invoices: NOT mounted with the gate because /api/invoices/public/:slug
 // must stay reachable for unauthenticated invoice viewers. The gate is

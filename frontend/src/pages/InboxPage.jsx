@@ -8,7 +8,7 @@ import {
   Smile, X, FileText, Image as ImageIcon, Reply, ChevronDown,
   ChevronUp, Download, UploadCloud, Play, Music, File as FileIcon, AlertCircle, RefreshCw,
   Star, Inbox, Clock, Sparkles, FileEdit, Trash2, ChevronLeft, ChevronRight,
-  RotateCw, Archive, MoreHorizontal, MoreVertical, Bot, Link2, Users, Undo2, Menu, Camera, Mic,
+  RotateCw, Archive, MoreHorizontal, MoreVertical, Bot, Link2, Users, Undo2, Menu, Camera, Mic, Pencil,
 } from 'lucide-react';
 import PlatformBadge, { PlatformIcon } from '../components/PlatformBadge.jsx';
 import { useLinkAccounts } from '../context/LinkAccountsContext.jsx';
@@ -918,6 +918,20 @@ export default function InboxPage() {
     }
   }, []);
 
+  // When a contact is renamed, sync the new name into every conversation
+  // referencing that contact so both the chat header and the inbox list row
+  // update immediately without a refetch.
+  const handleContactRenamed = useCallback((updatedContact) => {
+    if (!updatedContact?.id) return;
+    setConversations((prev) =>
+      prev.map((c) =>
+        c.contact?.id === updatedContact.id
+          ? { ...c, contact: { ...c.contact, name: updatedContact.name } }
+          : c
+      )
+    );
+  }, []);
+
   const toggleLead = useCallback(async (convId, e) => {
     if (e) e.stopPropagation();
     setConversations((prev) =>
@@ -1291,9 +1305,13 @@ export default function InboxPage() {
                   >
                     <ArrowLeft size={18} />
                   </button>
-                  <h2 className="font-semibold text-white truncate text-sm">
-                    {getContactDisplayName(activeConversation.contact, platform)}
-                  </h2>
+                  <EditableContactName
+                    initialName={getContactDisplayName(activeConversation.contact, platform)}
+                    contactId={activeConversation.contact?.id}
+                    onSaved={handleContactRenamed}
+                    className="font-semibold text-white truncate text-sm"
+                    inputClassName="px-2 py-0.5 bg-white/10 border border-white/30 rounded text-sm text-white outline-none"
+                  />
                   <span className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold flex-shrink-0 ${getPlatformBadgeStyle(platform)}`}>
                     {getPlatformLabel(platform)}
                   </span>
@@ -1353,9 +1371,12 @@ export default function InboxPage() {
                   <button onClick={handleBackToList} className="text-gray-500 hover:text-gray-800 transition flex-shrink-0">
                     <ArrowLeft size={20} />
                   </button>
-                  <h2 className="font-semibold text-gray-900 truncate text-sm sm:text-base">
-                    {getContactDisplayName(activeConversation.contact, platform)}
-                  </h2>
+                  <EditableContactName
+                    initialName={getContactDisplayName(activeConversation.contact, platform)}
+                    contactId={activeConversation.contact?.id}
+                    onSaved={handleContactRenamed}
+                    className="font-semibold text-gray-900 truncate text-sm sm:text-base"
+                  />
                   <span className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold ${getPlatformBadgeStyle(platform)}`}>
                     {getPlatformLabel(platform)}
                   </span>
@@ -3010,6 +3031,82 @@ function getPlatformAvatarStyle(platform, name) {
     case 'facebook': return 'bg-blue-100 text-blue-600';
     default: return 'bg-gray-100 text-gray-500';
   }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// EDITABLE CONTACT NAME — click the name in the chat header to rename
+// ═══════════════════════════════════════════════════════════════════
+
+function EditableContactName({ initialName, contactId, onSaved, className = '', inputClassName = '' }) {
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState(initialName);
+  const [saving, setSaving] = useState(false);
+  const inputRef = useRef(null);
+
+  useEffect(() => { setValue(initialName); }, [initialName]);
+
+  useEffect(() => {
+    if (editing && inputRef.current) {
+      inputRef.current.focus();
+      inputRef.current.select();
+    }
+  }, [editing]);
+
+  const save = async () => {
+    const trimmed = value.trim();
+    if (!trimmed || trimmed === initialName) {
+      setEditing(false);
+      setValue(initialName);
+      return;
+    }
+    setSaving(true);
+    try {
+      const res = await api.patch(`/api/contacts/${contactId}`, { name: trimmed });
+      onSaved?.(res.data.contact);
+      setEditing(false);
+    } catch (err) {
+      console.error('Rename contact failed:', err);
+      setValue(initialName);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const cancel = () => {
+    setValue(initialName);
+    setEditing(false);
+  };
+
+  if (editing) {
+    return (
+      <input
+        ref={inputRef}
+        type="text"
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        onBlur={save}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') save();
+          if (e.key === 'Escape') cancel();
+        }}
+        disabled={saving}
+        className={inputClassName || 'px-2 py-0.5 bg-white border border-[#1787FE] rounded text-sm text-gray-900 outline-none'}
+      />
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={() => contactId && setEditing(true)}
+      disabled={!contactId}
+      className={`${className} inline-flex items-center gap-1.5 group ${contactId ? 'hover:text-[#1787FE]' : 'cursor-default'} transition`}
+      title={contactId ? 'Click to rename' : ''}
+    >
+      <span className="truncate">{initialName}</span>
+      {contactId && <Pencil size={12} className="opacity-0 group-hover:opacity-100 transition flex-shrink-0" />}
+    </button>
+  );
 }
 
 // ═══════════════════════════════════════════════════════════════════
