@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import api from '../services/api.js';
 import { PlatformIcon } from '../components/PlatformBadge.jsx';
 import { useAuth } from '../context/AuthContext.jsx';
-import { Link2, CheckCircle, Trash2, Loader2, AlertCircle, RefreshCw, Wifi, WifiOff, Lock, ChevronDown, ChevronUp, HelpCircle } from 'lucide-react';
+import { Link2, CheckCircle, Trash2, Loader2, AlertCircle, RefreshCw, Wifi, WifiOff, Lock, X } from 'lucide-react';
 
 /* ─── Per-platform prerequisites the user must acknowledge before connecting ─── */
 const PLATFORM_REQUIREMENTS = {
@@ -61,103 +61,138 @@ const PLATFORM_REQUIREMENTS = {
   ],
 };
 
-/* ─── Inline requirements checklist component ─── */
-function RequirementsChecklist({ platformId, checked, onChange }) {
-  const [open, setOpen] = useState(false);
-  const [tooltip, setTooltip] = useState(null);
-  const reqs = PLATFORM_REQUIREMENTS[platformId] || [];
+/* ─── Connect Requirements Modal ─── */
+function ConnectModal({ platform, onClose, onConfirm }) {
+  const reqs = PLATFORM_REQUIREMENTS[platform.id] || [];
+  const [checked, setChecked] = useState(new Set());
   const total = reqs.length;
   const done = reqs.filter((r) => checked.has(r.id)).length;
   const allDone = done === total;
 
-  return (
-    <div className="mt-3 border-t border-gray-100 pt-3">
-      {/* Header row — progress + expand toggle */}
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        className="w-full flex items-center justify-between text-left group"
-      >
-        <div className="flex items-center gap-2">
-          <span className="text-xs font-semibold text-gray-600 uppercase tracking-wide">
-            Requirements
-          </span>
-          <span
-            className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
-              allDone
-                ? 'bg-green-100 text-green-700'
-                : 'bg-amber-100 text-amber-700'
-            }`}
-          >
-            {done}/{total} completed
-          </span>
-        </div>
-        {open ? (
-          <ChevronUp size={14} className="text-gray-400 group-hover:text-gray-600 transition" />
-        ) : (
-          <ChevronDown size={14} className="text-gray-400 group-hover:text-gray-600 transition" />
-        )}
-      </button>
+  const toggle = (id) => {
+    setChecked((prev) => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  };
 
-      {/* Checklist */}
-      {open && (
-        <ul className="mt-2.5 space-y-2">
-          {reqs.map((req) => {
-            const isChecked = checked.has(req.id);
-            return (
-              <li key={req.id} className="flex items-start gap-2.5">
-                <button
-                  type="button"
-                  onClick={() => onChange(req.id)}
-                  aria-pressed={isChecked}
-                  className={`mt-0.5 flex-shrink-0 w-4 h-4 rounded border transition-all duration-150 flex items-center justify-center ${
-                    isChecked
-                      ? 'bg-green-500 border-green-500'
-                      : 'bg-white border-gray-300 hover:border-gray-500'
-                  }`}
-                  aria-label={req.label}
-                >
-                  {isChecked && (
-                    <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round">
-                      <polyline points="20 6 9 17 4 12" />
-                    </svg>
-                  )}
-                </button>
-                <span className={`text-xs leading-snug flex-1 ${isChecked ? 'text-green-700 line-through opacity-70' : 'text-gray-700'}`}>
-                  {req.label}
-                </span>
-                {/* Help tooltip trigger */}
-                <div className="relative flex-shrink-0">
+  // Close on backdrop click or Escape key
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  return (
+    <div
+      className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm"
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    >
+      <div className="w-full max-w-md bg-white rounded-2xl shadow-2xl overflow-hidden animate-in">
+        {/* Modal header */}
+        <div className={`px-6 py-5 flex items-center justify-between border-b border-gray-100`}>
+          <div className="flex items-center gap-3">
+            <div className={`w-9 h-9 rounded-xl ${platform.bgColor} ${platform.iconColor} flex items-center justify-center flex-shrink-0`}>
+              <PlatformIcon platform={platform.id} size={18} />
+            </div>
+            <div>
+              <h2 className="text-base font-bold text-gray-900">Connect {platform.name}</h2>
+              <p className="text-xs text-gray-500">Confirm the requirements below before continuing</p>
+            </div>
+          </div>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 transition p-1 rounded-lg hover:bg-gray-100">
+            <X size={18} />
+          </button>
+        </div>
+
+        {/* Checklist body */}
+        <div className="px-6 py-5 space-y-3">
+          {/* Progress indicator */}
+          <div className="flex items-center justify-between mb-1">
+            <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Requirements</span>
+            <span className={`text-xs font-bold px-2.5 py-0.5 rounded-full transition-colors ${
+              allDone ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'
+            }`}>
+              {done}/{total} completed
+            </span>
+          </div>
+
+          {/* Progress bar */}
+          <div className="h-1 w-full rounded-full bg-gray-100 overflow-hidden mb-3">
+            <div
+              className="h-full rounded-full transition-all duration-400 ease-out"
+              style={{
+                width: `${total > 0 ? (done / total) * 100 : 0}%`,
+                backgroundColor: allDone ? '#10b981' : '#f59e0b',
+              }}
+            />
+          </div>
+
+          {/* Checklist items */}
+          <ul className="space-y-2.5">
+            {reqs.map((req) => {
+              const isChecked = checked.has(req.id);
+              return (
+                <li key={req.id}>
                   <button
                     type="button"
-                    onMouseEnter={() => setTooltip(req.id)}
-                    onMouseLeave={() => setTooltip(null)}
-                    onFocus={() => setTooltip(req.id)}
-                    onBlur={() => setTooltip(null)}
-                    className="text-gray-300 hover:text-gray-500 transition mt-0.5"
-                    aria-label="More info"
+                    onClick={() => toggle(req.id)}
+                    className={`w-full flex items-start gap-3 p-3 rounded-xl border-2 text-left transition-all duration-200 ${
+                      isChecked
+                        ? 'border-green-200 bg-green-50'
+                        : 'border-gray-100 bg-gray-50 hover:border-gray-200 hover:bg-gray-100'
+                    }`}
                   >
-                    <HelpCircle size={13} />
-                  </button>
-                  {tooltip === req.id && (
-                    <div className="absolute right-0 top-5 z-20 w-56 bg-gray-900 text-white text-[11px] leading-snug rounded-lg px-3 py-2 shadow-xl">
-                      {req.help}
-                      <div className="absolute -top-1.5 right-1.5 w-2.5 h-2.5 bg-gray-900 rotate-45" />
+                    {/* Checkbox */}
+                    <span className={`mt-0.5 flex-shrink-0 w-5 h-5 rounded-full border-2 flex items-center justify-center transition-all duration-200 ${
+                      isChecked ? 'bg-green-500 border-green-500' : 'bg-white border-gray-300'
+                    }`}>
+                      {isChecked && (
+                        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round">
+                          <polyline points="20 6 9 17 4 12" />
+                        </svg>
+                      )}
+                    </span>
+                    <div className="flex-1 min-w-0">
+                      <p className={`text-sm font-medium leading-snug ${isChecked ? 'text-green-700' : 'text-gray-700'}`}>
+                        {req.label}
+                      </p>
+                      {req.help && !isChecked && (
+                        <p className="text-xs text-gray-400 mt-0.5 leading-snug">{req.help}</p>
+                      )}
                     </div>
-                  )}
-                </div>
-              </li>
-            );
-          })}
-        </ul>
-      )}
+                    {isChecked && (
+                      <CheckCircle size={16} className="text-green-500 flex-shrink-0 mt-0.5" />
+                    )}
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
 
-      {/* Inline hint when collapsed and not done */}
-      {!open && !allDone && (
-        <p className="mt-1.5 text-[11px] text-amber-600">
-          Complete {total - done} requirement{total - done !== 1 ? 's' : ''} to enable Connect
-        </p>
-      )}
+        {/* Footer actions */}
+        <div className="px-6 pb-5 flex gap-3">
+          <button
+            onClick={onClose}
+            className="flex-1 py-2.5 text-sm font-medium text-gray-600 border border-gray-200 rounded-xl hover:bg-gray-50 transition"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={onConfirm}
+            disabled={!allDone}
+            className={`flex-1 py-2.5 text-sm font-semibold text-white rounded-xl transition-all duration-200 ${
+              allDone
+                ? `${platform.btnColor} shadow-lg`
+                : 'bg-gray-200 text-gray-400 cursor-not-allowed'
+            }`}
+          >
+            {allDone ? 'Continue →' : `${done}/${total} completed`}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -214,18 +249,8 @@ export default function ConnectionsPage() {
   const [accounts, setAccounts] = useState([]);
   const [loading, setLoading] = useState(true);
   const syncTriggeredRef = useRef(false);
-  // Tracks which requirement checkboxes are ticked per platform: { [platformId]: Set<itemId> }
-  const [checkedReqs, setCheckedReqs] = useState(() =>
-    Object.fromEntries(Object.keys(PLATFORM_REQUIREMENTS).map((k) => [k, new Set()]))
-  );
-
-  const toggleReq = useCallback((platformId, itemId) => {
-    setCheckedReqs((prev) => {
-      const next = new Set(prev[platformId]);
-      next.has(itemId) ? next.delete(itemId) : next.add(itemId);
-      return { ...prev, [platformId]: next };
-    });
-  }, []);
+  // Modal shown before connecting: null | platform object
+  const [connectModal, setConnectModal] = useState(null);
   // Per-platform loading and error states
   const [connectingPlatform, setConnectingPlatform] = useState(null);
   const [platformError, setPlatformError] = useState(null); // { platformId, message }
@@ -753,9 +778,6 @@ export default function ConnectionsPage() {
               const isConnecting = connectingPlatform === platform.id;
               const isDisconnecting = disconnecting === account?.id;
               const error = platformError?.platformId === platform.id ? platformError.message : null;
-              const reqs = PLATFORM_REQUIREMENTS[platform.id] || [];
-              const platformChecked = checkedReqs[platform.id] || new Set();
-              const allReqsMet = reqs.every((r) => platformChecked.has(r.id));
 
               return (
                 <div
@@ -810,10 +832,9 @@ export default function ConnectionsPage() {
                           </button>
                         ) : (
                           <button
-                            onClick={() => handleConnect(platform)}
-                            disabled={isConnecting || !allReqsMet}
-                            title={!allReqsMet ? 'Complete all requirements below to connect' : undefined}
-                            className={`px-6 py-2.5 ${platform.btnColor} text-white text-sm font-medium rounded-lg transition disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-2 w-full sm:w-auto justify-center`}
+                            onClick={() => setConnectModal(platform)}
+                            disabled={isConnecting}
+                            className={`px-6 py-2.5 ${platform.btnColor} text-white text-sm font-medium rounded-lg transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 w-full sm:w-auto justify-center`}
                           >
                             {isConnecting && <Loader2 size={16} className="animate-spin" />}
                             {isConnecting ? 'Connecting...' : 'Connect'}
@@ -835,15 +856,6 @@ export default function ConnectionsPage() {
                       <AlertCircle size={14} className="flex-shrink-0" />
                       {error}
                     </div>
-                  )}
-
-                  {/* Requirements checklist — shown only when not yet connected and admin */}
-                  {!connected && isAdmin && reqs.length > 0 && (
-                    <RequirementsChecklist
-                      platformId={platform.id}
-                      checked={platformChecked}
-                      onChange={(itemId) => toggleReq(platform.id, itemId)}
-                    />
                   )}
 
                   {/* WhatsApp webhook status panel */}
@@ -1020,6 +1032,19 @@ export default function ConnectionsPage() {
           </div>
         )}
       </div>
+
+      {/* Connect requirements modal */}
+      {connectModal && (
+        <ConnectModal
+          platform={connectModal}
+          onClose={() => setConnectModal(null)}
+          onConfirm={() => {
+            const platform = connectModal;
+            setConnectModal(null);
+            handleConnect(platform);
+          }}
+        />
+      )}
     </div>
   );
 }
