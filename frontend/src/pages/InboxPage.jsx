@@ -630,8 +630,14 @@ export default function InboxPage() {
   const [aiSuggestion, setAiSuggestion] = useState(null);
   const [aiLoading, setAiLoading] = useState(false);
   const [aiError, setAiError] = useState(null);
-  // { used, limit, unlimited } — fetched from /api/plan/usage and updated after each reply
+  // Unique ID returned by the backend for each generated suggestion.
+  // Passed to /consume-reply to ensure one quota unit per suggestion.
+  const [aiReplyId, setAiReplyId] = useState(null);
+  // { used, limit, unlimited } — fetched from /api/plan/usage, updated on consume
   const [aiQuota, setAiQuota] = useState(null);
+  // Client-side Set of replyIds already consumed this session — prevents
+  // double-charging if the user clicks both Copy Text and Use Reply.
+  const consumedReplyIds = useRef(new Set());
 
   // Fetch AI quota on mount so the button can be pre-gated and the counter shown
   useEffect(() => {
@@ -653,9 +659,39 @@ export default function InboxPage() {
   // so suggestions from one chat never bleed into another.
   useEffect(() => {
     setAiSuggestion(null);
+    setAiReplyId(null);
     setAiError(null);
     setAiLoading(false);
   }, [conversationId]);
+
+  // Consume one quota unit for the current suggestion.
+  // Idempotent: the same replyId is consumed at most once per session.
+  const handleConsumeReply = useCallback(async () => {
+    if (!aiReplyId) return; // null replyId = no-FAQ response, nothing to charge
+    if (consumedReplyIds.current.has(aiReplyId)) return; // already consumed
+    consumedReplyIds.current.add(aiReplyId); // mark immediately to prevent races
+
+    try {
+      const res = await api.post('/api/ai/consume-reply', {
+        replyId: aiReplyId,
+        conversationId: conversationIdRef.current,
+        platform: activeConversationRef.current?.connectedAccount?.platform,
+      });
+      if (!res.data.already && res.data.usage) {
+        setAiQuota({
+          used: res.data.usage.used ?? 0,
+          limit: res.data.usage.limit,
+          unlimited: res.data.usage.unlimited || res.data.usage.limit === null,
+        });
+      }
+    } catch (err) {
+      // If 403 AI_LIMIT: update quota state so the button locks
+      const data = err.response?.data;
+      if (err.response?.status === 403 && data?.error === 'AI_LIMIT' && data?.meta?.limit != null) {
+        setAiQuota({ used: data.meta.limit, limit: data.meta.limit, unlimited: false });
+      }
+    }
+  }, [aiReplyId]);
 
   const handleAiRespond = useCallback(async () => {
     const activeId = conversationIdRef.current;
@@ -684,6 +720,7 @@ export default function InboxPage() {
     setAiLoading(true);
     setAiError(null);
     setAiSuggestion(null);
+    setAiReplyId(null);
     try {
       const res = await api.post('/api/ai/generate-reply', {
         conversationId: activeId,
@@ -691,7 +728,9 @@ export default function InboxPage() {
         platform: activeConversationRef.current?.connectedAccount?.platform,
       });
       setAiSuggestion(res.data.reply);
-      // Update local quota counter from the server response
+      // Store the reply ID so consume-reply can reference it
+      setAiReplyId(res.data.replyId || null);
+      // Update quota display from generation response (not yet incremented)
       if (res.data.usage) {
         setAiQuota({
           used: res.data.usage.used ?? 0,
@@ -707,7 +746,6 @@ export default function InboxPage() {
         const used = data.meta?.used ?? data.meta?.limit;
         const limit = data.meta?.limit;
         msg = `AI reply limit reached (${used ?? '?'}/${limit ?? '?'}). Upgrade to continue.`;
-        // Lock the quota state so the button stays disabled
         if (data.meta?.limit != null) {
           setAiQuota({ used: data.meta.limit, limit: data.meta.limit, unlimited: false });
         }
@@ -1593,8 +1631,9 @@ export default function InboxPage() {
                   aiLoading={aiLoading}
                   aiSuggestion={aiSuggestion}
                   aiError={aiError}
-                  onAiUse={(text) => { handleNewMessageChange(text); setAiSuggestion(null); }}
-                  onAiDismiss={() => setAiSuggestion(null)}
+                  onAiUse={(text) => { handleConsumeReply(); handleNewMessageChange(text); setAiSuggestion(null); setAiReplyId(null); }}
+                  onAiCopy={handleConsumeReply}
+                  onAiDismiss={() => { setAiSuggestion(null); setAiReplyId(null); }}
                 />
               ) : (
                 <>
@@ -1615,8 +1654,9 @@ export default function InboxPage() {
                       aiSuggestion={aiSuggestion}
                       aiError={aiError}
                       aiQuota={aiQuota}
-                      onAiUse={(text) => { handleNewMessageChange(text); setAiSuggestion(null); }}
-                      onAiDismiss={() => setAiSuggestion(null)}
+                      onAiUse={(text) => { handleConsumeReply(); handleNewMessageChange(text); setAiSuggestion(null); setAiReplyId(null); }}
+                      onAiCopy={handleConsumeReply}
+                      onAiDismiss={() => { setAiSuggestion(null); setAiReplyId(null); }}
                     />
                   </div>
                   {/* Mobile composer — dark navy with pill input */}
@@ -1633,8 +1673,9 @@ export default function InboxPage() {
                       aiSuggestion={aiSuggestion}
                       aiError={aiError}
                       aiQuota={aiQuota}
-                      onAiUse={(text) => { handleNewMessageChange(text); setAiSuggestion(null); }}
-                      onAiDismiss={() => setAiSuggestion(null)}
+                      onAiUse={(text) => { handleConsumeReply(); handleNewMessageChange(text); setAiSuggestion(null); setAiReplyId(null); }}
+                      onAiCopy={handleConsumeReply}
+                      onAiDismiss={() => { setAiSuggestion(null); setAiReplyId(null); }}
                     />
                   </div>
                 </>
@@ -2154,7 +2195,7 @@ function SimpleEmojiPicker({ onSelect, onClose }) {
 
 const ChatComposer = memo(function ChatComposer({
   newMessage, setNewMessage, handleSend, sending, attachments, onAttachClick,
-  onAiRespond, aiLoading, aiSuggestion, aiError, aiQuota, onAiUse, onAiDismiss,
+  onAiRespond, aiLoading, aiSuggestion, aiError, aiQuota, onAiUse, onAiCopy, onAiDismiss,
 }) {
   const hasContent = newMessage.trim() || attachments.length > 0;
   const aiQuotaReached = !!(aiQuota && !aiQuota.unlimited && aiQuota.limit !== null && aiQuota.used >= aiQuota.limit);
@@ -2220,7 +2261,7 @@ const ChatComposer = memo(function ChatComposer({
             <div className="flex items-center justify-end gap-2 pt-1 border-t border-[#1787FE]/10">
               <button
                 type="button"
-                onClick={() => navigator.clipboard.writeText(aiSuggestion)}
+                onClick={() => { navigator.clipboard.writeText(aiSuggestion); onAiCopy?.(); }}
                 className="px-3 py-1.5 text-xs font-semibold border border-gray-300 bg-white rounded-lg hover:bg-gray-50 transition whitespace-nowrap"
               >
                 Copy Text
@@ -2330,7 +2371,7 @@ const ChatComposer = memo(function ChatComposer({
 
 function MobileChatComposer({
   newMessage, setNewMessage, handleSend, sending, attachments, onAttachClick,
-  onAiRespond, aiLoading, aiSuggestion, aiError, aiQuota, onAiUse, onAiDismiss,
+  onAiRespond, aiLoading, aiSuggestion, aiError, aiQuota, onAiUse, onAiCopy, onAiDismiss,
 }) {
   const hasContent = newMessage.trim() || attachments.length > 0;
   const aiQuotaReached = !!(aiQuota && !aiQuota.unlimited && aiQuota.limit !== null && aiQuota.used >= aiQuota.limit);
@@ -2372,7 +2413,7 @@ function MobileChatComposer({
             <div className="flex items-center justify-end gap-2 pt-1 border-t border-white/10">
               <button
                 type="button"
-                onClick={() => navigator.clipboard.writeText(aiSuggestion)}
+                onClick={() => { navigator.clipboard.writeText(aiSuggestion); onAiCopy?.(); }}
                 className="px-3 py-1.5 text-xs font-semibold border border-white/20 bg-transparent text-white/80 rounded-lg hover:bg-white/10 transition"
               >
                 Copy Text

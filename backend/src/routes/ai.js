@@ -1,9 +1,10 @@
+import { randomUUID } from 'crypto';
 import { Router } from 'express';
 import OpenAI from 'openai';
 import { authenticate, requireActiveSubscription } from '../middleware/auth.js';
 import {
   assertAndConsumeAiReply,
-  refundAiReply,
+  checkAiReplyQuota,
   PlanLimitError,
 } from '../services/planGuard.js';
 import prisma from '../utils/prisma.js';
@@ -12,6 +13,21 @@ import { searchSimilarFaqs } from '../services/embeddings.js';
 const router = Router();
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
+/**
+ * In-memory idempotency store for consume-reply.
+ * Maps replyId → { userId, consumedAt } so the same suggestion can only
+ * consume one quota unit, even if the user clicks Use Reply then Copy Text.
+ * TTL: 24 h. Cleaned up hourly.
+ */
+const _consumedReplies = new Map();
+const _REPLY_TTL_MS = 24 * 60 * 60 * 1000;
+setInterval(() => {
+  const cutoff = Date.now() - _REPLY_TTL_MS;
+  for (const [id, entry] of _consumedReplies) {
+    if (entry.consumedAt < cutoff) _consumedReplies.delete(id);
+  }
+}, 60 * 60 * 1000);
 
 /**
  * Build the user-facing prompt using the structured template.
@@ -58,11 +74,12 @@ Answer:`;
  * POST /api/ai/generate-reply
  * Body: { conversationId?, prompt, platform? }
  *
- * 1. Quota check + consume
- * 2. Fetch workspace FAQs (vector search → plain fallback)
- * 3. Build structured prompt
- * 4. Call OpenAI gpt-4o-mini
- * 5. Return reply + usage info
+ * Generates an AI reply suggestion WITHOUT consuming quota.
+ * Quota is only consumed when the user explicitly acts on the suggestion
+ * (Use Reply or Copy Text) via POST /api/ai/consume-reply.
+ *
+ * Returns a unique `replyId` that the frontend passes to consume-reply to
+ * prevent double-counting the same suggestion.
  */
 router.post('/generate-reply', authenticate, requireActiveSubscription, async (req, res) => {
   const { conversationId, prompt, platform } = req.body || {};
@@ -71,13 +88,10 @@ router.post('/generate-reply', authenticate, requireActiveSubscription, async (r
     return res.status(400).json({ error: 'prompt is required' });
   }
 
-  // 1. Quota check + atomic consume
+  // Read-only quota gate — prevents generating if the user is already over limit
   let quota;
   try {
-    quota = await assertAndConsumeAiReply(req.user, {
-      context: 'ai/generate-reply',
-      meta: { conversationId, platform },
-    });
+    quota = await checkAiReplyQuota(req.user);
   } catch (err) {
     if (err instanceof PlanLimitError) {
       return res.status(err.statusCode).json(err.toJSON());
@@ -86,11 +100,14 @@ router.post('/generate-reply', authenticate, requireActiveSubscription, async (r
     return res.status(500).json({ error: 'AI quota check failed' });
   }
 
+  // Unique ID for this suggestion — used by consume-reply for idempotency
+  const replyId = randomUUID();
+
   try {
     // Team members share the workspace owner's knowledge base.
     const faqOwnerId = req.user.inviterUserId || req.user.id;
 
-    // 2. Fetch FAQs: try vector search first, fall back to all FAQs
+    // Fetch FAQs: try vector search first, fall back to all FAQs
     const [relevantFaqs, user] = await Promise.all([
       searchSimilarFaqs(faqOwnerId, prompt, 5),
       prisma.user.findUnique({
@@ -106,7 +123,6 @@ router.post('/generate-reply', authenticate, requireActiveSubscription, async (r
     console.log(`[AI] Query: "${prompt.slice(0, 80)}" | Vector: ${relevantFaqs.length} results, ${matchedFaqs.length} above ${SIMILARITY_THRESHOLD} | owner: ${faqOwnerId} (${companyName})`);
 
     if (matchedFaqs.length === 0) {
-      // Fallback: fetch all FAQs for this workspace
       console.log(`[AI] Falling back to all FAQs for owner ${faqOwnerId}`);
       const allFaqs = await prisma.faq.findMany({
         where: { userId: faqOwnerId },
@@ -115,15 +131,12 @@ router.post('/generate-reply', authenticate, requireActiveSubscription, async (r
       });
 
       if (allFaqs.length === 0) {
-        await refundAiReply(req.user, { meta: { conversationId, platform } });
         console.warn(`[AI] No FAQs found for owner ${faqOwnerId} (requester: ${req.user.id})`);
+        // No quota consumed — reply is useless so we don't charge
         return res.json({
           reply: "I don't have enough data about this question.",
-          usage: {
-            used: Math.max(0, quota.used - 1),
-            limit: quota.limit,
-            unlimited: quota.unlimited,
-          },
+          replyId: null, // no replyId = consume-reply won't be called
+          usage: { used: quota.used, limit: quota.limit, unlimited: quota.unlimited },
           planWarning: null,
           _debug: { faqOwnerId, requesterId: req.user.id, faqCount: 0 },
         });
@@ -133,16 +146,13 @@ router.post('/generate-reply', authenticate, requireActiveSubscription, async (r
       console.log(`[AI] Using ${allFaqs.length} plain FAQs as context`);
     }
 
-    // 3. Format FAQ context
+    // Format FAQ context
     const context = matchedFaqs
       .slice(0, 10)
       .map((f, i) => `${i + 1}. Q: ${f.question}\n   A: ${f.answer}`)
       .join('\n\n');
 
-    console.log(`[AI] FAQ Context:\n${context}`);
-    console.log(`[AI] Final prompt sent to model:\n${buildPrompt(context, prompt)}`);
-
-    // 4. Call OpenAI with the structured template
+    // Call OpenAI
     const response = await openai.chat.completions.create({
       model: 'gpt-4o-mini',
       max_tokens: 300,
@@ -161,22 +171,68 @@ router.post('/generate-reply', authenticate, requireActiveSubscription, async (r
     const text = response.choices[0]?.message?.content?.trim()
       || "I don't have enough data about this question.";
 
-    console.log(`[AI] Response: "${text.slice(0, 120)}" | user: ${req.user.id} | used: ${quota.used}/${quota.unlimited ? '∞' : quota.limit}`);
+    console.log(`[AI] Response: "${text.slice(0, 120)}" | user: ${req.user.id} | quota: ${quota.used ?? '?'}/${quota.unlimited ? '∞' : quota.limit} | replyId: ${replyId}`);
 
     return res.json({
       reply: text,
-      usage: {
-        used: quota.used,
-        limit: quota.limit,
-        unlimited: quota.unlimited,
-      },
-      planWarning: quota.ok ? null : quota.violation,
+      replyId,
+      usage: { used: quota.used, limit: quota.limit, unlimited: quota.unlimited },
+      planWarning: null,
     });
   } catch (providerErr) {
-    await refundAiReply(req.user, { meta: { conversationId, platform } });
+    // No quota was consumed, so no refund needed
     console.error('[ai/generate-reply] provider error:', providerErr);
     return res.status(502).json({ error: 'AI provider failed. Please try again.' });
   }
+});
+
+/**
+ * POST /api/ai/consume-reply
+ * Body: { replyId, conversationId?, platform? }
+ *
+ * Atomically increments the AI reply counter for the workspace owner.
+ * Idempotent: the same replyId can only consume quota once (tracked in
+ * the in-memory _consumedReplies Map with a 24-hour TTL).
+ *
+ * Called by the frontend when the user clicks "Use Reply" or "Copy Text".
+ */
+router.post('/consume-reply', authenticate, requireActiveSubscription, async (req, res) => {
+  const { replyId, conversationId, platform } = req.body || {};
+
+  // No replyId means the generation returned null (e.g. no FAQ data) — nothing to consume
+  if (!replyId) {
+    return res.json({ already: false, usage: null });
+  }
+
+  // Idempotency check — same replyId already consumed
+  const existing = _consumedReplies.get(replyId);
+  if (existing) {
+    return res.json({ already: true, usage: null });
+  }
+
+  let quota;
+  try {
+    quota = await assertAndConsumeAiReply(req.user, {
+      context: 'ai/consume-reply',
+      meta: { conversationId, platform },
+    });
+  } catch (err) {
+    if (err instanceof PlanLimitError) {
+      return res.status(err.statusCode).json(err.toJSON());
+    }
+    console.error('[ai/consume-reply] quota consume failed:', err);
+    return res.status(500).json({ error: 'AI quota consume failed' });
+  }
+
+  // Mark as consumed so subsequent calls with this replyId are no-ops
+  _consumedReplies.set(replyId, { userId: req.user.id, consumedAt: Date.now() });
+
+  console.log(`[AI] consume-reply | user: ${req.user.id} | replyId: ${replyId} | used: ${quota.used}/${quota.unlimited ? '∞' : quota.limit}`);
+
+  return res.json({
+    already: false,
+    usage: { used: quota.used, limit: quota.limit, unlimited: quota.unlimited },
+  });
 });
 
 export default router;
