@@ -427,6 +427,7 @@ function fmtDate(dateLike) {
 function PlanTab({ user }) {
   const { refreshUser } = useAuth();
   const navigate = useNavigate();
+  const [aiUsage, setAiUsage] = useState(null); // { used, limit } for starter plan card
 
   // Team members cannot manage the subscription — show a read-only info card.
   if (user?.inviterUserId) {
@@ -474,10 +475,15 @@ function PlanTab({ user }) {
   const loadStatus = () => {
     setLoading(true);
     setError('');
-    api.get('/api/subscription/status')
-      .then((r) => {
-        setStatus(r.data);
-        if (r.data.billingCycle) setCycle(r.data.billingCycle);
+    Promise.all([
+      api.get('/api/subscription/status'),
+      api.get('/api/plan/usage').catch(() => null),
+    ])
+      .then(([subRes, usageRes]) => {
+        setStatus(subRes.data);
+        if (subRes.data.billingCycle) setCycle(subRes.data.billingCycle);
+        const ai = usageRes?.data?.usage?.aiReplies;
+        if (ai) setAiUsage(ai);
       })
       .catch((err) => {
         console.error('[PlanTab] /subscription/status failed:', err.response?.status, err.message);
@@ -671,7 +677,34 @@ function PlanTab({ user }) {
                     </span>
                   )}
                 </div>
-                <p className="text-xs text-gray-500 leading-relaxed flex-1">{info.features}</p>
+                {/* Starter plan: replace static AI line with live usage counter */}
+                {planId === 'starter' && aiUsage && aiUsage.limit !== null ? (
+                  <div className="flex-1 space-y-2">
+                    <p className="text-xs text-gray-500 leading-relaxed">1 social inbox · Basic dashboard</p>
+                    <div className="space-y-1">
+                      <div className="flex items-center justify-between text-[11px]">
+                        <span className="font-medium text-gray-600">AI Replies this month</span>
+                        <span className={`font-bold ${aiUsage.used >= aiUsage.limit ? 'text-red-600' : 'text-gray-700'}`}>
+                          {aiUsage.used}/{aiUsage.limit}
+                        </span>
+                      </div>
+                      <div className="h-1.5 w-full rounded-full bg-gray-100 overflow-hidden">
+                        <div
+                          className="h-full rounded-full transition-all duration-500"
+                          style={{
+                            width: `${Math.min(100, (aiUsage.used / aiUsage.limit) * 100)}%`,
+                            backgroundColor: aiUsage.used >= aiUsage.limit ? '#ef4444' : aiUsage.used / aiUsage.limit >= 0.8 ? '#f59e0b' : '#10b981',
+                          }}
+                        />
+                      </div>
+                      {aiUsage.used >= aiUsage.limit && (
+                        <p className="text-[10px] text-red-600 font-medium">Limit reached · Upgrade to continue</p>
+                      )}
+                    </div>
+                  </div>
+                ) : (
+                  <p className="text-xs text-gray-500 leading-relaxed flex-1">{info.features}</p>
+                )}
                 {isUpgrade && (
                   <button
                     onClick={() => handleUpgrade(planId)}

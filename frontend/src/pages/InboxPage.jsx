@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import PlatformBadge, { PlatformIcon } from '../components/PlatformBadge.jsx';
 import { useLinkAccounts } from '../context/LinkAccountsContext.jsx';
+import { useAuth } from '../context/AuthContext.jsx';
 
 // ═══════════════════════════════════════════════════════════════════
 // DEFERRED LOADING HOOK — avoids skeleton flash for fast loads
@@ -82,6 +83,7 @@ const ITEMS_PER_PAGE = 10;
 export default function InboxPage() {
   const { conversationId } = useParams();
   const navigate = useNavigate();
+  const { user } = useAuth();
   const [conversations, setConversations] = useState(() => sessionGet(SESSION_KEYS.CONVERSATIONS) || []);
   const [messages, setMessages] = useState([]);
   const [activeConversation, setActiveConversation] = useState(null);
@@ -628,6 +630,24 @@ export default function InboxPage() {
   const [aiSuggestion, setAiSuggestion] = useState(null);
   const [aiLoading, setAiLoading] = useState(false);
   const [aiError, setAiError] = useState(null);
+  // { used, limit, unlimited } — fetched from /api/plan/usage and updated after each reply
+  const [aiQuota, setAiQuota] = useState(null);
+
+  // Fetch AI quota on mount so the button can be pre-gated and the counter shown
+  useEffect(() => {
+    api.get('/api/plan/usage')
+      .then((res) => {
+        const ai = res.data.usage?.aiReplies;
+        if (ai) {
+          setAiQuota({
+            used: ai.used ?? 0,
+            limit: ai.limit,              // null = unlimited
+            unlimited: ai.limit === null,
+          });
+        }
+      })
+      .catch(() => {}); // non-fatal — degrade gracefully
+  }, []);
 
   // Clear AI state whenever the user switches to a different conversation
   // so suggestions from one chat never bleed into another.
@@ -640,6 +660,13 @@ export default function InboxPage() {
   const handleAiRespond = useCallback(async () => {
     const activeId = conversationIdRef.current;
     if (!activeId || aiLoading) return;
+
+    // Frontend quota gate — prevents the API call and gives instant feedback
+    if (aiQuota && !aiQuota.unlimited && aiQuota.limit !== null && aiQuota.used >= aiQuota.limit) {
+      setAiError(`AI reply limit reached (${aiQuota.used}/${aiQuota.limit}). Upgrade to continue.`);
+      setTimeout(() => setAiError(null), 5000);
+      return;
+    }
 
     // Prefer the last inbound (customer) message; fall back to the last message
     // of any direction so the AI can still generate a reply even when the
@@ -664,18 +691,38 @@ export default function InboxPage() {
         platform: activeConversationRef.current?.connectedAccount?.platform,
       });
       setAiSuggestion(res.data.reply);
+      // Update local quota counter from the server response
+      if (res.data.usage) {
+        setAiQuota({
+          used: res.data.usage.used ?? 0,
+          limit: res.data.usage.limit,
+          unlimited: res.data.usage.unlimited || res.data.usage.limit === null,
+        });
+      }
     } catch (err) {
       const status = err.response?.status;
-      const serverMsg = err.response?.data?.error;
-      const msg = serverMsg && status && status < 500
-        ? serverMsg
-        : 'Something went wrong. Please try again.';
+      const data = err.response?.data;
+      let msg;
+      if (status === 403 && data?.error === 'AI_LIMIT') {
+        const used = data.meta?.used ?? data.meta?.limit;
+        const limit = data.meta?.limit;
+        msg = `AI reply limit reached (${used ?? '?'}/${limit ?? '?'}). Upgrade to continue.`;
+        // Lock the quota state so the button stays disabled
+        if (data.meta?.limit != null) {
+          setAiQuota({ used: data.meta.limit, limit: data.meta.limit, unlimited: false });
+        }
+      } else {
+        const serverMsg = data?.message || data?.error;
+        msg = serverMsg && status && status < 500
+          ? serverMsg
+          : 'Something went wrong. Please try again.';
+      }
       setAiError(msg);
       setTimeout(() => setAiError(null), 5000);
     } finally {
       setAiLoading(false);
     }
-  }, [aiLoading, messages, newMessage]);
+  }, [aiLoading, aiQuota, messages, newMessage]);
 
   useEffect(() => () => { if (draftTimerRef.current) clearTimeout(draftTimerRef.current); }, []);
 
@@ -1567,6 +1614,7 @@ export default function InboxPage() {
                       aiLoading={aiLoading}
                       aiSuggestion={aiSuggestion}
                       aiError={aiError}
+                      aiQuota={aiQuota}
                       onAiUse={(text) => { handleNewMessageChange(text); setAiSuggestion(null); }}
                       onAiDismiss={() => setAiSuggestion(null)}
                     />
@@ -1584,6 +1632,7 @@ export default function InboxPage() {
                       aiLoading={aiLoading}
                       aiSuggestion={aiSuggestion}
                       aiError={aiError}
+                      aiQuota={aiQuota}
                       onAiUse={(text) => { handleNewMessageChange(text); setAiSuggestion(null); }}
                       onAiDismiss={() => setAiSuggestion(null)}
                     />
@@ -2105,9 +2154,10 @@ function SimpleEmojiPicker({ onSelect, onClose }) {
 
 const ChatComposer = memo(function ChatComposer({
   newMessage, setNewMessage, handleSend, sending, attachments, onAttachClick,
-  onAiRespond, aiLoading, aiSuggestion, aiError, onAiUse, onAiDismiss,
+  onAiRespond, aiLoading, aiSuggestion, aiError, aiQuota, onAiUse, onAiDismiss,
 }) {
   const hasContent = newMessage.trim() || attachments.length > 0;
+  const aiQuotaReached = !!(aiQuota && !aiQuota.unlimited && aiQuota.limit !== null && aiQuota.used >= aiQuota.limit);
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const inputRef = useRef(null);
 
@@ -2187,16 +2237,36 @@ const ChatComposer = memo(function ChatComposer({
         </div>
       )}
 
+      {/* Quota banner — only shown when the limit is reached */}
+      {aiQuotaReached && (
+        <div className="mx-1 mb-1 px-3 py-2 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-700 flex items-center gap-2">
+          <Sparkles size={12} className="text-amber-500 flex-shrink-0" />
+          <span>AI reply limit reached ({aiQuota.used}/{aiQuota.limit}).{' '}
+            <a href="/settings?tab=plan" className="font-semibold underline hover:text-amber-900">Upgrade to continue</a>
+          </span>
+        </div>
+      )}
+
       <form onSubmit={handleSend} className="flex items-center gap-3">
         {/* AI Respond — generates a suggestion; user reviews then clicks Use Reply */}
         <button
           type="button"
           onClick={onAiRespond}
-          disabled={aiLoading}
-          className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-[#1787FE] bg-blue-50 hover:bg-blue-100 rounded-full transition whitespace-nowrap disabled:opacity-50 flex-shrink-0"
+          disabled={aiLoading || aiQuotaReached}
+          title={aiQuotaReached ? `AI reply limit reached (${aiQuota.used}/${aiQuota.limit}). Upgrade to continue.` : undefined}
+          className={`flex items-center gap-2 px-3 py-2 text-sm font-medium rounded-full transition whitespace-nowrap flex-shrink-0 ${
+            aiQuotaReached
+              ? 'text-gray-400 bg-gray-100 cursor-not-allowed opacity-60'
+              : 'text-[#1787FE] bg-blue-50 hover:bg-blue-100 disabled:opacity-50'
+          }`}
         >
           <Sparkles size={14} className={aiLoading ? 'animate-pulse' : ''} />
           AI Respond
+          {aiQuota && !aiQuota.unlimited && aiQuota.limit !== null && (
+            <span className={`text-[10px] font-bold ml-0.5 ${aiQuotaReached ? 'text-gray-400' : 'text-[#1787FE]/60'}`}>
+              {aiQuota.used}/{aiQuota.limit}
+            </span>
+          )}
         </button>
 
         {/* Input */}
@@ -2260,12 +2330,22 @@ const ChatComposer = memo(function ChatComposer({
 
 function MobileChatComposer({
   newMessage, setNewMessage, handleSend, sending, attachments, onAttachClick,
-  onAiRespond, aiLoading, aiSuggestion, aiError, onAiUse, onAiDismiss,
+  onAiRespond, aiLoading, aiSuggestion, aiError, aiQuota, onAiUse, onAiDismiss,
 }) {
   const hasContent = newMessage.trim() || attachments.length > 0;
+  const aiQuotaReached = !!(aiQuota && !aiQuota.unlimited && aiQuota.limit !== null && aiQuota.used >= aiQuota.limit);
 
   return (
     <div className="bg-[#0B1628] px-3 py-3 border-t border-white/5 space-y-2">
+      {/* Quota banner — mobile dark theme */}
+      {aiQuotaReached && (
+        <div className="px-3 py-2 bg-amber-900/30 border border-amber-500/30 rounded-xl text-xs text-amber-400 flex items-center gap-2">
+          <Sparkles size={12} className="text-amber-400 flex-shrink-0" />
+          <span>AI limit reached ({aiQuota.used}/{aiQuota.limit}).{' '}
+            <a href="/settings?tab=plan" className="font-semibold underline">Upgrade</a>
+          </span>
+        </div>
+      )}
       {/* AI Suggestion Box — same Copy / Use Reply flow as desktop */}
       {(aiSuggestion || aiLoading || aiError) && (
         <div className="rounded-xl border border-[#1787FE]/40 bg-[#0F1D33] px-3 py-2.5 flex flex-col gap-2">
@@ -2335,11 +2415,12 @@ function MobileChatComposer({
         <button
           type="button"
           onClick={onAiRespond}
-          disabled={aiLoading}
-          className="w-10 h-10 rounded-full bg-white flex items-center justify-center flex-shrink-0 disabled:opacity-50 transition"
+          disabled={aiLoading || aiQuotaReached}
+          title={aiQuotaReached ? `AI reply limit reached (${aiQuota.used}/${aiQuota.limit}). Upgrade to continue.` : 'AI Respond'}
+          className={`w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0 disabled:opacity-50 transition ${aiQuotaReached ? 'bg-gray-200' : 'bg-white'}`}
           aria-label="AI Respond"
         >
-          <Sparkles size={18} className={`text-[#1787FE] ${aiLoading ? 'animate-pulse' : ''}`} />
+          <Sparkles size={18} className={`${aiQuotaReached ? 'text-gray-400' : 'text-[#1787FE]'} ${aiLoading ? 'animate-pulse' : ''}`} />
         </button>
 
         {/* Camera */}
