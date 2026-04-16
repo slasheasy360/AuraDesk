@@ -2,7 +2,165 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import api from '../services/api.js';
 import { PlatformIcon } from '../components/PlatformBadge.jsx';
 import { useAuth } from '../context/AuthContext.jsx';
-import { Link2, CheckCircle, Trash2, Loader2, AlertCircle, RefreshCw, Wifi, WifiOff, Lock } from 'lucide-react';
+import { Link2, CheckCircle, Trash2, Loader2, AlertCircle, RefreshCw, Wifi, WifiOff, Lock, ChevronDown, ChevronUp, HelpCircle } from 'lucide-react';
+
+/* ─── Per-platform prerequisites the user must acknowledge before connecting ─── */
+const PLATFORM_REQUIREMENTS = {
+  whatsapp: [
+    {
+      id: 'business_account',
+      label: 'I have a WhatsApp Business account',
+      help: 'Personal WhatsApp accounts cannot connect to the API. Download the WhatsApp Business app and set one up first.',
+    },
+    {
+      id: 'unused_number',
+      label: 'My phone number is not already connected to another account',
+      help: 'Each phone number can only be linked to one WhatsApp Business API account at a time.',
+    },
+    {
+      id: 'no_existing',
+      label: 'No existing WhatsApp connection is active (or I\'ve already disconnected it)',
+      help: 'Only one WhatsApp Business account can be active per workspace. Disconnect any existing one first.',
+    },
+  ],
+  instagram: [
+    {
+      id: 'business_creator',
+      label: 'I have an Instagram Business or Creator account',
+      help: 'Personal accounts cannot receive DMs via the API. Go to Instagram → Settings → Account → Switch to Professional Account.',
+    },
+    {
+      id: 'linked_page',
+      label: 'My Instagram account is linked to a Facebook Page',
+      help: 'Required by Meta. Go to Facebook → Settings → Linked Accounts → Instagram and connect your account.',
+    },
+  ],
+  facebook: [
+    {
+      id: 'page_admin',
+      label: 'I am an admin of the Facebook Page I want to connect',
+      help: 'Only Page admins can authorize Messenger API access. Check your role at facebook.com/settings?tab=roles.',
+    },
+    {
+      id: 'grant_permissions',
+      label: 'I am ready to grant the required permissions during the sign-in flow',
+      help: 'The popup will request: manage_pages, pages_messaging, and pages_read_engagement.',
+    },
+  ],
+  gmail: [
+    {
+      id: 'valid_account',
+      label: 'I have a valid Gmail or Google Workspace account',
+      help: 'Any Google account with Gmail enabled works. Google Workspace accounts may need admin approval.',
+    },
+    {
+      id: 'grant_access',
+      label: 'I am ready to grant AuraDesk access during the Google sign-in flow',
+      help: 'Google will ask you to allow AuraDesk to read and send emails on your behalf.',
+    },
+  ],
+};
+
+/* ─── Inline requirements checklist component ─── */
+function RequirementsChecklist({ platformId, checked, onChange }) {
+  const [open, setOpen] = useState(false);
+  const [tooltip, setTooltip] = useState(null);
+  const reqs = PLATFORM_REQUIREMENTS[platformId] || [];
+  const total = reqs.length;
+  const done = reqs.filter((r) => checked.has(r.id)).length;
+  const allDone = done === total;
+
+  return (
+    <div className="mt-3 border-t border-gray-100 pt-3">
+      {/* Header row — progress + expand toggle */}
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="w-full flex items-center justify-between text-left group"
+      >
+        <div className="flex items-center gap-2">
+          <span className="text-xs font-semibold text-gray-600 uppercase tracking-wide">
+            Requirements
+          </span>
+          <span
+            className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+              allDone
+                ? 'bg-green-100 text-green-700'
+                : 'bg-amber-100 text-amber-700'
+            }`}
+          >
+            {done}/{total} completed
+          </span>
+        </div>
+        {open ? (
+          <ChevronUp size={14} className="text-gray-400 group-hover:text-gray-600 transition" />
+        ) : (
+          <ChevronDown size={14} className="text-gray-400 group-hover:text-gray-600 transition" />
+        )}
+      </button>
+
+      {/* Checklist */}
+      {open && (
+        <ul className="mt-2.5 space-y-2">
+          {reqs.map((req) => {
+            const isChecked = checked.has(req.id);
+            return (
+              <li key={req.id} className="flex items-start gap-2.5">
+                <button
+                  type="button"
+                  onClick={() => onChange(req.id)}
+                  aria-pressed={isChecked}
+                  className={`mt-0.5 flex-shrink-0 w-4 h-4 rounded border transition-all duration-150 flex items-center justify-center ${
+                    isChecked
+                      ? 'bg-green-500 border-green-500'
+                      : 'bg-white border-gray-300 hover:border-gray-500'
+                  }`}
+                  aria-label={req.label}
+                >
+                  {isChecked && (
+                    <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round">
+                      <polyline points="20 6 9 17 4 12" />
+                    </svg>
+                  )}
+                </button>
+                <span className={`text-xs leading-snug flex-1 ${isChecked ? 'text-green-700 line-through opacity-70' : 'text-gray-700'}`}>
+                  {req.label}
+                </span>
+                {/* Help tooltip trigger */}
+                <div className="relative flex-shrink-0">
+                  <button
+                    type="button"
+                    onMouseEnter={() => setTooltip(req.id)}
+                    onMouseLeave={() => setTooltip(null)}
+                    onFocus={() => setTooltip(req.id)}
+                    onBlur={() => setTooltip(null)}
+                    className="text-gray-300 hover:text-gray-500 transition mt-0.5"
+                    aria-label="More info"
+                  >
+                    <HelpCircle size={13} />
+                  </button>
+                  {tooltip === req.id && (
+                    <div className="absolute right-0 top-5 z-20 w-56 bg-gray-900 text-white text-[11px] leading-snug rounded-lg px-3 py-2 shadow-xl">
+                      {req.help}
+                      <div className="absolute -top-1.5 right-1.5 w-2.5 h-2.5 bg-gray-900 rotate-45" />
+                    </div>
+                  )}
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+
+      {/* Inline hint when collapsed and not done */}
+      {!open && !allDone && (
+        <p className="mt-1.5 text-[11px] text-amber-600">
+          Complete {total - done} requirement{total - done !== 1 ? 's' : ''} to enable Connect
+        </p>
+      )}
+    </div>
+  );
+}
 
 const platforms = [
   {
@@ -56,6 +214,18 @@ export default function ConnectionsPage() {
   const [accounts, setAccounts] = useState([]);
   const [loading, setLoading] = useState(true);
   const syncTriggeredRef = useRef(false);
+  // Tracks which requirement checkboxes are ticked per platform: { [platformId]: Set<itemId> }
+  const [checkedReqs, setCheckedReqs] = useState(() =>
+    Object.fromEntries(Object.keys(PLATFORM_REQUIREMENTS).map((k) => [k, new Set()]))
+  );
+
+  const toggleReq = useCallback((platformId, itemId) => {
+    setCheckedReqs((prev) => {
+      const next = new Set(prev[platformId]);
+      next.has(itemId) ? next.delete(itemId) : next.add(itemId);
+      return { ...prev, [platformId]: next };
+    });
+  }, []);
   // Per-platform loading and error states
   const [connectingPlatform, setConnectingPlatform] = useState(null);
   const [platformError, setPlatformError] = useState(null); // { platformId, message }
@@ -583,6 +753,9 @@ export default function ConnectionsPage() {
               const isConnecting = connectingPlatform === platform.id;
               const isDisconnecting = disconnecting === account?.id;
               const error = platformError?.platformId === platform.id ? platformError.message : null;
+              const reqs = PLATFORM_REQUIREMENTS[platform.id] || [];
+              const platformChecked = checkedReqs[platform.id] || new Set();
+              const allReqsMet = reqs.every((r) => platformChecked.has(r.id));
 
               return (
                 <div
@@ -638,8 +811,9 @@ export default function ConnectionsPage() {
                         ) : (
                           <button
                             onClick={() => handleConnect(platform)}
-                            disabled={isConnecting}
-                            className={`px-6 py-2.5 ${platform.btnColor} text-white text-sm font-medium rounded-lg transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 w-full sm:w-auto justify-center`}
+                            disabled={isConnecting || !allReqsMet}
+                            title={!allReqsMet ? 'Complete all requirements below to connect' : undefined}
+                            className={`px-6 py-2.5 ${platform.btnColor} text-white text-sm font-medium rounded-lg transition disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-2 w-full sm:w-auto justify-center`}
                           >
                             {isConnecting && <Loader2 size={16} className="animate-spin" />}
                             {isConnecting ? 'Connecting...' : 'Connect'}
@@ -661,6 +835,15 @@ export default function ConnectionsPage() {
                       <AlertCircle size={14} className="flex-shrink-0" />
                       {error}
                     </div>
+                  )}
+
+                  {/* Requirements checklist — shown only when not yet connected and admin */}
+                  {!connected && isAdmin && reqs.length > 0 && (
+                    <RequirementsChecklist
+                      platformId={platform.id}
+                      checked={platformChecked}
+                      onChange={(itemId) => toggleReq(platform.id, itemId)}
+                    />
                   )}
 
                   {/* WhatsApp webhook status panel */}
