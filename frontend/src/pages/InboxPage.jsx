@@ -630,11 +630,13 @@ export default function InboxPage() {
   const [aiSuggestion, setAiSuggestion] = useState(null);
   const [aiLoading, setAiLoading] = useState(false);
   const [aiError, setAiError] = useState(null);
-  // Unique ID returned by the backend for each generated suggestion.
-  // Passed to /consume-reply to ensure one quota unit per suggestion.
-  const [aiReplyId, setAiReplyId] = useState(null);
   // { used, limit, unlimited } — fetched from /api/plan/usage, updated on consume
   const [aiQuota, setAiQuota] = useState(null);
+
+  // Ref (not state) for the current suggestion's replyId.
+  // Using a ref means handleConsumeReply always reads the current value
+  // without needing it in a useCallback dep array — eliminates stale closure.
+  const aiReplyIdRef = useRef(null);
   // Client-side Set of replyIds already consumed this session — prevents
   // double-charging if the user clicks both Copy Text and Use Reply.
   const consumedReplyIds = useRef(new Set());
@@ -659,7 +661,7 @@ export default function InboxPage() {
   // so suggestions from one chat never bleed into another.
   useEffect(() => {
     setAiSuggestion(null);
-    setAiReplyId(null);
+    aiReplyIdRef.current = null;
     setAiError(null);
     setAiLoading(false);
   }, [conversationId]);
@@ -667,13 +669,14 @@ export default function InboxPage() {
   // Consume one quota unit for the current suggestion.
   // Idempotent: the same replyId is consumed at most once per session.
   const handleConsumeReply = useCallback(async () => {
-    if (!aiReplyId) return; // null replyId = no-FAQ response, nothing to charge
-    if (consumedReplyIds.current.has(aiReplyId)) return; // already consumed
-    consumedReplyIds.current.add(aiReplyId); // mark immediately to prevent races
+    const replyId = aiReplyIdRef.current;
+    if (!replyId) return; // null replyId = no-FAQ response, nothing to charge
+    if (consumedReplyIds.current.has(replyId)) return; // already consumed
+    consumedReplyIds.current.add(replyId); // mark immediately to prevent races
 
     try {
       const res = await api.post('/api/ai/consume-reply', {
-        replyId: aiReplyId,
+        replyId,
         conversationId: conversationIdRef.current,
         platform: activeConversationRef.current?.connectedAccount?.platform,
       });
@@ -691,7 +694,7 @@ export default function InboxPage() {
         setAiQuota({ used: data.meta.limit, limit: data.meta.limit, unlimited: false });
       }
     }
-  }, [aiReplyId]);
+  }, []); // empty deps — reads from ref, always current
 
   const handleAiRespond = useCallback(async () => {
     const activeId = conversationIdRef.current;
@@ -720,7 +723,7 @@ export default function InboxPage() {
     setAiLoading(true);
     setAiError(null);
     setAiSuggestion(null);
-    setAiReplyId(null);
+    aiReplyIdRef.current = null;
     try {
       const res = await api.post('/api/ai/generate-reply', {
         conversationId: activeId,
@@ -729,7 +732,7 @@ export default function InboxPage() {
       });
       setAiSuggestion(res.data.reply);
       // Store the reply ID so consume-reply can reference it
-      setAiReplyId(res.data.replyId || null);
+      aiReplyIdRef.current = res.data.replyId || null;
       // Update quota display from generation response (not yet incremented)
       if (res.data.usage) {
         setAiQuota({
@@ -1631,9 +1634,9 @@ export default function InboxPage() {
                   aiLoading={aiLoading}
                   aiSuggestion={aiSuggestion}
                   aiError={aiError}
-                  onAiUse={(text) => { handleConsumeReply(); handleNewMessageChange(text); setAiSuggestion(null); setAiReplyId(null); }}
+                  onAiUse={(text) => { handleConsumeReply(); handleNewMessageChange(text); setAiSuggestion(null); aiReplyIdRef.current = null; }}
                   onAiCopy={handleConsumeReply}
-                  onAiDismiss={() => { setAiSuggestion(null); setAiReplyId(null); }}
+                  onAiDismiss={() => { setAiSuggestion(null); aiReplyIdRef.current = null; }}
                 />
               ) : (
                 <>
@@ -1654,9 +1657,9 @@ export default function InboxPage() {
                       aiSuggestion={aiSuggestion}
                       aiError={aiError}
                       aiQuota={aiQuota}
-                      onAiUse={(text) => { handleConsumeReply(); handleNewMessageChange(text); setAiSuggestion(null); setAiReplyId(null); }}
+                      onAiUse={(text) => { handleConsumeReply(); handleNewMessageChange(text); setAiSuggestion(null); aiReplyIdRef.current = null; }}
                       onAiCopy={handleConsumeReply}
-                      onAiDismiss={() => { setAiSuggestion(null); setAiReplyId(null); }}
+                      onAiDismiss={() => { setAiSuggestion(null); aiReplyIdRef.current = null; }}
                     />
                   </div>
                   {/* Mobile composer — dark navy with pill input */}
@@ -1673,9 +1676,9 @@ export default function InboxPage() {
                       aiSuggestion={aiSuggestion}
                       aiError={aiError}
                       aiQuota={aiQuota}
-                      onAiUse={(text) => { handleConsumeReply(); handleNewMessageChange(text); setAiSuggestion(null); setAiReplyId(null); }}
+                      onAiUse={(text) => { handleConsumeReply(); handleNewMessageChange(text); setAiSuggestion(null); aiReplyIdRef.current = null; }}
                       onAiCopy={handleConsumeReply}
-                      onAiDismiss={() => { setAiSuggestion(null); setAiReplyId(null); }}
+                      onAiDismiss={() => { setAiSuggestion(null); aiReplyIdRef.current = null; }}
                     />
                   </div>
                 </>
