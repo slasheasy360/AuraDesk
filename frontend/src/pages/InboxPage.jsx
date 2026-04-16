@@ -637,6 +637,10 @@ export default function InboxPage() {
   // Using a ref means handleConsumeReply always reads the current value
   // without needing it in a useCallback dep array — eliminates stale closure.
   const aiReplyIdRef = useRef(null);
+  // Captures the replyId when "Use Reply" is clicked so the quota is consumed
+  // only when the message is actually sent, not on click. Stays set until the
+  // send succeeds or the conversation is switched.
+  const aiPendingConsumeRef = useRef(null);
   // Client-side Set of replyIds already consumed this session — prevents
   // double-charging if the user clicks both Copy Text and Use Reply.
   const consumedReplyIds = useRef(new Set());
@@ -662,14 +666,16 @@ export default function InboxPage() {
   useEffect(() => {
     setAiSuggestion(null);
     aiReplyIdRef.current = null;
+    aiPendingConsumeRef.current = null;
     setAiError(null);
     setAiLoading(false);
   }, [conversationId]);
 
-  // Consume one quota unit for the current suggestion.
-  // Idempotent: the same replyId is consumed at most once per session.
-  const handleConsumeReply = useCallback(async () => {
-    const replyId = aiReplyIdRef.current;
+  // Consume one quota unit for the given suggestion.
+  // Accepts an explicit replyId (used by handleSend) or falls back to the
+  // current suggestion ref (used by Copy Text). Idempotent via consumedReplyIds.
+  const handleConsumeReply = useCallback(async (explicitReplyId) => {
+    const replyId = explicitReplyId !== undefined ? explicitReplyId : aiReplyIdRef.current;
     if (!replyId) return; // null replyId = no-FAQ response, nothing to charge
     if (consumedReplyIds.current.has(replyId)) return; // already consumed
     consumedReplyIds.current.add(replyId); // mark immediately to prevent races
@@ -851,6 +857,12 @@ export default function InboxPage() {
         // Auto-dismiss AI suggestion box after send — prevents stale reuse
         setAiSuggestion(null);
         setAiError(null);
+        // Consume quota if this send used an AI-generated reply (triggered by "Use Reply")
+        if (aiPendingConsumeRef.current) {
+          const pendingId = aiPendingConsumeRef.current;
+          aiPendingConsumeRef.current = null;
+          handleConsumeReply(pendingId);
+        }
       } catch (err) {
         const isRetryable = !err.response || err.response.status >= 500 || err.code === 'ECONNABORTED';
         if (isRetryable && attempt < MAX_RETRIES) {
@@ -877,7 +889,7 @@ export default function InboxPage() {
     } finally {
       setSending(false);
     }
-  }, [newMessage, attachments, sending, replyingTo, clearDraft]);
+  }, [newMessage, attachments, sending, replyingTo, clearDraft, handleConsumeReply]);
 
   const showFileError = useCallback((message, details) => {
     clearTimeout(fileErrorTimerRef.current);
@@ -1634,7 +1646,7 @@ export default function InboxPage() {
                   aiLoading={aiLoading}
                   aiSuggestion={aiSuggestion}
                   aiError={aiError}
-                  onAiUse={(text) => { handleConsumeReply(); handleNewMessageChange(text); setAiSuggestion(null); aiReplyIdRef.current = null; }}
+                  onAiUse={(text) => { aiPendingConsumeRef.current = aiReplyIdRef.current; handleNewMessageChange(text); setAiSuggestion(null); }}
                   onAiCopy={handleConsumeReply}
                   onAiDismiss={() => { setAiSuggestion(null); aiReplyIdRef.current = null; }}
                 />
@@ -1657,7 +1669,7 @@ export default function InboxPage() {
                       aiSuggestion={aiSuggestion}
                       aiError={aiError}
                       aiQuota={aiQuota}
-                      onAiUse={(text) => { handleConsumeReply(); handleNewMessageChange(text); setAiSuggestion(null); aiReplyIdRef.current = null; }}
+                      onAiUse={(text) => { aiPendingConsumeRef.current = aiReplyIdRef.current; handleNewMessageChange(text); setAiSuggestion(null); }}
                       onAiCopy={handleConsumeReply}
                       onAiDismiss={() => { setAiSuggestion(null); aiReplyIdRef.current = null; }}
                     />
@@ -1676,7 +1688,7 @@ export default function InboxPage() {
                       aiSuggestion={aiSuggestion}
                       aiError={aiError}
                       aiQuota={aiQuota}
-                      onAiUse={(text) => { handleConsumeReply(); handleNewMessageChange(text); setAiSuggestion(null); aiReplyIdRef.current = null; }}
+                      onAiUse={(text) => { aiPendingConsumeRef.current = aiReplyIdRef.current; handleNewMessageChange(text); setAiSuggestion(null); }}
                       onAiCopy={handleConsumeReply}
                       onAiDismiss={() => { setAiSuggestion(null); aiReplyIdRef.current = null; }}
                     />
@@ -2780,7 +2792,7 @@ function EmailAttachments({ attachments, messageId }) {
 // ═══════════════════════════════════════════════════════════════════
 
 const EmailReplyBox = forwardRef(function EmailReplyBox(
-  { showReplyBox, replyingTo, newMessage, setNewMessage, handleSend, sending, attachments, onAttachClick, removeAttachment, uploadProgress, onOpenReply, onClose, onAiRespond, aiLoading, aiSuggestion, aiError, onAiUse, onAiDismiss },
+  { showReplyBox, replyingTo, newMessage, setNewMessage, handleSend, sending, attachments, onAttachClick, removeAttachment, uploadProgress, onOpenReply, onClose, onAiRespond, aiLoading, aiSuggestion, aiError, onAiUse, onAiCopy, onAiDismiss },
   ref
 ) {
   const hasContent = newMessage.trim() || attachments.length > 0;
@@ -2841,7 +2853,7 @@ const EmailReplyBox = forwardRef(function EmailReplyBox(
             <div className="flex items-center justify-end gap-2 pt-1 border-t border-[#1787FE]/10">
               <button
                 type="button"
-                onClick={() => navigator.clipboard.writeText(aiSuggestion)}
+                onClick={() => { navigator.clipboard.writeText(aiSuggestion); onAiCopy?.(); }}
                 className="px-3 py-1.5 text-xs font-semibold border border-gray-300 bg-white rounded-lg hover:bg-gray-50 transition whitespace-nowrap"
               >
                 Copy Text
