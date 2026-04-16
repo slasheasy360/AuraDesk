@@ -22,7 +22,8 @@ export default function PasswordStrengthChecker({ evaluation, dark = false }) {
   const trackBg   = dark ? 'bg-white/10' : 'bg-gray-200';
   const bulletCls = dark ? 'text-red-400' : 'text-red-500';
 
-  const unmet = RULES.filter(({ key }) => !evaluation.rules[key]);
+  // Only surface the first unmet condition so the user fixes one thing at a time
+  const unmet = RULES.filter(({ key }) => !evaluation.rules[key]).slice(0, 1);
 
   return (
     <div className="mt-2 space-y-2">
