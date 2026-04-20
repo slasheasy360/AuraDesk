@@ -1065,8 +1065,11 @@ export default function InboxPage() {
     try {
       const res = await api.patch(`/api/conversations/${convId}/lead`);
       const { isLead: newIsLead, lead } = res.data;
+      // Confirm server state (overrides any stale fetch that may have run during the API call)
+      setConversations((prev) =>
+        prev.map((c) => (c.id === convId ? { ...c, isLead: newIsLead } : c))
+      );
       const name = lead?.name || activeConversationRef.current?.contact?.name || 'Contact';
-      // Show toast
       clearTimeout(leadToastTimerRef.current);
       setLeadToast({ name, added: newIsLead });
       leadToastTimerRef.current = setTimeout(() => setLeadToast(null), 4000);
