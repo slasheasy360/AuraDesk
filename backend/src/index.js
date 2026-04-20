@@ -6,13 +6,20 @@ import express from 'express';
 // If a migration is stuck in a failed state (P3009), mark it as applied
 // (schema already exists in production) so deploy can continue.
 try {
+  // stdio: pipe so the thrown error object holds stdout/stderr for parsing.
+  // We re-print the output so it still appears in Render logs.
   try {
-    execSync('npx prisma migrate deploy', { stdio: 'inherit' });
+    const out = execSync('npx prisma migrate deploy', { encoding: 'utf8', stdio: ['inherit', 'pipe', 'pipe'] });
+    if (out) process.stdout.write(out);
   } catch (deployErr) {
-    const output = deployErr.stdout?.toString() || deployErr.stderr?.toString() || deployErr.message || '';
-    // P3009: extract stuck migration name from error text:
-    // "The `<name>` migration started at ... failed"
-    const matches = [...output.matchAll(/`([^`]+)` migration started at .+? failed/gs)];
+    const stdout = (deployErr.stdout || '').toString();
+    const stderr = (deployErr.stderr || '').toString();
+    if (stdout) process.stdout.write(stdout);
+    if (stderr) process.stderr.write(stderr);
+
+    // P3009: "The `<name>` migration started at ... failed"
+    const combined = stdout + stderr;
+    const matches = [...combined.matchAll(/`([^`]+)` migration started at .+? failed/gs)];
     if (matches.length === 0) throw deployErr; // unrelated error — re-throw
 
     for (const m of matches) {
