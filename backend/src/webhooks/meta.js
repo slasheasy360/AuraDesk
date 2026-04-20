@@ -4,6 +4,7 @@ import axios from 'axios';
 import prisma from '../utils/prisma.js';
 import { decrypt } from '../utils/encryption.js';
 import { uploadFile } from '../utils/s3.js';
+import { autoCreateLead } from '../utils/autoLead.js';
 
 /**
  * Download a media URL and upload it to S3 for permanent storage.
@@ -346,6 +347,7 @@ async function processMessengerWebhook(payload, io) {
           data: { unreadCount: { increment: 1 } },
         });
         currentUnreadCount = updatedConversation.unreadCount;
+        await autoCreateLead({ conversationId: conversation.id, userId: account.userId, name: contact.name, platform: 'Facebook', io });
       }
 
       console.log('[Messenger Webhook] ✓ Message saved', {
@@ -561,6 +563,7 @@ async function processInstagramWebhook(payload, io) {
           data: { unreadCount: { increment: 1 } },
         });
         igUnreadCount = updatedConversation.unreadCount;
+        await autoCreateLead({ conversationId: conversation.id, userId: account.userId, name: contact.name, platform: 'Instagram', io });
       }
 
       console.log('[Instagram Webhook] ✓ Message saved', {
@@ -879,6 +882,7 @@ async function processWhatsAppWebhook(payload, io) {
               data: { unreadCount: { increment: 1 } },
             });
             unreadCount = updatedConversation.unreadCount;
+            await autoCreateLead({ conversationId: conversation.id, userId: account.userId, name: contact.name || customerPhone, platform: 'WhatsApp', io });
           }
 
           console.log('[WhatsApp Webhook] ✓ Message saved', {

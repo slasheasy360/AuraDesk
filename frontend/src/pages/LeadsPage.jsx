@@ -289,7 +289,7 @@ export default function LeadsPage() {
                               )}
                               {(() => {
                                 const invoices = lead.invoices || [];
-                                const activeInvoice = invoices.find((i) => i.status !== 'Paid');
+                                const activeInvoice = invoices.find((i) => ['Draft', 'Sent', 'Overdue'].includes(i.status));
                                 const latest = invoices[0];
                                 const canCreate = !activeInvoice;
                                 return (

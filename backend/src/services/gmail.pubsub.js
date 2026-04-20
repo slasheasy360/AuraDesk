@@ -1,5 +1,6 @@
 import prisma from '../utils/prisma.js';
 import * as gmailApi from './gmail.js';
+import { autoCreateLead } from '../utils/autoLead.js';
 
 // ── Per-account mutex ────────────────────────────────────────────────────────
 // Prevents concurrent history processing for the same account, which would
@@ -255,6 +256,7 @@ async function saveGmailMessage(msg, account, accountEmail, io) {
       data: { unreadCount: { increment: 1 } },
     });
     currentUnreadCount = updatedConversation.unreadCount;
+    await autoCreateLead({ conversationId: conversation.id, userId: account.userId, name: contactName || contactEmail, platform: 'Gmail', email: contactEmail, lastContactedAt: timestamp, io });
   }
 
   // Emit real-time events to the user
