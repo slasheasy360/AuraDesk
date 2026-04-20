@@ -29,7 +29,7 @@ export default function AcceptInvitePage() {
       localStorage.setItem('token', r.data.token);
       api.defaults.headers.common['Authorization'] = `Bearer ${r.data.token}`;
       await refreshUser();
-      navigate('/');
+      navigate('/inbox', { replace: true });
     } catch (e) {
       setError(e.response?.data?.error || 'Failed to accept invite');
     } finally {

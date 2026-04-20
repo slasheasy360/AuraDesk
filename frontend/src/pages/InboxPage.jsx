@@ -8,10 +8,11 @@ import {
   Smile, X, FileText, Image as ImageIcon, Reply, ChevronDown,
   ChevronUp, Download, UploadCloud, Play, Music, File as FileIcon, AlertCircle, RefreshCw,
   Star, Inbox, Clock, Sparkles, FileEdit, Trash2, ChevronLeft, ChevronRight,
-  RotateCw, Archive, MoreHorizontal, MoreVertical, Bot, Link2, Users, Undo2, Menu, Camera, Mic,
+  RotateCw, Archive, MoreHorizontal, MoreVertical, Bot, Link2, Users, Undo2, Menu, Camera, Mic, Pencil,
 } from 'lucide-react';
 import PlatformBadge, { PlatformIcon } from '../components/PlatformBadge.jsx';
 import { useLinkAccounts } from '../context/LinkAccountsContext.jsx';
+import { useAuth } from '../context/AuthContext.jsx';
 
 // ═══════════════════════════════════════════════════════════════════
 // DEFERRED LOADING HOOK — avoids skeleton flash for fast loads
@@ -82,6 +83,7 @@ const ITEMS_PER_PAGE = 10;
 export default function InboxPage() {
   const { conversationId } = useParams();
   const navigate = useNavigate();
+  const { user } = useAuth();
   const [conversations, setConversations] = useState(() => sessionGet(SESSION_KEYS.CONVERSATIONS) || []);
   const [messages, setMessages] = useState([]);
   const [activeConversation, setActiveConversation] = useState(null);
@@ -112,6 +114,16 @@ export default function InboxPage() {
   // ── Mobile UI state ──
   const { openLinkAccounts, onAccountsChanged } = useLinkAccounts();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [showMobileFilter, setShowMobileFilter] = useState(false);
+
+  // Both the DashboardLayout top hamburger and the in-page hamburger dispatch
+  // this event so they share identical state and animation.
+  useEffect(() => {
+    const handler = () => setShowMobileFilter((v) => !v);
+    window.addEventListener('toggle-inbox-filter', handler);
+    return () => window.removeEventListener('toggle-inbox-filter', handler);
+  }, []);
+
   const draftTimerRef = useRef(null);
   const lastSavedDraftRef = useRef('');
 
@@ -145,7 +157,8 @@ export default function InboxPage() {
   const knownMessageIds = useRef(new Set());
   const messageCache = useRef(new Map());
 
-  // Derive connected platforms from conversations
+  // Derive connected platforms from conversations and auto-check them in sourceFilters
+  const sourceFiltersInitialized = useRef(false);
   useEffect(() => {
     const platforms = new Set();
     conversations.forEach((c) => {
@@ -153,6 +166,21 @@ export default function InboxPage() {
       if (p) platforms.add(p);
     });
     setConnectedPlatforms(platforms);
+
+    if (platforms.size === 0) return;
+    if (!sourceFiltersInitialized.current) {
+      // First load: check all connected platforms
+      sourceFiltersInitialized.current = true;
+      setSourceFilters(new Set(platforms));
+    } else {
+      // New platform added later (new account connected): auto-check it
+      setSourceFilters((prev) => {
+        let changed = false;
+        const next = new Set(prev);
+        platforms.forEach((p) => { if (!next.has(p)) { next.add(p); changed = true; } });
+        return changed ? next : prev;
+      });
+    }
   }, [conversations]);
 
   // ═══════════════════════════════════════════════════════════════════
@@ -207,17 +235,28 @@ export default function InboxPage() {
 
     igPollingRef.current = setInterval(async () => {
       try {
-        const res = await api.get('/api/messages/instagram/sync');
-        if ((res.data?.newMessages || 0) > 0) {
+        const results = await Promise.allSettled([
+          api.get('/api/messages/instagram/sync'),
+          api.get('/api/messages/facebook/sync'),
+          api.get('/api/messages/gmail/sync'),
+        ]);
+        const hasNew = results.some(
+          (r) => r.status === 'fulfilled' && (r.value?.data?.newMessages || 0) > 0
+        );
+        if (hasNew) {
           fetchConversations();
           const activeId = conversationIdRef.current;
-          if (activeId) fetchMessages(activeId);
+          if (activeId) fetchMessages(activeId, true, true);
         }
       } catch { /* silent */ }
     }, 60000);
 
     const safetyRefresh = setInterval(() => {
-      if (!cancelled) fetchConversations();
+      if (!cancelled) {
+        fetchConversations();
+        const activeId = conversationIdRef.current;
+        if (activeId) fetchMessages(activeId, true, true);
+      }
     }, 30000);
 
     return () => {
@@ -247,7 +286,7 @@ export default function InboxPage() {
         }
         fetchConversations();
         const activeId = conversationIdRef.current;
-        if (activeId) fetchMessages(activeId, true);
+        if (activeId) fetchMessages(activeId, true, true);
       };
 
       socket.on('connect', handleReconnect);
@@ -459,9 +498,9 @@ export default function InboxPage() {
     }
   }, []);
 
-  const fetchMessages = useCallback(async (convId, forceRefresh = false) => {
+  const fetchMessages = useCallback(async (convId, forceRefresh = false, silent = false) => {
     if (!forceRefresh && messageCache.current.get(convId)?.fresh) return;
-    setLoadingMessages(true);
+    if (!silent) setLoadingMessages(true);
     setMessagesError(null);
 
     const MAX_ATTEMPTS = 3;
@@ -496,21 +535,31 @@ export default function InboxPage() {
         }, 30000);
         sessionSet(SESSION_KEYS.MESSAGES + convId, msgs.slice(-50));
         sessionSet(SESSION_KEYS.ACTIVE_CONVERSATION, convRes.data.conversation);
-        setLoadingMessages(false);
+        if (!silent) setLoadingMessages(false);
         return; // success
       } catch (err) {
+        const status = err.response?.status;
+        // 404 = conversation doesn't exist (permanent) — stop immediately, don't retry.
+        if (status === 404) {
+          console.warn(`fetchMessages: conversation ${convId} not found (404) — stopping retries`);
+          if (conversationIdRef.current === convId && !silent) {
+            setLoadingMessages(false);
+            setMessagesError('Conversation not found. It may have been deleted.');
+          }
+          return;
+        }
         console.error(`fetchMessages attempt ${attempt + 1} failed:`, err.message);
         if (attempt < MAX_ATTEMPTS - 1) {
           await new Promise((r) => setTimeout(r, 2000 * (attempt + 1)));
         } else {
           // All attempts failed
-          if (conversationIdRef.current === convId) {
+          if (conversationIdRef.current === convId && !silent) {
             setMessagesError('Failed to load messages. Please try again.');
           }
         }
       }
     }
-    setLoadingMessages(false);
+    if (!silent) setLoadingMessages(false);
   }, []);
 
   const activeConversationRef = useRef(activeConversation);
@@ -581,18 +630,106 @@ export default function InboxPage() {
   const [aiSuggestion, setAiSuggestion] = useState(null);
   const [aiLoading, setAiLoading] = useState(false);
   const [aiError, setAiError] = useState(null);
+  // { used, limit, unlimited } — fetched from /api/plan/usage, updated on consume
+  const [aiQuota, setAiQuota] = useState(null);
+
+  // Ref (not state) for the current suggestion's replyId.
+  // Using a ref means handleConsumeReply always reads the current value
+  // without needing it in a useCallback dep array — eliminates stale closure.
+  const aiReplyIdRef = useRef(null);
+  // Captures the replyId when "Use Reply" is clicked so the quota is consumed
+  // only when the message is actually sent, not on click. Stays set until the
+  // send succeeds or the conversation is switched.
+  const aiPendingConsumeRef = useRef(null);
+  // Client-side Set of replyIds already consumed this session — prevents
+  // double-charging if the user clicks both Copy Text and Use Reply.
+  const consumedReplyIds = useRef(new Set());
+
+  // Fetch AI quota on mount so the button can be pre-gated and the counter shown
+  useEffect(() => {
+    api.get('/api/plan/usage')
+      .then((res) => {
+        const ai = res.data.usage?.aiReplies;
+        if (ai) {
+          setAiQuota({
+            used: ai.used ?? 0,
+            limit: ai.limit,              // null = unlimited
+            unlimited: ai.limit === null,
+          });
+        }
+      })
+      .catch(() => {}); // non-fatal — degrade gracefully
+  }, []);
+
+  // Clear AI state whenever the user switches to a different conversation
+  // so suggestions from one chat never bleed into another.
+  useEffect(() => {
+    setAiSuggestion(null);
+    aiReplyIdRef.current = null;
+    aiPendingConsumeRef.current = null;
+    setAiError(null);
+    setAiLoading(false);
+  }, [conversationId]);
+
+  // Consume one quota unit for the given suggestion.
+  // Accepts an explicit replyId (used by handleSend) or falls back to the
+  // current suggestion ref (used by Copy Text). Idempotent via consumedReplyIds.
+  const handleConsumeReply = useCallback(async (explicitReplyId) => {
+    const replyId = explicitReplyId !== undefined ? explicitReplyId : aiReplyIdRef.current;
+    if (!replyId) return; // null replyId = no-FAQ response, nothing to charge
+    if (consumedReplyIds.current.has(replyId)) return; // already consumed
+    consumedReplyIds.current.add(replyId); // mark immediately to prevent races
+
+    try {
+      const res = await api.post('/api/ai/consume-reply', {
+        replyId,
+        conversationId: conversationIdRef.current,
+        platform: activeConversationRef.current?.connectedAccount?.platform,
+      });
+      if (!res.data.already && res.data.usage) {
+        setAiQuota({
+          used: res.data.usage.used ?? 0,
+          limit: res.data.usage.limit,
+          unlimited: res.data.usage.unlimited || res.data.usage.limit === null,
+        });
+      }
+    } catch (err) {
+      // If 403 AI_LIMIT: update quota state so the button locks
+      const data = err.response?.data;
+      if (err.response?.status === 403 && data?.error === 'AI_LIMIT' && data?.meta?.limit != null) {
+        setAiQuota({ used: data.meta.limit, limit: data.meta.limit, unlimited: false });
+      }
+    }
+  }, []); // empty deps — reads from ref, always current
 
   const handleAiRespond = useCallback(async () => {
     const activeId = conversationIdRef.current;
     if (!activeId || aiLoading) return;
-    // Find the last inbound message to use as the prompt
+
+    // Frontend quota gate — prevents the API call and gives instant feedback
+    if (aiQuota && !aiQuota.unlimited && aiQuota.limit !== null && aiQuota.used >= aiQuota.limit) {
+      setAiError(`AI reply limit reached (${aiQuota.used}/${aiQuota.limit}). Upgrade to continue.`);
+      setTimeout(() => setAiError(null), 5000);
+      return;
+    }
+
+    // Prefer the last inbound (customer) message; fall back to the last message
+    // of any direction so the AI can still generate a reply even when the
+    // business initiated the conversation. Also accept any text already typed.
     const lastInbound = [...messages].reverse().find(m => m.direction === 'inbound');
-    const prompt = lastInbound?.content || newMessage.trim();
-    if (!prompt) return;
+    const lastAny = messages.length > 0 ? messages[messages.length - 1] : null;
+    const prompt = lastInbound?.content || newMessage.trim() || lastAny?.content;
+
+    if (!prompt) {
+      setAiError('No message to reply to yet.');
+      setTimeout(() => setAiError(null), 4000);
+      return;
+    }
 
     setAiLoading(true);
     setAiError(null);
     setAiSuggestion(null);
+    aiReplyIdRef.current = null;
     try {
       const res = await api.post('/api/ai/generate-reply', {
         conversationId: activeId,
@@ -600,14 +737,39 @@ export default function InboxPage() {
         platform: activeConversationRef.current?.connectedAccount?.platform,
       });
       setAiSuggestion(res.data.reply);
+      // Store the reply ID so consume-reply can reference it
+      aiReplyIdRef.current = res.data.replyId || null;
+      // Update quota display from generation response (not yet incremented)
+      if (res.data.usage) {
+        setAiQuota({
+          used: res.data.usage.used ?? 0,
+          limit: res.data.usage.limit,
+          unlimited: res.data.usage.unlimited || res.data.usage.limit === null,
+        });
+      }
     } catch (err) {
-      const msg = err.response?.data?.error || 'AI generation failed';
+      const status = err.response?.status;
+      const data = err.response?.data;
+      let msg;
+      if (status === 403 && data?.error === 'AI_LIMIT') {
+        const used = data.meta?.used ?? data.meta?.limit;
+        const limit = data.meta?.limit;
+        msg = `AI reply limit reached (${used ?? '?'}/${limit ?? '?'}). Upgrade to continue.`;
+        if (data.meta?.limit != null) {
+          setAiQuota({ used: data.meta.limit, limit: data.meta.limit, unlimited: false });
+        }
+      } else {
+        const serverMsg = data?.message || data?.error;
+        msg = serverMsg && status && status < 500
+          ? serverMsg
+          : 'Something went wrong. Please try again.';
+      }
       setAiError(msg);
-      setTimeout(() => setAiError(null), 4000);
+      setTimeout(() => setAiError(null), 5000);
     } finally {
       setAiLoading(false);
     }
-  }, [aiLoading, messages, newMessage]);
+  }, [aiLoading, aiQuota, messages, newMessage]);
 
   useEffect(() => () => { if (draftTimerRef.current) clearTimeout(draftTimerRef.current); }, []);
 
@@ -692,6 +854,15 @@ export default function InboxPage() {
         // is now visible in the thread list above).
         setShowReplyBox(false);
         setReplyingTo(null);
+        // Auto-dismiss AI suggestion box after send — prevents stale reuse
+        setAiSuggestion(null);
+        setAiError(null);
+        // Consume quota if this send used an AI-generated reply (triggered by "Use Reply")
+        if (aiPendingConsumeRef.current) {
+          const pendingId = aiPendingConsumeRef.current;
+          aiPendingConsumeRef.current = null;
+          handleConsumeReply(pendingId);
+        }
       } catch (err) {
         const isRetryable = !err.response || err.response.status >= 500 || err.code === 'ECONNABORTED';
         if (isRetryable && attempt < MAX_RETRIES) {
@@ -718,7 +889,7 @@ export default function InboxPage() {
     } finally {
       setSending(false);
     }
-  }, [newMessage, attachments, sending, replyingTo, clearDraft]);
+  }, [newMessage, attachments, sending, replyingTo, clearDraft, handleConsumeReply]);
 
   const showFileError = useCallback((message, details) => {
     clearTimeout(fileErrorTimerRef.current);
@@ -806,13 +977,13 @@ export default function InboxPage() {
     });
   };
 
-  const openReplyBox = (msg) => {
+  const openReplyBox = useCallback((msg) => {
     setReplyingTo(msg);
     setShowReplyBox(true);
     // Only clear message if there's no existing draft content
     setNewMessage((prev) => prev || '');
     setAttachments([]);
-  };
+  }, []);
 
   // ── Socket connection status ──
   const [socketConnected, setSocketConnected] = useState(() => {
@@ -864,6 +1035,20 @@ export default function InboxPage() {
         prev.map((c) => (c.id === convId ? { ...c, isStarred: !c.isStarred } : c))
       );
     }
+  }, []);
+
+  // When a contact is renamed, sync the new name into every conversation
+  // referencing that contact so both the chat header and the inbox list row
+  // update immediately without a refetch.
+  const handleContactRenamed = useCallback((updatedContact) => {
+    if (!updatedContact?.id) return;
+    setConversations((prev) =>
+      prev.map((c) =>
+        c.contact?.id === updatedContact.id
+          ? { ...c, contact: { ...c.contact, name: updatedContact.name } }
+          : c
+      )
+    );
   }, []);
 
   const toggleLead = useCallback(async (convId, e) => {
@@ -948,15 +1133,9 @@ export default function InboxPage() {
     });
   }, []);
 
-  const toggleSelectAll = useCallback(() => {
-    setSelectedMessages((prev) => {
-      if (prev.size > 0) return new Set();
-      return new Set(conversations.map((c) => c.id));
-    });
-  }, [conversations]);
-
   const filteredConversations = useMemo(() => {
-    let result = conversations;
+    // Never show conversations that have no messages
+    let result = conversations.filter((c) => c.messages && c.messages.length > 0);
 
     // Apply search filter
     if (search) {
@@ -968,8 +1147,12 @@ export default function InboxPage() {
       });
     }
 
-    // Apply source filter
-    if (sourceFilters.size > 0) {
+    // Always filter by selected sources.
+    // sourceFilters contains only connected+checked platforms.
+    // If nothing is checked show nothing; otherwise show only matching conversations.
+    if (sourceFilters.size === 0) {
+      result = [];
+    } else {
       result = result.filter((c) => sourceFilters.has(c.connectedAccount?.platform));
     }
 
@@ -999,26 +1182,34 @@ export default function InboxPage() {
     return result;
   }, [conversations, search, sourceFilters, activeFilter]);
 
-  // Filter counts
+  // Filter counts — always respect sourceFilters so badge numbers
+  // match the visible conversations exactly. Exclude messageless convs.
   const filterCounts = useMemo(() => {
-    const nonDeleted = conversations.filter((c) => !c.isDeleted);
+    const withMessages = conversations.filter((c) => c.messages && c.messages.length > 0);
+    const base = sourceFilters.size === 0
+      ? []
+      : withMessages.filter(
+          (c) => !c.isDeleted && sourceFilters.has(c.connectedAccount?.platform)
+        );
     return {
-      all: nonDeleted.length,
-      unread: nonDeleted.filter((c) => c.unreadCount > 0).length,
-      starred: nonDeleted.filter((c) => c.isStarred).length,
+      all: base.length,
+      unread: base.filter((c) => c.unreadCount > 0).length,
+      starred: base.filter((c) => c.isStarred).length,
       ai_responded: 0,
-      draft: nonDeleted.filter((c) => c.hasDraft).length,
-      bin: conversations.filter((c) => c.isDeleted).length,
+      draft: base.filter((c) => c.hasDraft).length,
+      bin: withMessages.filter((c) => c.isDeleted).length,
     };
-  }, [conversations]);
+  }, [conversations, sourceFilters]);
 
-  // Source counts — only from non-deleted conversations
+  // Source counts — only from non-deleted conversations with messages
   const sourceCounts = useMemo(() => {
     const counts = {};
-    conversations.filter((c) => !c.isDeleted).forEach((c) => {
-      const p = c.connectedAccount?.platform;
-      if (p) counts[p] = (counts[p] || 0) + 1;
-    });
+    conversations
+      .filter((c) => !c.isDeleted && c.messages && c.messages.length > 0)
+      .forEach((c) => {
+        const p = c.connectedAccount?.platform;
+        if (p) counts[p] = (counts[p] || 0) + 1;
+      });
     return counts;
   }, [conversations]);
 
@@ -1035,12 +1226,91 @@ export default function InboxPage() {
     return filteredConversations.slice(start, start + ITEMS_PER_PAGE);
   }, [filteredConversations, currentPage]);
 
-  // Reset page when filter changes
-  useEffect(() => { setCurrentPage(1); }, [activeFilter, search]);
+  // Reset page and selection when filter/search changes
+  useEffect(() => { setCurrentPage(1); setSelectedMessages(new Set()); }, [activeFilter, search]);
+
+  const toggleSelectAll = useCallback(() => {
+    setSelectedMessages((prev) => {
+      if (prev.size > 0) return new Set();
+      return new Set(paginatedConversations.map((c) => c.id));
+    });
+  }, [paginatedConversations]);
+
+  // Bulk delete — moves selected conversations to Bin (soft delete only)
+  const handleBulkDelete = useCallback(async () => {
+    const ids = [...selectedMessages];
+    if (ids.length === 0) return;
+
+    // Optimistic update
+    setConversations((prev) =>
+      prev.map((c) => ids.includes(c.id) ? { ...c, isDeleted: true } : c)
+    );
+    setSelectedMessages(new Set());
+
+    // Navigate away if the active conversation was deleted
+    if (ids.includes(conversationId)) navigate('/inbox');
+
+    // Fire all PATCH requests in parallel
+    const results = await Promise.allSettled(
+      ids.map((id) => api.patch(`/api/conversations/${id}/delete`))
+    );
+
+    // Roll back any that failed
+    const failed = ids.filter((_, i) => results[i].status === 'rejected');
+    if (failed.length > 0) {
+      console.error(`[BulkDelete] ${failed.length} conversation(s) failed to delete`);
+      setConversations((prev) =>
+        prev.map((c) => failed.includes(c.id) ? { ...c, isDeleted: false } : c)
+      );
+    }
+  }, [selectedMessages, conversationId, navigate]);
+
+  // Bulk restore — restores selected conversations from Bin
+  const handleBulkRestore = useCallback(async () => {
+    const ids = [...selectedMessages];
+    if (ids.length === 0) return;
+
+    // Optimistic update
+    setConversations((prev) =>
+      prev.map((c) => ids.includes(c.id) ? { ...c, isDeleted: false } : c)
+    );
+    setSelectedMessages(new Set());
+
+    const results = await Promise.allSettled(
+      ids.map((id) => api.patch(`/api/conversations/${id}/restore`))
+    );
+
+    const failed = ids.filter((_, i) => results[i].status === 'rejected');
+    if (failed.length > 0) {
+      console.error(`[BulkRestore] ${failed.length} conversation(s) failed to restore`);
+      setConversations((prev) =>
+        prev.map((c) => failed.includes(c.id) ? { ...c, isDeleted: true } : c)
+      );
+    }
+  }, [selectedMessages]);
 
   const handleSelectConversation = useCallback((convId) => navigate(`/inbox/${convId}`), [navigate]);
   const handleBackToList = useCallback(() => navigate('/inbox'), [navigate]);
   const platformTheme = useMemo(() => getPlatformTheme(platform), [platform]);
+
+  // Stable handlers for inline props — prevents child re-renders
+  const handleAttachClick = useCallback(() => fileInputRef.current?.click(), []);
+  const handleFileInputChange = useCallback((e) => {
+    if (e.target.files?.length) {
+      const selectedFiles = Array.from(e.target.files);
+      e.target.value = '';
+      handleFileSelect(selectedFiles);
+    }
+  }, [handleFileSelect]);
+  const handleOpenReply = useCallback(() => {
+    const lastMsg = messages[messages.length - 1];
+    openReplyBox(lastMsg || { subject: emailSubject });
+  }, [messages, openReplyBox, emailSubject]);
+  const handleCloseReply = useCallback(() => {
+    setShowReplyBox(false);
+    setReplyingTo(null);
+    setAttachments([]);
+  }, []);
 
   // ═══════════════════════════════════════════════════════════════════
   // RENDER: CONVERSATION VIEW (when a conversation is selected)
@@ -1154,9 +1424,13 @@ export default function InboxPage() {
                   >
                     <ArrowLeft size={18} />
                   </button>
-                  <h2 className="font-semibold text-white truncate text-sm">
-                    {getContactDisplayName(activeConversation.contact, platform)}
-                  </h2>
+                  <EditableContactName
+                    initialName={getContactDisplayName(activeConversation.contact, platform)}
+                    contactId={activeConversation.contact?.id}
+                    onSaved={handleContactRenamed}
+                    className="font-semibold text-white truncate text-sm"
+                    inputClassName="px-2 py-0.5 bg-white/10 border border-white/30 rounded text-sm text-white outline-none"
+                  />
                   <span className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold flex-shrink-0 ${getPlatformBadgeStyle(platform)}`}>
                     {getPlatformLabel(platform)}
                   </span>
@@ -1216,9 +1490,12 @@ export default function InboxPage() {
                   <button onClick={handleBackToList} className="text-gray-500 hover:text-gray-800 transition flex-shrink-0">
                     <ArrowLeft size={20} />
                   </button>
-                  <h2 className="font-semibold text-gray-900 truncate text-sm sm:text-base">
-                    {getContactDisplayName(activeConversation.contact, platform)}
-                  </h2>
+                  <EditableContactName
+                    initialName={getContactDisplayName(activeConversation.contact, platform)}
+                    contactId={activeConversation.contact?.id}
+                    onSaved={handleContactRenamed}
+                    className="font-semibold text-gray-900 truncate text-sm sm:text-base"
+                  />
                   <span className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold ${getPlatformBadgeStyle(platform)}`}>
                     {getPlatformLabel(platform)}
                   </span>
@@ -1343,13 +1620,7 @@ export default function InboxPage() {
                 multiple
                 accept="image/jpeg,image/png,image/gif,image/webp,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/plain,text/csv,audio/mpeg,audio/ogg,audio/wav,video/mp4,video/webm"
                 className="hidden"
-                onChange={(e) => {
-                  if (e.target.files?.length) {
-                    const selectedFiles = Array.from(e.target.files);
-                    e.target.value = '';
-                    handleFileSelect(selectedFiles);
-                  }
-                }}
+                onChange={handleFileInputChange}
               />
 
               {/* Composer — EmailReplyBox for Gmail, chat composer for all other platforms */}
@@ -1363,7 +1634,7 @@ export default function InboxPage() {
                   handleSend={handleSend}
                   sending={sending}
                   attachments={attachments}
-                  onAttachClick={() => fileInputRef.current?.click()}
+                  onAttachClick={handleAttachClick}
                   removeAttachment={removeAttachment}
                   uploadProgress={uploadProgress}
                   onOpenReply={() => {
@@ -1375,8 +1646,9 @@ export default function InboxPage() {
                   aiLoading={aiLoading}
                   aiSuggestion={aiSuggestion}
                   aiError={aiError}
-                  onAiUse={(text) => { handleNewMessageChange(text); setAiSuggestion(null); }}
-                  onAiDismiss={() => setAiSuggestion(null)}
+                  onAiUse={(text) => { aiPendingConsumeRef.current = aiReplyIdRef.current; handleNewMessageChange(text); setAiSuggestion(null); }}
+                  onAiCopy={handleConsumeReply}
+                  onAiDismiss={() => { setAiSuggestion(null); aiReplyIdRef.current = null; }}
                 />
               ) : (
                 <>
@@ -1396,8 +1668,10 @@ export default function InboxPage() {
                       aiLoading={aiLoading}
                       aiSuggestion={aiSuggestion}
                       aiError={aiError}
-                      onAiUse={(text) => { handleNewMessageChange(text); setAiSuggestion(null); }}
-                      onAiDismiss={() => setAiSuggestion(null)}
+                      aiQuota={aiQuota}
+                      onAiUse={(text) => { aiPendingConsumeRef.current = aiReplyIdRef.current; handleNewMessageChange(text); setAiSuggestion(null); }}
+                      onAiCopy={handleConsumeReply}
+                      onAiDismiss={() => { setAiSuggestion(null); aiReplyIdRef.current = null; }}
                     />
                   </div>
                   {/* Mobile composer — dark navy with pill input */}
@@ -1411,6 +1685,12 @@ export default function InboxPage() {
                       onAttachClick={() => fileInputRef.current?.click()}
                       onAiRespond={handleAiRespond}
                       aiLoading={aiLoading}
+                      aiSuggestion={aiSuggestion}
+                      aiError={aiError}
+                      aiQuota={aiQuota}
+                      onAiUse={(text) => { aiPendingConsumeRef.current = aiReplyIdRef.current; handleNewMessageChange(text); setAiSuggestion(null); }}
+                      onAiCopy={handleConsumeReply}
+                      onAiDismiss={() => { setAiSuggestion(null); aiReplyIdRef.current = null; }}
                     />
                   </div>
                 </>
@@ -1432,14 +1712,15 @@ export default function InboxPage() {
       {/* Page header */}
       <div className="flex items-center justify-between gap-2 lg:gap-3 flex-shrink-0">
         <div className="flex items-center gap-2 min-w-0">
-          {/* Hamburger — mobile only — toggles DashboardLayout sidebar via custom event */}
+          {/* Hamburger — mobile only — toggles filter drawer (shared with DashboardLayout top hamburger) */}
           <button
             type="button"
-            onClick={() => window.dispatchEvent(new CustomEvent('toggle-mobile-sidebar'))}
-            className="lg:hidden text-white p-1.5 flex-shrink-0"
-            aria-label="Open menu"
+            onClick={() => window.dispatchEvent(new CustomEvent('toggle-inbox-filter'))}
+            className="lg:hidden text-white p-1.5 flex-shrink-0 transition-transform duration-300"
+            aria-label="Toggle filters"
+            style={{ transform: showMobileFilter ? 'rotate(90deg)' : 'rotate(0deg)' }}
           >
-            <Menu size={22} />
+            {showMobileFilter ? <X size={22} /> : <Menu size={22} />}
           </button>
           <h1 className="text-xl sm:text-2xl lg:text-3xl font-bold text-white truncate">Smart Inbox</h1>
         </div>
@@ -1473,6 +1754,42 @@ export default function InboxPage() {
         </div>
       </div>
 
+      {/* Mobile Filter Drawer — slides in from the left */}
+      {/* Backdrop */}
+      <div
+        className={`fixed inset-0 bg-black/60 z-[55] lg:hidden transition-opacity duration-300 ${showMobileFilter ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'}`}
+        onClick={() => setShowMobileFilter(false)}
+      />
+      {/* Drawer panel */}
+      <div
+        className={`fixed inset-y-0 left-0 w-72 bg-[#0B1628] z-[60] lg:hidden shadow-2xl flex flex-col overflow-hidden transition-transform duration-300 ease-in-out ${showMobileFilter ? 'translate-x-0' : '-translate-x-full'}`}
+      >
+        {/* Drawer header */}
+        <div className="flex items-center justify-between px-5 py-4 border-b border-white/10 flex-shrink-0">
+          <h2 className="text-white font-semibold text-base">Filters</h2>
+          <button
+            onClick={() => setShowMobileFilter(false)}
+            className="text-white/50 hover:text-white transition p-1"
+          >
+            <X size={20} />
+          </button>
+        </div>
+        <div className="flex-1 overflow-y-auto">
+          <FilterPanel
+            activeFilter={activeFilter}
+            setActiveFilter={(f) => { setActiveFilter(f); setShowMobileFilter(false); }}
+            filterCounts={filterCounts}
+            sourceFilters={sourceFilters}
+            toggleSourceFilter={toggleSourceFilter}
+            sourceCounts={sourceCounts}
+            availableSourceFilters={availableSourceFilters}
+            conversationId={null}
+            navigate={navigate}
+            dark
+          />
+        </div>
+      </div>
+
       {/* Inbox card */}
       <div className="flex flex-1 min-h-0 bg-white rounded-2xl border border-gray-200 overflow-hidden shadow-xl">
       {/* Filter Panel */}
@@ -1492,14 +1809,47 @@ export default function InboxPage() {
 
       {/* Main content */}
       <div className="flex-1 flex flex-col min-w-0">
-        {/* Toolbar row */}
-        <div className="flex items-center gap-3 px-4 sm:px-6 py-3 border-b border-gray-100">
+        {/* Toolbar row — hidden when there is nothing to show */}
+        <div className="flex items-center gap-3 px-4 sm:px-6 py-2.5 border-b border-gray-100 min-h-[48px]">
+          {filteredConversations.length > 0 && (
           <input
             type="checkbox"
             checked={selectedMessages.size > 0 && selectedMessages.size === paginatedConversations.length}
             onChange={toggleSelectAll}
-            className="w-4 h-4 rounded border-gray-300 bg-white text-[#1787FE] focus:ring-[#1787FE] focus:ring-offset-0 cursor-pointer"
+            className="w-4 h-4 rounded border-gray-300 bg-white text-[#1787FE] focus:ring-[#1787FE] focus:ring-offset-0 cursor-pointer flex-shrink-0"
           />
+          )}
+
+          {selectedMessages.size > 0 ? (
+            <>
+              <span className="text-sm text-gray-500 font-medium">
+                {selectedMessages.size} selected
+              </span>
+              {activeFilter === 'bin' ? (
+                <button
+                  onClick={handleBulkRestore}
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-[#1787FE] hover:bg-[#1377e0] rounded-lg transition whitespace-nowrap"
+                  title="Restore selected from Bin"
+                >
+                  <Undo2 size={13} />
+                  Restore
+                </button>
+              ) : (
+                <button
+                  onClick={handleBulkDelete}
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-red-500 hover:bg-red-600 rounded-lg transition whitespace-nowrap"
+                  title="Move selected to Bin"
+                >
+                  <Trash2 size={13} />
+                  Move to Bin
+                </button>
+              )}
+            </>
+          ) : filteredConversations.length > 0 ? (
+            <span className="text-xs text-gray-400 select-none">
+              {filteredConversations.length} conversation{filteredConversations.length !== 1 ? 's' : ''}
+            </span>
+          ) : null}
         </div>
 
         {/* Message rows */}
@@ -1507,11 +1857,42 @@ export default function InboxPage() {
           {showConversationSkeleton && filteredConversations.length === 0 ? (
             <InboxListSkeleton />
           ) : filteredConversations.length === 0 && !loadingConversations ? (
-            <div className="flex flex-col items-center justify-center h-full text-gray-500 px-6">
-              <MessageSquare size={48} className="mb-3 text-gray-300" />
-              <p className="text-sm font-medium text-gray-600">No conversations found</p>
-              <p className="text-xs mt-1 text-gray-400">Connect an account or adjust your filters</p>
-            </div>
+            /* Empty state — context-aware per filter tab */
+            (() => {
+              const emptyCopy = {
+                all:         { title: 'No conversations yet',        sub: 'Connect a platform to start receiving messages.' },
+                unread:      { title: 'All caught up!',              sub: 'You have no unread messages right now.' },
+                starred:     { title: 'No starred messages',         sub: 'Mark important conversations to access them quickly.' },
+                ai_responded:{ title: 'No AI-handled messages yet',  sub: 'Messages responded to by AI will appear here.' },
+                draft:       { title: 'No drafts available',         sub: 'Start typing a message and save it as a draft.' },
+                bin:         { title: 'Bin is empty',                sub: 'Deleted messages will appear here.' },
+              };
+              const { title, sub } = emptyCopy[activeFilter] || emptyCopy.all;
+              return (
+                <div className="flex flex-col items-center justify-center h-full px-6 select-none">
+                  <div className="flex items-end gap-1 mb-5" style={{ height: 48 }}>
+                    {[0.6, 1, 0.75, 1.15, 0.5].map((scale, i) => (
+                      <div
+                        key={i}
+                        className="w-3 rounded-full bg-[#1787FE]"
+                        style={{
+                          height: `${Math.round(scale * 28)}px`,
+                          animation: `inboxBarBounce 1.1s ease-in-out ${i * 0.18}s infinite alternate`,
+                        }}
+                      />
+                    ))}
+                  </div>
+                  <style>{`
+                    @keyframes inboxBarBounce {
+                      from { transform: scaleY(0.45); opacity: 0.55; }
+                      to   { transform: scaleY(1);    opacity: 1; }
+                    }
+                  `}</style>
+                  <p className="text-base font-semibold text-gray-700 mt-1">{title}</p>
+                  <p className="text-xs text-gray-400 mt-1.5 text-center leading-relaxed">{sub}</p>
+                </div>
+              );
+            })()
           ) : (
             paginatedConversations.map((conv, rowIdx) => {
               const lastMessage = conv.messages?.[0];
@@ -1548,6 +1929,14 @@ export default function InboxPage() {
                   >
                     <Star size={16} fill={isStarred ? 'currentColor' : 'none'} />
                   </button>
+
+                  {/* Avatar (initials fallback — WhatsApp API does not expose profile pictures) */}
+                  <ContactAvatar
+                    name={getContactDisplayName(conv.contact, convPlatform)}
+                    avatarUrl={conv.contact?.avatarUrl}
+                    platform={convPlatform}
+                    size={8}
+                  />
 
                   {/* Sender name */}
                   <span className={`w-36 truncate text-sm flex-shrink-0 ${isUnread ? 'font-semibold text-gray-900' : 'text-gray-700'}`}>
@@ -1652,8 +2041,24 @@ export default function InboxPage() {
 // FILTER PANEL COMPONENT
 // ═══════════════════════════════════════════════════════════════════
 
-function FilterPanel({ activeFilter, setActiveFilter, filterCounts, sourceFilters, toggleSourceFilter, sourceCounts, availableSourceFilters, conversationId, navigate }) {
+const FilterPanel = memo(function FilterPanel({ activeFilter, setActiveFilter, filterCounts, sourceFilters, toggleSourceFilter, sourceCounts, availableSourceFilters, conversationId, navigate, dark = false }) {
   const { openLinkAccounts } = useLinkAccounts();
+
+  // Theme tokens — light (desktop sidebar) vs dark (mobile drawer)
+  const t = {
+    inactive:    dark ? 'text-white/70 hover:bg-white/10 hover:text-white' : 'text-gray-700 hover:bg-gray-100 hover:text-gray-900',
+    inactiveIcon: dark ? 'text-white/40' : 'text-gray-400',
+    inactiveCnt:  dark ? 'text-white/40' : 'text-gray-400',
+    sectionHdr:   dark ? 'text-white/40' : 'text-gray-500',
+    srcInactive:  dark ? 'text-white/70 hover:bg-white/10' : 'text-gray-700 hover:bg-gray-50 hover:text-gray-900',
+    srcChecked:   dark ? 'bg-white/10 text-white' : 'bg-blue-50 text-gray-900',
+    srcCntChk:    dark ? 'bg-white/20 text-white' : 'bg-blue-100 text-blue-700',
+    srcCntUncChk: dark ? 'text-white/40' : 'text-gray-400',
+    connectBtn:   dark ? 'text-white/50 hover:text-white' : 'text-gray-500 hover:text-[#1787FE]',
+    chkBorder:    dark ? 'border-white/20' : 'border-gray-300',
+    chkBg:        dark ? 'bg-white/5' : 'bg-white',
+  };
+
   return (
     <div className="flex flex-col h-full py-4">
       {/* Filter categories */}
@@ -1671,16 +2076,16 @@ function FilterPanel({ activeFilter, setActiveFilter, filterCounts, sourceFilter
               className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-sm transition ${
                 isActive
                   ? 'bg-[#1787FE] text-white shadow-lg shadow-[#1787FE]/20'
-                  : 'text-gray-700 hover:bg-gray-100 hover:text-gray-900'
+                  : t.inactive
               }`}
             >
               <div className="flex items-center gap-3">
-                <Icon size={18} className={isActive ? 'text-white' : 'text-gray-400'} />
+                <Icon size={18} className={isActive ? 'text-white' : t.inactiveIcon} />
                 <span className={isActive ? 'font-semibold' : ''}>{label}</span>
               </div>
               {count > 0 && (
                 <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${
-                  isActive ? 'bg-white/25 text-white' : 'text-gray-400'
+                  isActive ? 'bg-white/25 text-white' : t.inactiveCnt
                 }`}>
                   {count}
                 </span>
@@ -1693,38 +2098,36 @@ function FilterPanel({ activeFilter, setActiveFilter, filterCounts, sourceFilter
       {/* Source section — only connected platforms, clickable filters */}
       {availableSourceFilters.length > 0 && (
         <div className="mt-6 px-3">
-          <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider px-3 mb-2">Source</h3>
+          <h3 className={`text-xs font-semibold uppercase tracking-wider px-3 mb-2 ${t.sectionHdr}`}>Source</h3>
           <div className="space-y-0.5">
             {availableSourceFilters.map(({ key, label }) => {
-              const isActive = sourceFilters.has(key);
+              const isChecked = sourceFilters.has(key);
               const count = sourceCounts[key] || 0;
               return (
                 <button
                   key={key}
                   onClick={() => toggleSourceFilter(key)}
                   className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-sm transition ${
-                    isActive
-                      ? 'bg-blue-50 text-gray-900'
-                      : 'text-gray-700 hover:bg-gray-50 hover:text-gray-900'
+                    isChecked ? t.srcChecked : t.srcInactive
                   }`}
                 >
                   <div className="flex items-center gap-3">
                     <span className={`w-4 h-4 rounded flex-shrink-0 flex items-center justify-center border ${
-                      isActive
+                      isChecked
                         ? key === 'instagram' ? 'bg-orange-500 border-orange-500' :
-                          key === 'facebook' ? 'bg-blue-500 border-blue-500' :
-                          key === 'whatsapp' ? 'bg-green-500 border-green-500' :
-                          key === 'gmail' ? 'bg-red-500 border-red-500' :
-                          key === 'linkedin' ? 'bg-sky-500 border-sky-500' : 'bg-gray-500 border-gray-500'
-                        : 'bg-white border-gray-300'
+                          key === 'facebook'  ? 'bg-blue-500  border-blue-500'  :
+                          key === 'whatsapp'  ? 'bg-green-500 border-green-500' :
+                          key === 'gmail'     ? 'bg-red-500   border-red-500'   :
+                          key === 'linkedin'  ? 'bg-sky-500   border-sky-500'   : 'bg-gray-500 border-gray-500'
+                        : `${t.chkBg} ${t.chkBorder}`
                     }`}>
-                      {isActive && <span className="text-white text-[10px] leading-none">✓</span>}
+                      {isChecked && <span className="text-white text-[10px] leading-none">✓</span>}
                     </span>
-                    <span className={isActive ? 'font-medium' : ''}>{label}</span>
+                    <span className={isChecked ? 'font-medium' : ''}>{label}</span>
                   </div>
                   {count > 0 && (
                     <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${
-                      isActive ? 'bg-blue-100 text-blue-700' : 'text-gray-400'
+                      isChecked ? t.srcCntChk : t.srcCntUncChk
                     }`}>
                       {count}
                     </span>
@@ -1741,11 +2144,61 @@ function FilterPanel({ activeFilter, setActiveFilter, filterCounts, sourceFilter
         <button
           type="button"
           onClick={openLinkAccounts}
-          className="flex items-center gap-2 text-sm text-gray-500 hover:text-[#1787FE] transition"
+          className={`flex items-center gap-2 text-sm transition ${t.connectBtn}`}
         >
           <span className="text-lg leading-none">+</span>
           Connect account
         </button>
+      </div>
+    </div>
+  );
+});
+
+// ═══════════════════════════════════════════════════════════════════
+// SIMPLE EMOJI PICKER — no external library required
+// ═══════════════════════════════════════════════════════════════════
+
+const EMOJI_LIST = [
+  '😀','😃','😄','😁','😆','😅','🤣','😂','🙂','🙃',
+  '😉','😊','😇','🥰','😍','🤩','😘','😗','😚','😙',
+  '🥲','😋','😛','😜','🤪','😝','🤑','🤗','🤭','🫢',
+  '🤫','🤔','🤐','🤨','😐','😑','😶','😏','😒','🙄',
+  '😬','🤥','😌','😔','😪','🤤','😴','😷','🤒','🤧',
+  '🥺','😢','😭','😤','😠','😡','🤬','💀','💩','🤡',
+  '👋','🤚','✋','🖖','🫱','👌','🤌','🤏','✌️','🤞',
+  '🫶','❤️','🧡','💛','💚','💙','💜','🖤','🤍','💔',
+  '🎉','🎊','🎈','🔥','✨','⭐','💫','🌟','💯','👍',
+  '👎','👏','🙌','🤝','🫂','💪','🦾','🚀','🌈','😎',
+];
+
+function SimpleEmojiPicker({ onSelect, onClose }) {
+  const ref = useRef(null);
+
+  useEffect(() => {
+    const handleOutsideClick = (e) => {
+      if (ref.current && !ref.current.contains(e.target)) onClose();
+    };
+    document.addEventListener('mousedown', handleOutsideClick);
+    return () => document.removeEventListener('mousedown', handleOutsideClick);
+  }, [onClose]);
+
+  return (
+    <div
+      ref={ref}
+      className="absolute bottom-full right-0 mb-2 z-50 bg-white border border-gray-200 rounded-xl shadow-lg p-2 w-64"
+    >
+      <div className="grid grid-cols-10 gap-0.5 max-h-48 overflow-y-auto">
+        {EMOJI_LIST.map((emoji) => (
+          <button
+            key={emoji}
+            type="button"
+            onClick={() => { onSelect(emoji); onClose(); }}
+            className="text-xl hover:bg-gray-100 rounded p-0.5 transition leading-none"
+            aria-label={emoji}
+          >
+            {emoji}
+          </button>
+        ))}
       </div>
     </div>
   );
@@ -1755,92 +2208,127 @@ function FilterPanel({ activeFilter, setActiveFilter, filterCounts, sourceFilter
 // CHAT COMPOSER (dark theme, matching design)
 // ═══════════════════════════════════════════════════════════════════
 
-function ChatComposer({
+const ChatComposer = memo(function ChatComposer({
   newMessage, setNewMessage, handleSend, sending, attachments, onAttachClick,
-  onAiRespond, aiLoading, aiSuggestion, aiError, onAiUse, onAiDismiss,
+  onAiRespond, aiLoading, aiSuggestion, aiError, aiQuota, onAiUse, onAiCopy, onAiDismiss,
 }) {
   const hasContent = newMessage.trim() || attachments.length > 0;
-  const [autoSend, setAutoSend] = useState(false);
+  const aiQuotaReached = !!(aiQuota && !aiQuota.unlimited && aiQuota.limit !== null && aiQuota.used >= aiQuota.limit);
+  const [showEmojiPicker, setShowEmojiPicker] = useState(false);
+  const inputRef = useRef(null);
+
+  const insertEmoji = useCallback((emoji) => {
+    const input = inputRef.current;
+    if (!input) {
+      setNewMessage((prev) => prev + emoji);
+      return;
+    }
+    const start = input.selectionStart ?? input.value.length;
+    const end = input.selectionEnd ?? input.value.length;
+    const newVal = input.value.slice(0, start) + emoji + input.value.slice(end);
+    setNewMessage(newVal);
+    requestAnimationFrame(() => {
+      input.setSelectionRange(start + emoji.length, start + emoji.length);
+      input.focus();
+    });
+  }, [setNewMessage]);
 
   const handleUseSuggestion = () => {
-    if (autoSend) {
-      onAiUse(aiSuggestion);
-      // Trigger send after state update
-      setTimeout(() => {
-        document.getElementById('chat-send-btn')?.click();
-      }, 50);
-    } else {
-      onAiUse(aiSuggestion);
-    }
+    onAiUse(aiSuggestion);
   };
 
   return (
     <div className="border-t border-gray-100 bg-white px-4 sm:px-6 py-3 space-y-2">
       {/* AI Suggestion Box */}
       {(aiSuggestion || aiLoading || aiError) && (
-        <div className="rounded-xl border-2 border-dashed border-[#1787FE]/40 bg-blue-50/60 px-4 py-3 relative">
-          {aiLoading && (
-            <div className="flex items-center gap-2 text-sm text-gray-500">
-              <Sparkles size={14} className="text-[#1787FE] animate-pulse" />
-              Generating AI reply...
+        <div className="rounded-xl border-2 border-dashed border-[#1787FE]/40 bg-blue-50/60 px-4 py-3 flex flex-col gap-2">
+          {/* Header */}
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-1.5 text-xs font-semibold text-[#1787FE]">
+              <Sparkles size={13} className={aiLoading ? 'animate-pulse' : ''} />
+              AI Suggestion
             </div>
+            {(aiSuggestion || aiError) && (
+              <button
+                type="button"
+                onClick={onAiDismiss}
+                className="text-gray-300 hover:text-gray-500 transition flex-shrink-0"
+                title="Dismiss"
+              >
+                <X size={14} />
+              </button>
+            )}
+          </div>
+
+          {/* Body */}
+          {aiLoading && (
+            <p className="text-sm text-gray-500">Generating AI reply…</p>
           )}
           {aiError && (
-            <div className="text-sm text-red-500">{aiError}</div>
+            <p className="text-sm text-red-500">{aiError}</p>
           )}
           {aiSuggestion && (
-            <>
-              <p className="text-sm text-gray-800 leading-relaxed pr-24">{aiSuggestion}</p>
-              <div className="absolute top-2 right-2 flex flex-col gap-1.5 items-end">
-                <button
-                  onClick={() => { navigator.clipboard.writeText(aiSuggestion); }}
-                  className="px-3 py-1.5 text-xs font-semibold border border-gray-300 bg-white rounded-lg hover:bg-gray-50 transition whitespace-nowrap"
-                >
-                  Copy Text
-                </button>
-                <button
-                  onClick={handleUseSuggestion}
-                  className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-[#1787FE] text-white rounded-lg hover:bg-[#1377e0] transition whitespace-nowrap"
-                >
-                  Auto-Send
-                  <Send size={11} />
-                </button>
-                <label className="flex items-center gap-1 text-xs text-gray-500 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={autoSend}
-                    onChange={e => setAutoSend(e.target.checked)}
-                    className="w-3 h-3"
-                  />
-                  Always
-                </label>
-              </div>
+            <p className="text-sm text-gray-800 leading-relaxed">{aiSuggestion}</p>
+          )}
+
+          {/* Action buttons — always below the text, never overlapping */}
+          {aiSuggestion && (
+            <div className="flex items-center justify-end gap-2 pt-1 border-t border-[#1787FE]/10">
               <button
-                onClick={onAiDismiss}
-                className="absolute bottom-2 right-2 text-gray-300 hover:text-gray-500 transition"
+                type="button"
+                onClick={() => { navigator.clipboard.writeText(aiSuggestion); onAiCopy?.(); }}
+                className="px-3 py-1.5 text-xs font-semibold border border-gray-300 bg-white rounded-lg hover:bg-gray-50 transition whitespace-nowrap"
               >
-                <X size={13} />
+                Copy Text
               </button>
-            </>
+              <button
+                type="button"
+                onClick={handleUseSuggestion}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-[#1787FE] text-white rounded-lg hover:bg-[#1377e0] transition whitespace-nowrap"
+              >
+                Use Reply <Send size={11} />
+              </button>
+            </div>
           )}
         </div>
       )}
 
+      {/* Quota banner — only shown when the limit is reached */}
+      {aiQuotaReached && (
+        <div className="mx-1 mb-1 px-3 py-2 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-700 flex items-center gap-2">
+          <Sparkles size={12} className="text-amber-500 flex-shrink-0" />
+          <span>AI reply limit reached ({aiQuota.used}/{aiQuota.limit}).{' '}
+            <a href="/settings?tab=plan" className="font-semibold underline hover:text-amber-900">Upgrade to continue</a>
+          </span>
+        </div>
+      )}
+
       <form onSubmit={handleSend} className="flex items-center gap-3">
-        {/* AI Respond pill */}
+        {/* AI Respond — generates a suggestion; user reviews then clicks Use Reply */}
         <button
           type="button"
           onClick={onAiRespond}
-          disabled={aiLoading}
-          className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-[#1787FE] bg-blue-50 hover:bg-blue-100 rounded-full transition whitespace-nowrap disabled:opacity-50"
+          disabled={aiLoading || aiQuotaReached}
+          title={aiQuotaReached ? `AI reply limit reached (${aiQuota.used}/${aiQuota.limit}). Upgrade to continue.` : undefined}
+          className={`flex items-center gap-2 px-3 py-2 text-sm font-medium rounded-full transition whitespace-nowrap flex-shrink-0 ${
+            aiQuotaReached
+              ? 'text-gray-400 bg-gray-100 cursor-not-allowed opacity-60'
+              : 'text-[#1787FE] bg-blue-50 hover:bg-blue-100 disabled:opacity-50'
+          }`}
         >
           <Sparkles size={14} className={aiLoading ? 'animate-pulse' : ''} />
           AI Respond
+          {aiQuota && !aiQuota.unlimited && aiQuota.limit !== null && (
+            <span className={`text-[10px] font-bold ml-0.5 ${aiQuotaReached ? 'text-gray-400' : 'text-[#1787FE]/60'}`}>
+              {aiQuota.used}/{aiQuota.limit}
+            </span>
+          )}
         </button>
 
         {/* Input */}
         <div className="flex-1 relative">
           <input
+            ref={inputRef}
             type="text"
             value={newMessage}
             onChange={(e) => setNewMessage(e.target.value)}
@@ -1860,12 +2348,22 @@ function ChatComposer({
         </button>
 
         {/* Emoji */}
-        <button
-          type="button"
-          className="p-2 text-gray-400 hover:text-gray-700 transition hidden sm:block"
-        >
-          <Smile size={18} />
-        </button>
+        <div className="relative hidden sm:block">
+          <button
+            type="button"
+            onClick={() => setShowEmojiPicker((v) => !v)}
+            className={`p-2 transition ${showEmojiPicker ? 'text-[#1787FE]' : 'text-gray-400 hover:text-gray-700'}`}
+            title="Emoji"
+          >
+            <Smile size={18} />
+          </button>
+          {showEmojiPicker && (
+            <SimpleEmojiPicker
+              onSelect={insertEmoji}
+              onClose={() => setShowEmojiPicker(false)}
+            />
+          )}
+        </div>
 
         {/* Send */}
         <button
@@ -1876,6 +2374,128 @@ function ChatComposer({
         >
           Send
           <Send size={14} />
+        </button>
+      </form>
+    </div>
+  );
+});
+
+// ═══════════════════════════════════════════════════════════════════
+// MOBILE CHAT COMPOSER — dark navy bottom bar matching mockup
+// ═══════════════════════════════════════════════════════════════════
+
+function MobileChatComposer({
+  newMessage, setNewMessage, handleSend, sending, attachments, onAttachClick,
+  onAiRespond, aiLoading, aiSuggestion, aiError, aiQuota, onAiUse, onAiCopy, onAiDismiss,
+}) {
+  const hasContent = newMessage.trim() || attachments.length > 0;
+  const aiQuotaReached = !!(aiQuota && !aiQuota.unlimited && aiQuota.limit !== null && aiQuota.used >= aiQuota.limit);
+
+  return (
+    <div className="bg-[#0B1628] px-3 py-3 border-t border-white/5 space-y-2">
+      {/* Quota banner — mobile dark theme */}
+      {aiQuotaReached && (
+        <div className="px-3 py-2 bg-amber-900/30 border border-amber-500/30 rounded-xl text-xs text-amber-400 flex items-center gap-2">
+          <Sparkles size={12} className="text-amber-400 flex-shrink-0" />
+          <span>AI limit reached ({aiQuota.used}/{aiQuota.limit}).{' '}
+            <a href="/settings?tab=plan" className="font-semibold underline">Upgrade</a>
+          </span>
+        </div>
+      )}
+      {/* AI Suggestion Box — same Copy / Use Reply flow as desktop */}
+      {(aiSuggestion || aiLoading || aiError) && (
+        <div className="rounded-xl border border-[#1787FE]/40 bg-[#0F1D33] px-3 py-2.5 flex flex-col gap-2">
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-1.5 text-xs font-semibold text-[#1787FE]">
+              <Sparkles size={13} className={aiLoading ? 'animate-pulse' : ''} />
+              AI Suggestion
+            </div>
+            {(aiSuggestion || aiError) && (
+              <button
+                type="button"
+                onClick={onAiDismiss}
+                className="text-white/40 hover:text-white/70 transition flex-shrink-0"
+                title="Dismiss"
+              >
+                <X size={14} />
+              </button>
+            )}
+          </div>
+          {aiLoading && <p className="text-sm text-white/60">Generating AI reply…</p>}
+          {aiError && <p className="text-sm text-red-400">{aiError}</p>}
+          {aiSuggestion && <p className="text-sm text-white/90 leading-relaxed">{aiSuggestion}</p>}
+          {aiSuggestion && (
+            <div className="flex items-center justify-end gap-2 pt-1 border-t border-white/10">
+              <button
+                type="button"
+                onClick={() => { navigator.clipboard.writeText(aiSuggestion); onAiCopy?.(); }}
+                className="px-3 py-1.5 text-xs font-semibold border border-white/20 bg-transparent text-white/80 rounded-lg hover:bg-white/10 transition"
+              >
+                Copy Text
+              </button>
+              <button
+                type="button"
+                onClick={() => onAiUse(aiSuggestion)}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-[#1787FE] text-white rounded-lg hover:bg-[#1377e0] transition"
+              >
+                Use Reply <Send size={11} />
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
+      <form onSubmit={handleSend} className="flex items-center gap-2">
+        {/* Attach */}
+        <button
+          type="button"
+          onClick={onAttachClick}
+          className="text-[#1787FE] p-1.5 flex-shrink-0"
+          aria-label="Attach file"
+        >
+          <Paperclip size={20} />
+        </button>
+
+        {/* Pill input */}
+        <div className="flex-1 relative">
+          <input
+            type="text"
+            value={newMessage}
+            onChange={(e) => setNewMessage(e.target.value)}
+            placeholder="Write message"
+            className="w-full px-4 py-2.5 bg-[#0F1D33] border border-white/5 rounded-full text-sm text-white placeholder-white/40 focus:border-[#1787FE] outline-none transition"
+          />
+        </div>
+
+        {/* AI Respond button */}
+        <button
+          type="button"
+          onClick={onAiRespond}
+          disabled={aiLoading || aiQuotaReached}
+          title={aiQuotaReached ? `AI reply limit reached (${aiQuota.used}/${aiQuota.limit}). Upgrade to continue.` : 'AI Respond'}
+          className={`w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0 disabled:opacity-50 transition ${aiQuotaReached ? 'bg-gray-200' : 'bg-white'}`}
+          aria-label="AI Respond"
+        >
+          <Sparkles size={18} className={`${aiQuotaReached ? 'text-gray-400' : 'text-[#1787FE]'} ${aiLoading ? 'animate-pulse' : ''}`} />
+        </button>
+
+        {/* Camera */}
+        <button
+          type="button"
+          onClick={onAttachClick}
+          className="text-white/70 p-1.5 flex-shrink-0"
+          aria-label="Camera"
+        >
+          <Camera size={20} />
+        </button>
+
+        {/* Mic */}
+        <button
+          type="button"
+          className="text-white/70 p-1.5 flex-shrink-0"
+          aria-label="Voice message"
+        >
+          <Mic size={20} />
         </button>
       </form>
     </div>
@@ -2237,51 +2857,80 @@ function EmailAttachments({ attachments, messageId }) {
 // ═══════════════════════════════════════════════════════════════════
 
 const EmailReplyBox = forwardRef(function EmailReplyBox(
-  { showReplyBox, replyingTo, newMessage, setNewMessage, handleSend, sending, attachments, onAttachClick, removeAttachment, uploadProgress, onOpenReply, onClose, onAiRespond, aiLoading, aiSuggestion, aiError, onAiUse, onAiDismiss },
+  { showReplyBox, replyingTo, newMessage, setNewMessage, handleSend, sending, attachments, onAttachClick, removeAttachment, uploadProgress, onOpenReply, onClose, onAiRespond, aiLoading, aiSuggestion, aiError, onAiUse, onAiCopy, onAiDismiss },
   ref
 ) {
   const hasContent = newMessage.trim() || attachments.length > 0;
+  const [showEmojiPickerEmail, setShowEmojiPickerEmail] = useState(false);
+  const emailInputRef = useRef(null);
+
+  const insertEmojiEmail = useCallback((emoji) => {
+    const input = emailInputRef.current;
+    if (!input) {
+      setNewMessage((prev) => prev + emoji);
+      return;
+    }
+    const start = input.selectionStart ?? input.value.length;
+    const end = input.selectionEnd ?? input.value.length;
+    const newVal = input.value.slice(0, start) + emoji + input.value.slice(end);
+    setNewMessage(newVal);
+    requestAnimationFrame(() => {
+      input.setSelectionRange(start + emoji.length, start + emoji.length);
+      input.focus();
+    });
+  }, [setNewMessage]);
 
   return (
     <div ref={ref} className="border-t border-gray-100 bg-white px-4 sm:px-6 py-3 space-y-2">
 
       {/* AI Suggestion Box — shown when AI generates a reply */}
       {(aiSuggestion || aiLoading || aiError) && (
-        <div className="rounded-xl border-2 border-dashed border-[#1787FE]/40 bg-blue-50/60 px-4 py-3 relative">
-          {aiLoading && (
-            <div className="flex items-center gap-2 text-sm text-gray-500">
-              <Sparkles size={14} className="text-[#1787FE] animate-pulse" />
-              Generating AI reply...
+        <div className="rounded-xl border-2 border-dashed border-[#1787FE]/40 bg-blue-50/60 px-4 py-3 flex flex-col gap-2">
+          {/* Header */}
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-1.5 text-xs font-semibold text-[#1787FE]">
+              <Sparkles size={13} className={aiLoading ? 'animate-pulse' : ''} />
+              AI Suggestion
             </div>
-          )}
-          {aiError && <div className="text-sm text-red-500">{aiError}</div>}
-          {aiSuggestion && (
-            <>
-              <p className="text-sm text-gray-800 leading-relaxed pr-24">{aiSuggestion}</p>
-              <div className="absolute top-2 right-2 flex flex-col gap-1.5 items-end">
-                <button
-                  type="button"
-                  onClick={() => navigator.clipboard.writeText(aiSuggestion)}
-                  className="px-3 py-1.5 text-xs font-semibold border border-gray-300 bg-white rounded-lg hover:bg-gray-50 transition whitespace-nowrap"
-                >
-                  Copy Text
-                </button>
-                <button
-                  type="button"
-                  onClick={() => onAiUse(aiSuggestion)}
-                  className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-[#1787FE] text-white rounded-lg hover:bg-[#1377e0] transition whitespace-nowrap"
-                >
-                  Use Reply <Send size={11} />
-                </button>
-              </div>
+            {(aiSuggestion || aiError) && (
               <button
                 type="button"
                 onClick={onAiDismiss}
-                className="absolute bottom-2 right-2 text-gray-300 hover:text-gray-500 transition"
+                className="text-gray-300 hover:text-gray-500 transition flex-shrink-0"
+                title="Dismiss"
               >
-                <X size={13} />
+                <X size={14} />
               </button>
-            </>
+            )}
+          </div>
+
+          {/* Body */}
+          {aiLoading && (
+            <p className="text-sm text-gray-500">Generating AI reply…</p>
+          )}
+          {aiError && <p className="text-sm text-red-500">{aiError}</p>}
+          {aiSuggestion && (
+            <p className="text-sm text-gray-800 leading-relaxed">{aiSuggestion}</p>
+          )}
+
+          {/* Action buttons — always below text, never overlapping */}
+          {aiSuggestion && (
+            <div className="flex items-center justify-end gap-2 pt-1 border-t border-[#1787FE]/10">
+              <button
+                type="button"
+                onClick={() => { navigator.clipboard.writeText(aiSuggestion); onAiCopy?.(); }}
+                className="px-3 py-1.5 text-xs font-semibold border border-gray-300 bg-white rounded-lg hover:bg-gray-50 transition whitespace-nowrap"
+              >
+                Copy Text
+              </button>
+              <button
+                type="button"
+                onClick={() => onAiUse(aiSuggestion)}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-[#1787FE] text-white rounded-lg hover:bg-[#1377e0] transition whitespace-nowrap"
+              >
+                Use Reply <Send size={11} />
+              </button>
+            </div>
           )}
         </div>
       )}
@@ -2330,6 +2979,7 @@ const EmailReplyBox = forwardRef(function EmailReplyBox(
         {/* Input */}
         <div className="flex-1 relative">
           <input
+            ref={emailInputRef}
             type="text"
             value={newMessage}
             onChange={(e) => setNewMessage(e.target.value)}
@@ -2340,10 +2990,23 @@ const EmailReplyBox = forwardRef(function EmailReplyBox(
           />
         </div>
 
-        {/* Mic */}
-        <button type="button" className="p-2 text-gray-400 hover:text-gray-700 transition flex-shrink-0" title="Voice">
-          <Mic size={18} />
-        </button>
+        {/* Emoji */}
+        <div className="relative flex-shrink-0">
+          <button
+            type="button"
+            onClick={() => setShowEmojiPickerEmail((v) => !v)}
+            className={`p-2 transition ${showEmojiPickerEmail ? 'text-[#1787FE]' : 'text-gray-400 hover:text-gray-700'}`}
+            title="Emoji"
+          >
+            <Smile size={18} />
+          </button>
+          {showEmojiPickerEmail && (
+            <SimpleEmojiPicker
+              onSelect={insertEmojiEmail}
+              onClose={() => setShowEmojiPickerEmail(false)}
+            />
+          )}
+        </div>
 
         {/* Image */}
         <button type="button" onClick={onAttachClick} className="p-2 text-gray-400 hover:text-gray-700 transition flex-shrink-0" title="Attach image">
@@ -2647,6 +3310,82 @@ function getPlatformAvatarStyle(platform, name) {
     case 'facebook': return 'bg-blue-100 text-blue-600';
     default: return 'bg-gray-100 text-gray-500';
   }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// EDITABLE CONTACT NAME — click the name in the chat header to rename
+// ═══════════════════════════════════════════════════════════════════
+
+function EditableContactName({ initialName, contactId, onSaved, className = '', inputClassName = '' }) {
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState(initialName);
+  const [saving, setSaving] = useState(false);
+  const inputRef = useRef(null);
+
+  useEffect(() => { setValue(initialName); }, [initialName]);
+
+  useEffect(() => {
+    if (editing && inputRef.current) {
+      inputRef.current.focus();
+      inputRef.current.select();
+    }
+  }, [editing]);
+
+  const save = async () => {
+    const trimmed = value.trim();
+    if (!trimmed || trimmed === initialName) {
+      setEditing(false);
+      setValue(initialName);
+      return;
+    }
+    setSaving(true);
+    try {
+      const res = await api.patch(`/api/contacts/${contactId}`, { name: trimmed });
+      onSaved?.(res.data.contact);
+      setEditing(false);
+    } catch (err) {
+      console.error('Rename contact failed:', err);
+      setValue(initialName);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const cancel = () => {
+    setValue(initialName);
+    setEditing(false);
+  };
+
+  if (editing) {
+    return (
+      <input
+        ref={inputRef}
+        type="text"
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        onBlur={save}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') save();
+          if (e.key === 'Escape') cancel();
+        }}
+        disabled={saving}
+        className={inputClassName || 'px-2 py-0.5 bg-white border border-[#1787FE] rounded text-sm text-gray-900 outline-none'}
+      />
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={() => contactId && setEditing(true)}
+      disabled={!contactId}
+      className={`${className} inline-flex items-center gap-1.5 group ${contactId ? 'hover:text-[#1787FE]' : 'cursor-default'} transition`}
+      title={contactId ? 'Click to rename' : ''}
+    >
+      <span className="truncate">{initialName}</span>
+      {contactId && <Pencil size={12} className="opacity-0 group-hover:opacity-100 transition flex-shrink-0" />}
+    </button>
+  );
 }
 
 // ═══════════════════════════════════════════════════════════════════

@@ -3,6 +3,56 @@ import crypto from 'crypto';
 import axios from 'axios';
 import prisma from '../utils/prisma.js';
 import { decrypt } from '../utils/encryption.js';
+import { uploadFile } from '../utils/s3.js';
+
+/**
+ * Download a media URL and upload it to S3 for permanent storage.
+ * Returns the S3 key on success, null on failure (non-fatal).
+ */
+async function mirrorMediaToS3(fileUrl, mimeType, folder) {
+  try {
+    const response = await axios.get(fileUrl, { responseType: 'arraybuffer', timeout: 30000 });
+    const buffer = Buffer.from(response.data);
+    const ext = mimeType === 'video/mp4' ? 'mp4'
+      : mimeType === 'image/jpeg' ? 'jpg'
+      : mimeType === 'audio/mpeg' ? 'mp3'
+      : 'bin';
+    const key = `${folder}/${Date.now()}-${crypto.randomBytes(6).toString('hex')}.${ext}`;
+    await uploadFile(buffer, key, mimeType);
+    return key;
+  } catch (err) {
+    console.warn('[Meta Webhook] S3 mirror failed:', err.message);
+    return null;
+  }
+}
+
+/**
+ * Fire-and-forget: download each CDN attachment and re-host on S3.
+ * Updates the message row once all uploads complete.
+ */
+function mirrorAttachmentsInBackground(messageId, attachments, folder) {
+  if (!attachments?.some((a) => a.fileUrl)) return;
+  (async () => {
+    try {
+      let changed = false;
+      const updated = await Promise.all(
+        attachments.map(async (att) => {
+          if (!att.fileUrl) return att;
+          const s3Key = await mirrorMediaToS3(att.fileUrl, att.mimeType, folder);
+          if (!s3Key) return att;
+          changed = true;
+          return { ...att, s3Key, fileUrl: null };
+        }),
+      );
+      if (changed) {
+        await prisma.message.update({ where: { id: messageId }, data: { attachments: updated } });
+        console.log(`[Meta Webhook] Mirrored media to S3 for message ${messageId}`);
+      }
+    } catch (err) {
+      console.error('[Meta Webhook] Background S3 mirror error:', err.message);
+    }
+  })();
+}
 
 const GRAPH_API = 'https://graph.facebook.com/v21.0';
 
@@ -305,6 +355,9 @@ async function processMessengerWebhook(payload, io) {
         userId: account.userId,
       });
 
+      // Mirror CDN media to S3 so attachments remain accessible after CDN URLs expire
+      mirrorAttachmentsInBackground(message.id, incomingAttachments, `media/facebook/${message.id}`);
+
       // Emit socket events to user
       io.to(`user:${account.userId}`).emit('new_message', {
         message,
@@ -516,6 +569,9 @@ async function processInstagramWebhook(payload, io) {
         direction: isEcho ? 'outbound' : 'inbound',
       });
 
+      // Mirror CDN media to S3 so attachments remain accessible after CDN URLs expire
+      mirrorAttachmentsInBackground(message.id, igAttachments, `media/instagram/${message.id}`);
+
       io.to(`user:${account.userId}`).emit('new_message', {
         message,
         conversationId: conversation.id,
@@ -537,7 +593,15 @@ async function processWhatsAppWebhook(payload, io) {
     const changes = entry.changes || [];
 
     for (const change of changes) {
-      if (change.field !== 'messages') continue;
+      // 'messages'         — incoming messages from customers
+      // 'smb_message_echoes' — outbound messages sent from the business's WhatsApp mobile app
+      const isEchoField = change.field === 'smb_message_echoes';
+      if (change.field !== 'messages' && !isEchoField) {
+        console.log('[WhatsApp Webhook] Skipping change field:', change.field);
+        continue;
+      }
+
+      console.log('[WhatsApp Webhook] Processing change field:', change.field);
 
       const value = change.value;
       const phoneNumberId = value.metadata?.phone_number_id;
@@ -566,12 +630,25 @@ async function processWhatsAppWebhook(payload, io) {
         }
       }
 
-      if (!value.messages) continue;
+      // Meta delivers payloads under different keys depending on the field:
+      //   'messages'            → value.messages
+      //   'smb_message_echoes'  → value.message_echoes  (NOT value.messages!)
+      // Accept both so mobile-replies from the WhatsApp Business App coexistence
+      // feature get processed too.
+      const incomingMessages = value.messages || value.message_echoes || [];
+
+      if (!incomingMessages.length) {
+        console.log('[WhatsApp Webhook] No messages/message_echoes in value — value keys:', Object.keys(value));
+        continue;
+      }
 
       console.log('[WhatsApp Webhook] Processing messages', {
         wabaId,
         phoneNumberId,
-        messageCount: value.messages.length,
+        field: change.field,
+        messageCount: incomingMessages.length,
+        messageTypes: incomingMessages.map((m) => m.type),
+        source: value.messages ? 'value.messages' : 'value.message_echoes',
       });
 
       // Route to correct tenant using both wabaId AND phoneNumberId for precise multi-tenant matching
@@ -586,144 +663,252 @@ async function processWhatsAppWebhook(payload, io) {
       });
 
       if (!waAccount) {
-        console.warn('[WhatsApp Webhook] No account for wabaId:', wabaId, 'phoneNumberId:', phoneNumberId);
+        console.error('[WhatsApp Webhook] ✗ No account found for wabaId:', wabaId, 'phoneNumberId:', phoneNumberId);
+        // Diagnostic: show all registered WhatsApp accounts to identify mismatch
+        const allWaAccounts = await prisma.whatsappAccount.findMany({
+          select: { phoneNumberId: true, wabaId: true, phoneNumber: true, connectedAccountId: true },
+        });
+        console.error('[WhatsApp Webhook] Registered WhatsApp accounts in DB:', JSON.stringify(allWaAccounts));
         continue;
       }
 
+      console.log('[WhatsApp Webhook] ✓ Account matched — userId:', waAccount.connectedAccount.userId, 'phone:', waAccount.phoneNumber);
+
       const account = waAccount.connectedAccount;
 
-      for (const msg of value.messages) {
-        // Skip non-content message types that would create empty bubbles
-        const supportedTypes = ['text', 'image', 'video', 'audio', 'document', 'sticker'];
-        if (!supportedTypes.includes(msg.type)) {
-          console.log('[WhatsApp Webhook] Skipping unsupported message type:', msg.type, 'id:', msg.id);
-          continue;
-        }
+      // Map WhatsApp message types to ContentType enum values.
+      // 'document' in WhatsApp API → 'file' in our ContentType enum.
+      const WA_CONTENT_TYPE = { text: 'text', image: 'image', video: 'video', audio: 'audio', document: 'file', sticker: 'sticker' };
 
-        // Skip messages with a timestamp older than the account connection time
-        const waMsgTimestamp = msg.timestamp ? new Date(Number(msg.timestamp) * 1000) : null;
-        if (waMsgTimestamp && waMsgTimestamp < new Date(account.createdAt)) {
-          console.log('[WhatsApp Webhook] Skipping pre-connection message:', msg.id);
-          continue;
-        }
+      // 60-second grace period: account.createdAt and Meta timestamps may differ by a few seconds
+      const GRACE_MS = 60 * 1000;
+      const connectedAtMs = new Date(account.createdAt).getTime() - GRACE_MS;
 
-        // Deduplicate: Meta webhooks are at-least-once delivery
-        const existingMsg = await prisma.message.findFirst({
-          where: {
-            platformMessageId: msg.id,
-            conversation: { connectedAccountId: account.id },
-          },
-        });
-        if (existingMsg) {
-          console.log('[WhatsApp Webhook] Duplicate message skipped:', msg.id);
-          continue;
-        }
+      for (const msg of incomingMessages) {
+        // Dump the full message object — helps diagnose when mobile replies don't show up.
+        // smb_message_echoes uses msg.to for the recipient; regular messages use msg.from for the sender.
+        console.log('[WhatsApp Webhook] Processing message (full object):', JSON.stringify({
+          field: change.field,
+          id: msg.id,
+          type: msg.type,
+          from: msg.from,
+          to: msg.to,
+          recipient_id: msg.recipient_id,
+          timestamp: msg.timestamp,
+          keys: Object.keys(msg),
+        }));
 
-        // Extract WhatsApp media attachment metadata
-        const waAttachments = [];
-        const mediaTypes = ['image', 'video', 'audio', 'document', 'sticker'];
-        if (mediaTypes.includes(msg.type) && msg[msg.type]) {
-          const media = msg[msg.type];
-          waAttachments.push({
-            filename: media.filename || `${msg.type}_${Date.now()}`,
-            mimeType: media.mime_type || 'application/octet-stream',
-            size: media.file_size || 0,
-            mediaId: media.id,
-            type: msg.type,
+        try {
+          // Skip non-content message types that would create empty bubbles
+          const supportedTypes = ['text', 'image', 'video', 'audio', 'document', 'sticker'];
+          if (!supportedTypes.includes(msg.type)) {
+            console.log('[WhatsApp Webhook] Skipping unsupported message type:', msg.type, 'id:', msg.id);
+            continue;
+          }
+
+          // Skip messages with a timestamp older than the account connection time (with grace period)
+          const waMsgTimestamp = msg.timestamp ? new Date(Number(msg.timestamp) * 1000) : null;
+          if (waMsgTimestamp && waMsgTimestamp.getTime() < connectedAtMs) {
+            console.log('[WhatsApp Webhook] Skipping pre-connection message:', msg.id, 'msgTime:', waMsgTimestamp.toISOString(), 'connectedAt:', new Date(account.createdAt).toISOString());
+            continue;
+          }
+
+          // Deduplicate: Meta webhooks are at-least-once delivery
+          const existingMsg = await prisma.message.findFirst({
+            where: {
+              platformMessageId: msg.id,
+              conversation: { connectedAccountId: account.id },
+            },
           });
-        }
+          if (existingMsg) {
+            console.log('[WhatsApp Webhook] Duplicate message skipped:', msg.id);
+            continue;
+          }
 
-        // Determine message content
-        const textBody = msg.text?.body || '';
-        const caption = msg[msg.type]?.caption || '';
-        const content = textBody || caption || (waAttachments.length > 0 ? `[${msg.type}]` : '');
+          // Extract WhatsApp media attachment metadata
+          const waAttachments = [];
+          const mediaTypes = ['image', 'video', 'audio', 'document', 'sticker'];
+          if (mediaTypes.includes(msg.type) && msg[msg.type]) {
+            const media = msg[msg.type];
+            waAttachments.push({
+              filename: media.filename || `${msg.type}_${Date.now()}`,
+              mimeType: media.mime_type || 'application/octet-stream',
+              size: media.file_size || 0,
+              mediaId: media.id,
+              type: msg.type,
+            });
+          }
 
-        // Skip messages that have no content and no attachments (would create empty bubbles)
-        if (!content && waAttachments.length === 0) {
-          console.log('[WhatsApp Webhook] Skipping empty message (no content, no attachments):', msg.id, 'type:', msg.type);
-          continue;
-        }
+          // Determine message content
+          const textBody = msg.text?.body || '';
+          const caption = msg[msg.type]?.caption || '';
+          const content = textBody || caption || (waAttachments.length > 0 ? `[${msg.type}]` : '');
 
-        const senderPhone = msg.from;
-        const contactName =
-          value.contacts?.find((c) => c.wa_id === senderPhone)?.profile?.name || senderPhone;
+          // Skip messages that have no content and no attachments (would create empty bubbles)
+          if (!content && waAttachments.length === 0) {
+            console.log('[WhatsApp Webhook] Skipping empty message (no content, no attachments):', msg.id, 'type:', msg.type);
+            continue;
+          }
 
-        const contact = await prisma.contact.upsert({
-          where: {
-            userId_platform_platformUserId: {
+          // ── Detect outbound messages sent from the business's own mobile app ──
+          // Two signals:
+          // 1. The change arrived on the 'smb_message_echoes' field — always outbound.
+          // 2. msg.from digits match the registered business phone number — with a
+          //    tolerant match because waAccount.phoneNumber may be stored as
+          //    "9580341946" (no country code) while the webhook sends "919580341946".
+          //    Use endsWith in both directions so local and E.164 formats both match.
+          const businessPhoneDigits = (waAccount.phoneNumber || '').replace(/\D/g, '');
+          const senderPhoneDigits = (msg.from || '').replace(/\D/g, '');
+          const phoneMatches = businessPhoneDigits.length >= 7 && senderPhoneDigits.length >= 7 && (
+            businessPhoneDigits === senderPhoneDigits ||
+            businessPhoneDigits.endsWith(senderPhoneDigits) ||
+            senderPhoneDigits.endsWith(businessPhoneDigits)
+          );
+          const isOutboundFromMobile = isEchoField || phoneMatches;
+
+          // customerPhone = the phone number of the OTHER party (not the business).
+          // For outbound mobile replies the recipient field varies by payload type:
+          //   - smb_message_echoes:  msg.to
+          //   - Cloud API echoes:    msg.recipient_id
+          // Try every known field and fall back to the first contact entry.
+          let customerPhone;
+          if (isOutboundFromMobile) {
+            customerPhone =
+              msg.to ||
+              msg.recipient_id ||
+              value.contacts?.[0]?.wa_id ||
+              null;
+          } else {
+            customerPhone = msg.from;
+          }
+
+          if (!customerPhone) {
+            console.log('[WhatsApp Webhook] ✗ Cannot determine customer phone — skipping msg:', msg.id, {
+              isOutboundFromMobile,
+              field: change.field,
+              from: msg.from,
+              to: msg.to,
+              recipient_id: msg.recipient_id,
+              contacts: value.contacts,
+            });
+            continue;
+          }
+
+          const direction = isOutboundFromMobile ? 'outbound' : 'inbound';
+          // Profile name from the webhook payload — may be absent, especially for
+          // smb_message_echoes (outbound to new contacts where we never received
+          // their profile).
+          // Use the same endsWith tolerance as phone matching: wa_id may omit the
+          // country code prefix (e.g. "8381820507") while customerPhone includes it
+          // ("918381820507"), or vice-versa.
+          const cpDigits = (customerPhone || '').replace(/\D/g, '');
+          const webhookName = value.contacts?.find((c) => {
+            const cDigits = (c.wa_id || '').replace(/\D/g, '');
+            return cDigits === cpDigits || cDigits.endsWith(cpDigits) || cpDigits.endsWith(cDigits);
+          })?.profile?.name || null;
+          const senderLabel = isOutboundFromMobile
+            ? (waAccount.businessName || 'Business')
+            : (webhookName || customerPhone);
+
+          console.log('[WhatsApp Webhook] Message direction:', direction, '| customer:', customerPhone, '| outbound from mobile:', isOutboundFromMobile, '| webhook name:', webhookName);
+
+          // Contact upsert: only write `name` when we actually have a real profile
+          // name from the webhook. Otherwise, fall back to the phone number on CREATE
+          // only — never overwrite a previously-saved real name with the phone.
+          const contact = await prisma.contact.upsert({
+            where: {
+              userId_platform_platformUserId: {
+                userId: account.userId,
+                platform: 'whatsapp',
+                platformUserId: customerPhone,
+              },
+            },
+            update: webhookName ? { name: webhookName } : {},
+            create: {
               userId: account.userId,
               platform: 'whatsapp',
-              platformUserId: senderPhone,
+              platformUserId: customerPhone,
+              name: webhookName || customerPhone,
             },
-          },
-          update: { name: contactName },
-          create: {
-            userId: account.userId,
-            platform: 'whatsapp',
-            platformUserId: senderPhone,
-            name: contactName,
-          },
-        });
+          });
 
-        // Upsert conversation WITHOUT incrementing unread (increment after message is confirmed new)
-        const conversation = await prisma.conversation.upsert({
-          where: {
-            connectedAccountId_platformConversationId: {
+          // Upsert conversation — keyed on customerPhone so inbound and outbound
+          // messages for the same customer always land in the same conversation.
+          // Do NOT increment unread here; do it after we confirm the message is new.
+          const conversation = await prisma.conversation.upsert({
+            where: {
+              connectedAccountId_platformConversationId: {
+                connectedAccountId: account.id,
+                platformConversationId: customerPhone,
+              },
+            },
+            update: {
+              lastMessageAt: new Date(),
+            },
+            create: {
               connectedAccountId: account.id,
-              platformConversationId: senderPhone,
+              platformConversationId: customerPhone,
+              contactId: contact.id,
+              lastMessageAt: new Date(),
+              unreadCount: 0,
             },
-          },
-          update: {
-            lastMessageAt: new Date(),
-          },
-          create: {
-            connectedAccountId: account.id,
-            platformConversationId: senderPhone,
-            contactId: contact.id,
-            lastMessageAt: new Date(),
-            unreadCount: 0,
-          },
-        });
+          });
 
-        const msgSentAt = msg.timestamp ? new Date(Number(msg.timestamp) * 1000) : new Date();
+          const msgSentAt = msg.timestamp ? new Date(Number(msg.timestamp) * 1000) : new Date();
 
-        const message = await prisma.message.create({
-          data: {
+          const message = await prisma.message.create({
+            data: {
+              conversationId: conversation.id,
+              platformMessageId: msg.id,
+              direction,
+              sender: senderLabel,
+              content,
+              contentType: WA_CONTENT_TYPE[msg.type] || 'text',
+              attachments: waAttachments.length > 0 ? waAttachments : undefined,
+              status: 'delivered',
+              sentAt: msgSentAt,
+              rawPayload: msg,
+            },
+          });
+
+          // Only increment unread for inbound messages (outbound replies don't add unread)
+          let unreadCount = conversation.unreadCount;
+          if (direction === 'inbound') {
+            const updatedConversation = await prisma.conversation.update({
+              where: { id: conversation.id },
+              data: { unreadCount: { increment: 1 } },
+            });
+            unreadCount = updatedConversation.unreadCount;
+          }
+
+          console.log('[WhatsApp Webhook] ✓ Message saved', {
+            messageId: message.id,
             conversationId: conversation.id,
-            platformMessageId: msg.id,
-            direction: 'inbound',
-            sender: contactName,
-            content,
-            contentType: mediaTypes.includes(msg.type) ? msg.type : 'text',
-            attachments: waAttachments.length > 0 ? waAttachments : undefined,
-            status: 'delivered',
-            sentAt: msgSentAt,
-            rawPayload: msg,
-          },
-        });
+            direction,
+            customer: customerPhone,
+            content: content.substring(0, 80),
+            contentType: WA_CONTENT_TYPE[msg.type] || 'text',
+            attachments: waAttachments.length,
+          });
 
-        // Increment unread count AFTER message is confirmed new
-        const updatedConversation = await prisma.conversation.update({
-          where: { id: conversation.id },
-          data: { unreadCount: { increment: 1 } },
-        });
+          const socketRoom = `user:${account.userId}`;
+          const roomSockets = io.sockets.adapter.rooms.get(socketRoom)?.size || 0;
+          console.log('[WhatsApp Webhook] Emitting new_message to room', socketRoom, '(', roomSockets, 'socket(s) connected )');
 
-        console.log('[WhatsApp Webhook] ✓ Message saved', {
-          messageId: message.id,
-          from: senderPhone,
-        });
+          io.to(socketRoom).emit('new_message', {
+            message,
+            conversationId: conversation.id,
+            platform: 'whatsapp',
+          });
 
-        io.to(`user:${account.userId}`).emit('new_message', {
-          message,
-          conversationId: conversation.id,
-          platform: 'whatsapp',
-        });
-
-        io.to(`user:${account.userId}`).emit('conversation_update', {
-          conversationId: conversation.id,
-          lastMessageAt: new Date(),
-          unreadCount: updatedConversation.unreadCount,
-        });
+          io.to(socketRoom).emit('conversation_update', {
+            conversationId: conversation.id,
+            lastMessageAt: new Date(),
+            unreadCount,
+          });
+        } catch (msgErr) {
+          console.error('[WhatsApp Webhook] ✗ Failed to process message:', msg.id, 'type:', msg.type, 'error:', msgErr.message, msgErr.stack?.split('\n')[1]);
+        }
       }
     }
   }

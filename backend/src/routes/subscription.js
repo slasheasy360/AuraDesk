@@ -1,6 +1,8 @@
 import { Router } from 'express';
 import prisma from '../utils/prisma.js';
 import { authenticate } from '../middleware/auth.js';
+import { sendTrialExpiryEmail } from '../emails/senders/sendTrialExpiryEmail.js';
+import { sendPaymentConfirmedEmail } from '../emails/senders/sendPaymentConfirmedEmail.js';
 import {
   getStripe,
   getOrCreateStripeCustomer,
@@ -15,6 +17,16 @@ import {
 } from '../utils/stripe.js';
 
 const router = Router();
+
+// Team members cannot manage subscriptions — only the workspace owner can.
+// Returns false and sends 403 if the caller is a member; returns true otherwise.
+function rejectIfMember(req, res) {
+  if (req.user?.inviterUserId) {
+    res.status(403).json({ error: 'Plan management is only available to the workspace owner.' });
+    return false;
+  }
+  return true;
+}
 
 // ─────────────────────────────────────────────────────────────────
 // Stripe key validation — runs once on import.
@@ -79,6 +91,7 @@ const stripe = getStripe();
 function frontendBase() {
   return (process.env.FRONTEND_URL || 'http://localhost:5173')
     .split(',')[0]
+    .trim()
     .replace(/\/$/, '');
 }
 
@@ -173,6 +186,7 @@ router.get('/status', authenticate, async (req, res) => {
 // In production we route through Stripe Checkout instead so a card is on file.
 // ────────────────────────────────────────────────────────────────────
 router.post('/start-trial', authenticate, async (req, res) => {
+  if (!rejectIfMember(req, res)) return;
   const user = await prisma.user.findUnique({ where: { id: req.user.id } });
   if (!user) return res.status(404).json({ error: 'User not found' });
 
@@ -221,6 +235,7 @@ router.post('/start-trial', authenticate, async (req, res) => {
 // Always collects a payment method up-front so the trial converts cleanly.
 // ────────────────────────────────────────────────────────────────────
 router.post('/create-checkout', authenticate, async (req, res) => {
+  if (!rejectIfMember(req, res)) return;
   if (!stripe) return res.status(501).json({ error: 'Stripe not configured' });
 
   // The trial flag MUST be a real boolean from the frontend. We coerce here so
@@ -401,6 +416,7 @@ router.post('/sync-session', authenticate, async (req, res) => {
 // Body:  { plan: 'starter'|'pro'|'elite', cycle: 'monthly'|'yearly' }
 // ────────────────────────────────────────────────────────────────────
 router.post('/upgrade-plan', authenticate, async (req, res) => {
+  if (!rejectIfMember(req, res)) return;
   if (!stripe) return res.status(501).json({ error: 'Stripe not configured' });
 
   const { plan: targetPlan, cycle: targetCycle = 'monthly' } = req.body;
@@ -557,6 +573,7 @@ router.post('/upgrade-plan', authenticate, async (req, res) => {
 // Customer keeps full access until currentPeriodEnd.
 // ────────────────────────────────────────────────────────────────────
 router.post('/cancel', authenticate, async (req, res) => {
+  if (!rejectIfMember(req, res)) return;
   if (!stripe) return res.status(501).json({ error: 'Stripe not configured' });
 
   try {
@@ -597,6 +614,7 @@ router.post('/cancel', authenticate, async (req, res) => {
 // current period.
 // ────────────────────────────────────────────────────────────────────
 router.post('/resume', authenticate, async (req, res) => {
+  if (!rejectIfMember(req, res)) return;
   if (!stripe) return res.status(501).json({ error: 'Stripe not configured' });
 
   try {
@@ -721,8 +739,13 @@ router.post('/webhook', async (req, res) => {
           where: { stripeSubscriptionId: sub.id },
         });
         if (user) {
-          console.log(`[Stripe] Trial ending soon for user ${user.id} (${user.email})`);
-          // Hook for sending an email notification, etc.
+          const daysLeft = sub.trial_end
+            ? Math.max(1, Math.ceil((sub.trial_end * 1000 - Date.now()) / 86400000))
+            : 3;
+          console.log(`[Stripe] Trial ending soon for user ${user.id} (${user.email}), daysLeft=${daysLeft}`);
+          sendTrialExpiryEmail({ user, daysLeft }).catch((err) => {
+            console.error('[Stripe] trial_will_end email failed:', err.message);
+          });
         }
         break;
       }
@@ -791,6 +814,24 @@ router.post('/webhook', async (req, res) => {
           }
         }
         console.log(`[Stripe] invoice.payment_succeeded → user ${user.id}`);
+
+        // Send payment confirmation email non-blocking
+        try {
+          const line = invoice.lines?.data?.[0];
+          const planName = line?.description || user.plan || 'Pro';
+          const amount = invoice.amount_paid ? invoice.amount_paid / 100 : 0;
+          const currency = (invoice.currency || 'usd').toUpperCase();
+          const interval = line?.price?.recurring?.interval;
+          const billingCycle = interval === 'year' ? 'yearly' : 'monthly';
+          const nextBillingDate = line?.period?.end
+            ? new Date(line.period.end * 1000)
+            : null;
+          sendPaymentConfirmedEmail({ user, planName, amount, currency, billingCycle, nextBillingDate }).catch((err) => {
+            console.error('[Stripe] payment_confirmed email failed:', err.message);
+          });
+        } catch (err) {
+          console.error('[Stripe] payment_confirmed email setup failed:', err.message);
+        }
         break;
       }
 

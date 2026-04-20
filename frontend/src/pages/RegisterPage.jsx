@@ -1,7 +1,9 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext.jsx';
 import AuthLayout, { AuthInput, GradientButton, GoogleButton } from '../components/AuthLayout.jsx';
+import PasswordStrengthChecker from '../components/PasswordStrengthChecker.jsx';
+import { evaluatePassword } from '../utils/passwordValidation.js';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
 
@@ -12,7 +14,30 @@ export default function RegisterPage() {
   const [showPw, setShowPw] = useState(false);
   const [showCPw, setShowCPw] = useState(false);
   const [error, setError] = useState('');
+  const [mismatchVisible, setMismatchVisible] = useState(false);
   const [loading, setLoading] = useState(false);
+
+  const evaluation = useMemo(() => evaluatePassword(password), [password]);
+  const passwordsMatch = confirmPassword.length > 0 && password === confirmPassword;
+  const canSubmit = evaluation.allValid && passwordsMatch && !loading;
+
+  // Auto-clear banner error after 5 s
+  useEffect(() => {
+    if (!error) return;
+    const t = setTimeout(() => setError(''), 5000);
+    return () => clearTimeout(t);
+  }, [error]);
+
+  // Show inline mismatch hint and auto-hide it after 5 s
+  useEffect(() => {
+    if (confirmPassword.length === 0) { setMismatchVisible(false); return; }
+    if (!passwordsMatch) {
+      setMismatchVisible(true);
+      const t = setTimeout(() => setMismatchVisible(false), 5000);
+      return () => clearTimeout(t);
+    }
+    setMismatchVisible(false);
+  }, [confirmPassword, passwordsMatch]);
   const { register } = useAuth();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -34,8 +59,12 @@ export default function RegisterPage() {
     e.preventDefault();
     setError('');
 
+    if (!evaluation.allValid) {
+      setError('Please choose a stronger password.');
+      return;
+    }
     if (password !== confirmPassword) {
-      setError('Passwords do not match');
+      setError('Passwords do not match.');
       return;
     }
 
@@ -102,33 +131,48 @@ export default function RegisterPage() {
 
       <form onSubmit={handleSubmit} className="space-y-4">
         <AuthInput
-          label="EMAIL"
+          label="Email"
           type="email"
           value={email}
           onChange={(e) => setEmail(e.target.value)}
+          placeholder="you@example.com"
+          autoComplete="email"
           required
         />
-        <AuthInput
-          label="PASSWORD"
-          hasToggle
-          show={showPw}
-          onToggle={() => setShowPw((s) => !s)}
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          required
-          minLength={8}
-        />
-        <AuthInput
-          label="CONFIRM PASSSWORD"
-          hasToggle
-          show={showCPw}
-          onToggle={() => setShowCPw((s) => !s)}
-          value={confirmPassword}
-          onChange={(e) => setConfirmPassword(e.target.value)}
-          required
-        />
+        <div>
+          <AuthInput
+            label="Password"
+            hasToggle
+            show={showPw}
+            onToggle={() => setShowPw((s) => !s)}
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            placeholder="Min. 8 characters"
+            autoComplete="new-password"
+            required
+          />
+          <PasswordStrengthChecker evaluation={evaluation} dark />
+        </div>
+        <div>
+          <AuthInput
+            label="Confirm Password"
+            hasToggle
+            show={showCPw}
+            onToggle={() => setShowCPw((s) => !s)}
+            value={confirmPassword}
+            onChange={(e) => setConfirmPassword(e.target.value)}
+            placeholder="Re-enter your password"
+            autoComplete="new-password"
+            required
+          />
+          {mismatchVisible && (
+            <p className="mt-1.5 text-[12px] text-red-400 lg:text-red-600">
+              Passwords do not match.
+            </p>
+          )}
+        </div>
         <div className="pt-2">
-          <GradientButton type="submit" disabled={loading}>
+          <GradientButton type="submit" disabled={!canSubmit}>
             {loading ? 'CREATING...' : <>CONTINUE <span className="text-lg leading-none">›</span></>}
           </GradientButton>
         </div>

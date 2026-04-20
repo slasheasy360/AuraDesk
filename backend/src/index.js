@@ -31,6 +31,7 @@ import teamRoutes from './routes/team.js';
 import planRoutes from './routes/plan.js';
 import aiRoutes from './routes/ai.js';
 import aiTrainingRoutes from './routes/ai-training.js';
+import contactRoutes from './routes/contacts.js';
 import metaWebhook from './webhooks/meta.js';
 import gmailWebhook from './webhooks/gmail.js';
 import { renewExpiringWatches, reRegisterAllWatches } from './services/gmail.js';
@@ -46,6 +47,8 @@ import { authenticate, requireActiveSubscription } from './middleware/auth.js';
 //   - /api/onboarding       (must run during the trial / onboarding window)
 //   - /api/team             (workspace owner manages team independently)
 const requirePaidAccess = [authenticate, requireActiveSubscription];
+import { sendEmail } from './utils/email.js';
+import { sendWelcomeEmail } from './emails/senders/sendWelcomeEmail.js';
 
 const app = express();
 const server = http.createServer(app);
@@ -86,11 +89,19 @@ app.set('io', io);
 io.on('connection', (socket) => {
   console.log(`[Socket.io] Connected: ${socket.id}, transport=${socket.conn.transport.name}`);
 
-  socket.on('register', (userId) => {
+  socket.on('register', async (userId) => {
     if (!userId) return;
-    socket.join(`user:${userId}`);
-    const roomSize = io.sockets.adapter.rooms.get(`user:${userId}`)?.size || 0;
-    console.log(`[Socket.io] User ${userId} joined room on socket ${socket.id} (${roomSize} socket(s) in room)`);
+    // Team members join the workspace owner's room so they receive the same
+    // real-time events (new messages, conversation updates) as the owner.
+    // Owners join their own room (inviterUserId is null for them).
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { inviterUserId: true },
+    });
+    const roomId = user?.inviterUserId || userId;
+    socket.join(`user:${roomId}`);
+    const roomSize = io.sockets.adapter.rooms.get(`user:${roomId}`)?.size || 0;
+    console.log(`[Socket.io] User ${userId} joined room user:${roomId} on socket ${socket.id} (${roomSize} socket(s) in room)`);
   });
 
   // Client sends this every 30s to keep Render's proxy from killing the connection
@@ -130,6 +141,7 @@ app.use('/auth/whatsapp', whatsappRoutes);
 app.use('/api/conversations', requirePaidAccess, conversationRoutes);
 app.use('/api/messages',      requirePaidAccess, messageRoutes);
 app.use('/api/accounts',      requirePaidAccess, accountRoutes);
+app.use('/api/contacts',      requirePaidAccess, contactRoutes);
 app.use('/api/leads',         requirePaidAccess, leadRoutes);
 // Invoices: NOT mounted with the gate because /api/invoices/public/:slug
 // must stay reachable for unauthenticated invoice viewers. The gate is
@@ -179,6 +191,29 @@ app.get('/api/user/onboarding-status', authenticate, async (req, res) => {
 app.use('/webhooks/meta', metaWebhook);
 app.use('/webhooks/gmail', gmailWebhook);
 
+// ── Global error handler ─────────────────────────────────────────────────────
+// Catches any error passed via next(err) or thrown inside async route handlers
+// that are wrapped with an error-forwarding try/catch. Returns a structured
+// JSON error instead of Express's default HTML 500 page, and logs the full
+// stack + request context so failures are easy to diagnose.
+app.use((err, req, res, _next) => {
+  const status = typeof err.statusCode === 'number' ? err.statusCode : 500;
+  console.error('[UnhandledError]', {
+    method: req.method,
+    url: req.originalUrl,
+    status,
+    orgId: req.user?.id ?? null,
+    message: err.message,
+    stack: err.stack,
+  });
+  if (res.headersSent) return;
+  res.status(status).json({
+    error: status >= 500
+      ? 'Something went wrong. Please try again.'
+      : (err.message || 'Request failed'),
+  });
+});
+
 // Health check with DB connectivity
 app.get('/health', async (req, res) => {
   try {
@@ -186,12 +221,52 @@ app.get('/health', async (req, res) => {
     res.json({
       status: 'ok',
       db: 'ok',
-      version: 'cicd-test-1',
-      deployedFrom: 'kundan_dev',
+      version: 'custom-domain-1',
+      deployedFrom: 'kundan_dev-custom-domain',
       timestamp: new Date().toISOString(),
     });
   } catch (err) {
     res.status(503).json({ status: 'degraded', db: 'error', timestamp: new Date().toISOString() });
+  }
+});
+
+// TEMPORARY: SES integration test endpoint. Remove after verification.
+// Protected by a shared secret to prevent abuse.
+app.post('/dev/test-email', async (req, res) => {
+  if (req.headers['x-test-secret'] !== process.env.JWT_SECRET) {
+    return res.status(403).json({ error: 'forbidden' });
+  }
+  try {
+    const result = await sendEmail({
+      to: req.body?.to || process.env.SES_FROM_EMAIL,
+      subject: 'AuraDesk SES Test Email',
+      html: '<h1>Hello from AuraDesk</h1><p>If you can read this, AWS SES integration is working.</p><p>Sent at: ' + new Date().toISOString() + '</p>',
+    });
+    res.json({ ok: true, messageId: result.messageId });
+  } catch (err) {
+    console.error('[/dev/test-email] failed:', err);
+    res.status(500).json({ ok: false, error: err.message, name: err.name });
+  }
+});
+
+// TEMPORARY: Welcome template test endpoint. Remove after verification.
+// POST /dev/test-welcome { to, firstName? }
+app.post('/dev/test-welcome', async (req, res) => {
+  if (req.headers['x-test-secret'] !== process.env.JWT_SECRET) {
+    return res.status(403).json({ error: 'forbidden' });
+  }
+  try {
+    const to = req.body?.to;
+    if (!to) return res.status(400).json({ error: 'body.to is required' });
+    const result = await sendWelcomeEmail({
+      email: to,
+      firstName: req.body?.firstName,
+      name: req.body?.name,
+    });
+    res.json({ ok: true, messageId: result.messageId });
+  } catch (err) {
+    console.error('[/dev/test-welcome] failed:', err);
+    res.status(500).json({ ok: false, error: err.message, name: err.name });
   }
 });
 

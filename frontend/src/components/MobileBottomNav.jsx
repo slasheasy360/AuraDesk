@@ -14,7 +14,7 @@ export default function MobileBottomNav() {
 
   return (
     <nav
-      className="lg:hidden fixed bottom-0 left-0 right-0 z-40 bg-[#0B1628] border-t border-white/5 px-4 py-2 flex items-center justify-around"
+      className="lg:hidden fixed bottom-0 left-0 right-0 z-50 bg-[#0B1628] border-t border-white/5 px-4 py-2 flex items-center justify-around"
       style={{ paddingBottom: 'max(0.5rem, env(safe-area-inset-bottom))' }}
     >
       {NAV_ITEMS.map(({ to, icon: Icon, end, matchPrefix }) => {

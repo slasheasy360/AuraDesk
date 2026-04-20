@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { randomUUID } from 'crypto';
-import { authenticate } from '../middleware/auth.js';
+import { authenticate, getWorkspaceOwnerId } from '../middleware/auth.js';
 import { upload } from '../middleware/upload.js';
 import prisma from '../utils/prisma.js';
 import { uploadFile, getPresignedUrl } from '../utils/s3.js';
@@ -77,11 +77,12 @@ async function resolveMetaRecipientId(conversation, platform) {
 // Get smart inbox messages across all connected platforms
 router.get('/', authenticate, async (req, res) => {
   try {
+    const ownerId = getWorkspaceOwnerId(req.user);
     const messages = await prisma.message.findMany({
       where: {
         conversation: {
           connectedAccount: {
-            userId: req.user.id,
+            userId: ownerId,
             status: 'active',
           },
         },
@@ -138,8 +139,28 @@ router.get('/gmail/sync', authenticate, syncGmailMessagesController);
 // Sync latest Instagram DM messages for the current user
 router.get('/instagram/sync', authenticate, async (req, res) => {
   try {
-    const messages = await syncInstagramMessages(req.user.id);
-    const newCount = messages.filter((m) => m._isNew).length;
+    const ownerId = getWorkspaceOwnerId(req.user);
+    const messages = await syncInstagramMessages(ownerId);
+    const newMessages = messages.filter((m) => m._isNew);
+    const newCount = newMessages.length;
+
+    if (newCount > 0) {
+      const io = req.app.get('io');
+      if (io) {
+        for (const msg of newMessages) {
+          io.to(`user:${ownerId}`).emit('new_message', {
+            message: msg,
+            conversationId: msg.conversationId,
+            platform: 'instagram',
+          });
+          io.to(`user:${ownerId}`).emit('conversation_update', {
+            conversationId: msg.conversationId,
+            lastMessageAt: msg.sentAt || new Date(),
+          });
+        }
+      }
+    }
+
     res.json({
       success: true,
       synced: messages.length,
@@ -157,8 +178,28 @@ router.get('/instagram/sync', authenticate, async (req, res) => {
 // Sync latest Facebook Messenger messages for the current user
 router.get('/facebook/sync', authenticate, async (req, res) => {
   try {
-    const messages = await syncFacebookMessages(req.user.id);
-    const newCount = messages.filter((m) => m._isNew).length;
+    const ownerId = getWorkspaceOwnerId(req.user);
+    const messages = await syncFacebookMessages(ownerId);
+    const newMessages = messages.filter((m) => m._isNew);
+    const newCount = newMessages.length;
+
+    if (newCount > 0) {
+      const io = req.app.get('io');
+      if (io) {
+        for (const msg of newMessages) {
+          io.to(`user:${ownerId}`).emit('new_message', {
+            message: msg,
+            conversationId: msg.conversationId,
+            platform: 'facebook',
+          });
+          io.to(`user:${ownerId}`).emit('conversation_update', {
+            conversationId: msg.conversationId,
+            lastMessageAt: msg.sentAt || new Date(),
+          });
+        }
+      }
+    }
+
     res.json({
       success: true,
       synced: messages.length,
@@ -176,10 +217,14 @@ router.get('/facebook/sync', authenticate, async (req, res) => {
 // Get messages for a conversation
 router.get('/:conversationId', authenticate, async (req, res) => {
   try {
+    const ownerId = getWorkspaceOwnerId(req.user);
     const conversation = await prisma.conversation.findFirst({
       where: {
         id: req.params.conversationId,
-        connectedAccount: { userId: req.user.id },
+        connectedAccount: { userId: ownerId },
+      },
+      include: {
+        connectedAccount: { select: { createdAt: true } },
       },
     });
 
@@ -187,8 +232,17 @@ router.get('/:conversationId', authenticate, async (req, res) => {
       return res.status(404).json({ error: 'Conversation not found' });
     }
 
+    // Only return messages sent after the platform was connected.
+    // Allow 60s before createdAt to handle clock skew between Meta's servers and ours.
+    const connectedAt = conversation.connectedAccount?.createdAt;
+    const msgWhere = { conversationId: conversation.id };
+    if (connectedAt) {
+      const GRACE_MS = 60 * 1000;
+      msgWhere.sentAt = { gte: new Date(new Date(connectedAt).getTime() - GRACE_MS) };
+    }
+
     const messages = await prisma.message.findMany({
-      where: { conversationId: conversation.id },
+      where: msgWhere,
       orderBy: { sentAt: 'asc' },
     });
 
@@ -204,11 +258,12 @@ router.get('/:messageId/attachments/:index/download', authenticate, async (req, 
   try {
     const { messageId, index } = req.params;
     const attIndex = parseInt(index, 10);
+    const ownerId = getWorkspaceOwnerId(req.user);
 
     const message = await prisma.message.findFirst({
       where: {
         id: messageId,
-        conversation: { connectedAccount: { userId: req.user.id } },
+        conversation: { connectedAccount: { userId: ownerId } },
       },
       include: {
         conversation: { include: { connectedAccount: true } },
@@ -273,11 +328,12 @@ router.get('/:messageId/attachments/:index/preview', authenticate, async (req, r
   try {
     const { messageId, index } = req.params;
     const attIndex = parseInt(index, 10);
+    const ownerId = getWorkspaceOwnerId(req.user);
 
     const message = await prisma.message.findFirst({
       where: {
         id: messageId,
-        conversation: { connectedAccount: { userId: req.user.id } },
+        conversation: { connectedAccount: { userId: ownerId } },
       },
       include: {
         conversation: { include: { connectedAccount: true } },
@@ -298,7 +354,11 @@ router.get('/:messageId/attachments/:index/preview', authenticate, async (req, r
     // Set cache headers for previews
     res.setHeader('Cache-Control', 'private, max-age=3600');
 
-    if (platform === 'whatsapp' && att.mediaId) {
+    if (att.s3Key) {
+      // S3 takes priority — permanent storage, never expires
+      const url = await getPresignedUrl(att.s3Key, 3600);
+      return res.redirect(url);
+    } else if (platform === 'whatsapp' && att.mediaId) {
       const { stream, contentType, contentLength } = await whatsappService.downloadMedia(connectedAccountId, att.mediaId);
       res.setHeader('Content-Type', contentType || att.mimeType || 'application/octet-stream');
       res.setHeader('Content-Disposition', 'inline');
@@ -323,10 +383,6 @@ router.get('/:messageId/attachments/:index/preview', authenticate, async (req, r
       res.setHeader('Content-Disposition', 'inline');
       res.setHeader('Content-Length', buffer.length);
       res.send(buffer);
-    } else if (att.s3Key) {
-      // Outbound attachments stored in S3 — redirect to pre-signed URL
-      const url = await getPresignedUrl(att.s3Key);
-      res.redirect(url);
     } else {
       return res.status(404).json({ error: 'No preview available' });
     }
@@ -351,6 +407,7 @@ router.post('/send', authenticate, upload.array('attachments', 10), async (req, 
   try {
     const { conversationId, content, subject: reqSubject } = req.body;
     const files = req.files || [];
+    const ownerId = getWorkspaceOwnerId(req.user);
 
     if (!conversationId || (!content && files.length === 0)) {
       return res.status(400).json({ error: 'conversationId and content (or attachments) are required' });
@@ -359,7 +416,7 @@ router.post('/send', authenticate, upload.array('attachments', 10), async (req, 
     const conversation = await prisma.conversation.findFirst({
       where: {
         id: conversationId,
-        connectedAccount: { userId: req.user.id },
+        connectedAccount: { userId: ownerId },
       },
       include: {
         connectedAccount: true,
@@ -398,14 +455,15 @@ router.post('/send', authenticate, upload.array('attachments', 10), async (req, 
               recipientPsid,
               file
             );
+            platformMessageId = result.message_id || platformMessageId;
             const meta = {
               filename: file.originalname,
               mimeType: file.mimetype,
               size: file.size,
               platformId: result.message_id || null,
             };
-            // Persist image files to S3 for outbound preview
-            if (file.mimetype.startsWith('image/') && file.buffer) {
+            // Persist all media to S3 so outbound previews remain available
+            if (file.buffer) {
               try { meta.s3Key = await persistOutboundAttachment(file); } catch { /* skip */ }
             }
             attachmentMeta.push(meta);
@@ -431,14 +489,15 @@ router.post('/send', authenticate, upload.array('attachments', 10), async (req, 
               igRecipientId,
               file
             );
+            platformMessageId = result.message_id || platformMessageId;
             const meta = {
               filename: file.originalname,
               mimeType: file.mimetype,
               size: file.size,
               platformId: result.message_id || null,
             };
-            // Persist image files to S3 for outbound preview
-            if (file.mimetype.startsWith('image/') && file.buffer) {
+            // Persist all media to S3 so outbound previews remain available
+            if (file.buffer) {
               try { meta.s3Key = await persistOutboundAttachment(file); } catch { /* skip */ }
             }
             attachmentMeta.push(meta);
@@ -617,8 +676,8 @@ router.post('/send', authenticate, upload.array('attachments', 10), async (req, 
               mimeType: file.mimetype,
               size: file.size,
             };
-            // Persist image files to S3 for outbound preview
-            if (file.mimetype.startsWith('image/') && file.buffer) {
+            // Persist all media to S3 so outbound previews remain available
+            if (file.buffer) {
               try { meta.s3Key = await persistOutboundAttachment(file); } catch { /* skip */ }
             }
             attachmentMeta.push(meta);
@@ -685,15 +744,15 @@ router.post('/send', authenticate, upload.array('attachments', 10), async (req, 
       data: { lastMessageAt: new Date() },
     });
 
-    // Emit socket event — mark as _fromSender so frontend dedup can recognize it
+    // Emit socket event to all workspace members (owner + team members share the room)
     const io = req.app.get('io');
-    io.to(`user:${req.user.id}`).emit('new_message', {
+    io.to(`user:${ownerId}`).emit('new_message', {
       message,
       conversationId: conversation.id,
       _fromSender: true, // frontend already has this message via API response
     });
 
-    io.to(`user:${req.user.id}`).emit('conversation_update', {
+    io.to(`user:${ownerId}`).emit('conversation_update', {
       conversationId: conversation.id,
       lastMessageAt: new Date(),
     });

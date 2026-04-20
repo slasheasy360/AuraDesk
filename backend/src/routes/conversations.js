@@ -1,25 +1,29 @@
 import { Router } from 'express';
-import { authenticate } from '../middleware/auth.js';
+import { authenticate, getWorkspaceOwnerId } from '../middleware/auth.js';
 import prisma from '../utils/prisma.js';
 import { emitToUser } from '../utils/socket.js';
 
 const router = Router();
 
-// ─── Helper: get all active account IDs for user ───
-async function getUserAccountIds(userId) {
-  const accounts = await prisma.connectedAccount.findMany({
-    where: { userId, status: 'active' },
-    select: { id: true },
+// ─── Helper: get all active accounts for the workspace owner ───
+async function getWorkspaceAccounts(ownerId) {
+  return prisma.connectedAccount.findMany({
+    where: { userId: ownerId, status: 'active' },
+    select: { id: true, createdAt: true },
   });
+}
+
+async function getWorkspaceAccountIds(ownerId) {
+  const accounts = await getWorkspaceAccounts(ownerId);
   return accounts.map((a) => a.id);
 }
 
-// ─── Helper: verify conversation belongs to user ───
-async function findUserConversation(conversationId, userId) {
+// ─── Helper: verify conversation belongs to workspace ───
+async function findWorkspaceConversation(conversationId, ownerId) {
   return prisma.conversation.findFirst({
     where: {
       id: conversationId,
-      connectedAccount: { userId },
+      connectedAccount: { userId: ownerId },
     },
     include: {
       contact: true,
@@ -35,11 +39,38 @@ async function findUserConversation(conversationId, userId) {
 router.get('/', authenticate, async (req, res) => {
   try {
     const { platform, filter } = req.query;
-    const accountIds = await getUserAccountIds(req.user.id);
+    const ownerId = getWorkspaceOwnerId(req.user);
+    const accounts = await getWorkspaceAccounts(ownerId);
 
-    const where = { connectedAccountId: { in: accountIds } };
+    // Only show conversations with activity AFTER the account was connected.
+    // This hides historical messages that were synced from before connection.
+    let eligibleAccounts = accounts;
+    if (platform) {
+      const platformAccountIds = await prisma.connectedAccount.findMany({
+        where: { id: { in: accounts.map((a) => a.id) }, platform },
+        select: { id: true },
+      });
+      const pidSet = new Set(platformAccountIds.map((a) => a.id));
+      eligibleAccounts = accounts.filter((a) => pidSet.has(a.id));
+    }
 
-    // By default, exclude deleted conversations unless requesting bin
+    // Build per-account filter: conversation must have lastMessageAt >= account.createdAt.
+    // Allow 60s before createdAt to handle clock skew between Meta's servers and ours —
+    // a message whose sentAt is 30s before our server recorded createdAt can legitimately
+    // belong to this account window.
+    const GRACE_MS = 60 * 1000;
+    const accountFilter = eligibleAccounts.map((acc) => ({
+      connectedAccountId: acc.id,
+      lastMessageAt: { gte: new Date(new Date(acc.createdAt).getTime() - GRACE_MS) },
+    }));
+
+    if (accountFilter.length === 0) {
+      return res.json({ conversations: [] });
+    }
+
+    const where = { OR: accountFilter };
+
+    // Apply category filters on top
     if (filter === 'bin') {
       where.isDeleted = true;
     } else if (filter === 'starred') {
@@ -52,16 +83,6 @@ router.get('/', authenticate, async (req, res) => {
       where.isDeleted = false;
     }
 
-    if (platform) {
-      // Filter by platform through the connected account relation
-      // Use a nested AND to avoid overwriting the connectedAccountId filter
-      const platformAccountIds = await prisma.connectedAccount.findMany({
-        where: { id: { in: accountIds }, platform },
-        select: { id: true },
-      });
-      where.connectedAccountId = { in: platformAccountIds.map((a) => a.id) };
-    }
-
     const conversations = await prisma.conversation.findMany({
       where,
       include: {
@@ -69,7 +90,8 @@ router.get('/', authenticate, async (req, res) => {
           select: { id: true, name: true, username: true, avatarUrl: true, platform: true },
         },
         connectedAccount: {
-          select: { id: true, platform: true, displayName: true },
+          // Include createdAt so we can filter pre-connection messages below
+          select: { id: true, platform: true, displayName: true, createdAt: true },
         },
         messages: {
           take: 1,
@@ -83,8 +105,17 @@ router.get('/', authenticate, async (req, res) => {
       orderBy: { lastMessageAt: 'desc' },
     });
 
+    // Secondary filter: verify the latest message's actual sentAt falls within the
+    // account window (with the same 60s grace period used in the DB query above).
+    const postConnectionConversations = conversations.filter((c) => {
+      const connectedAt = c.connectedAccount?.createdAt;
+      const latestMsgSentAt = c.messages?.[0]?.sentAt;
+      if (!connectedAt || !latestMsgSentAt) return false;
+      return new Date(latestMsgSentAt) >= new Date(new Date(connectedAt).getTime() - GRACE_MS);
+    });
+
     // Add hasDraft flag for frontend convenience
-    const enriched = conversations.map((c) => ({
+    const enriched = postConnectionConversations.map((c) => ({
       ...c,
       hasDraft: c.drafts && c.drafts.length > 0,
       draftPreview: c.drafts?.[0]?.content?.slice(0, 80) || null,
@@ -103,7 +134,8 @@ router.get('/', authenticate, async (req, res) => {
 
 router.get('/counts', authenticate, async (req, res) => {
   try {
-    const accountIds = await getUserAccountIds(req.user.id);
+    const ownerId = getWorkspaceOwnerId(req.user);
+    const accountIds = await getWorkspaceAccountIds(ownerId);
     const baseWhere = { connectedAccountId: { in: accountIds } };
 
     const [all, unread, starred, leads, bin, drafts] = await Promise.all([
@@ -130,7 +162,8 @@ router.get('/counts', authenticate, async (req, res) => {
 
 router.get('/:id', authenticate, async (req, res) => {
   try {
-    const conversation = await findUserConversation(req.params.id, req.user.id);
+    const ownerId = getWorkspaceOwnerId(req.user);
+    const conversation = await findWorkspaceConversation(req.params.id, ownerId);
     if (!conversation) {
       return res.status(404).json({ error: 'Conversation not found' });
     }
@@ -161,7 +194,8 @@ router.get('/:id', authenticate, async (req, res) => {
 
 router.patch('/:id/star', authenticate, async (req, res) => {
   try {
-    const conversation = await findUserConversation(req.params.id, req.user.id);
+    const ownerId = getWorkspaceOwnerId(req.user);
+    const conversation = await findWorkspaceConversation(req.params.id, ownerId);
     if (!conversation) {
       return res.status(404).json({ error: 'Conversation not found' });
     }
@@ -171,7 +205,7 @@ router.patch('/:id/star', authenticate, async (req, res) => {
       data: { isStarred: !conversation.isStarred },
     });
 
-    emitToUser(req.user.id, 'conversation_state_change', {
+    emitToUser(ownerId, 'conversation_state_change', {
       conversationId: conversation.id,
       field: 'isStarred',
       value: updated.isStarred,
@@ -190,8 +224,9 @@ router.patch('/:id/star', authenticate, async (req, res) => {
 
 router.patch('/:id/lead', authenticate, async (req, res) => {
   try {
+    const ownerId = getWorkspaceOwnerId(req.user);
     const conversation = await prisma.conversation.findFirst({
-      where: { id: req.params.id, connectedAccount: { userId: req.user.id } },
+      where: { id: req.params.id, connectedAccount: { userId: ownerId } },
       include: {
         contact: true,
         connectedAccount: { select: { platform: true } },
@@ -214,8 +249,8 @@ router.patch('/:id/lead', authenticate, async (req, res) => {
         where: { id: conversation.id },
         data: { isLead: false },
       });
-      emitToUser(req.user.id, 'lead_deleted', { id: existingLead.id });
-      emitToUser(req.user.id, 'conversation_state_change', {
+      emitToUser(ownerId, 'lead_deleted', { id: existingLead.id });
+      emitToUser(ownerId, 'conversation_state_change', {
         conversationId: conversation.id,
         field: 'isLead',
         value: false,
@@ -237,7 +272,7 @@ router.patch('/:id/lead', authenticate, async (req, res) => {
 
     const lead = await prisma.lead.create({
       data: {
-        userId: req.user.id,
+        userId: ownerId,
         name,
         platform,
         lastContactedAt,
@@ -252,8 +287,8 @@ router.patch('/:id/lead', authenticate, async (req, res) => {
       data: { isLead: true },
     });
 
-    emitToUser(req.user.id, 'lead_created', { lead });
-    emitToUser(req.user.id, 'conversation_state_change', {
+    emitToUser(ownerId, 'lead_created', { lead });
+    emitToUser(ownerId, 'conversation_state_change', {
       conversationId: conversation.id,
       field: 'isLead',
       value: true,
@@ -276,7 +311,8 @@ router.patch('/:id/lead', authenticate, async (req, res) => {
 
 router.patch('/:id/delete', authenticate, async (req, res) => {
   try {
-    const conversation = await findUserConversation(req.params.id, req.user.id);
+    const ownerId = getWorkspaceOwnerId(req.user);
+    const conversation = await findWorkspaceConversation(req.params.id, ownerId);
     if (!conversation) {
       return res.status(404).json({ error: 'Conversation not found' });
     }
@@ -286,7 +322,7 @@ router.patch('/:id/delete', authenticate, async (req, res) => {
       data: { isDeleted: true, deletedAt: new Date() },
     });
 
-    emitToUser(req.user.id, 'conversation_state_change', {
+    emitToUser(ownerId, 'conversation_state_change', {
       conversationId: conversation.id,
       field: 'isDeleted',
       value: true,
@@ -305,7 +341,8 @@ router.patch('/:id/delete', authenticate, async (req, res) => {
 
 router.patch('/:id/restore', authenticate, async (req, res) => {
   try {
-    const conversation = await findUserConversation(req.params.id, req.user.id);
+    const ownerId = getWorkspaceOwnerId(req.user);
+    const conversation = await findWorkspaceConversation(req.params.id, ownerId);
     if (!conversation) {
       return res.status(404).json({ error: 'Conversation not found' });
     }
@@ -315,7 +352,7 @@ router.patch('/:id/restore', authenticate, async (req, res) => {
       data: { isDeleted: false, deletedAt: null },
     });
 
-    emitToUser(req.user.id, 'conversation_state_change', {
+    emitToUser(ownerId, 'conversation_state_change', {
       conversationId: conversation.id,
       field: 'isDeleted',
       value: false,
@@ -334,7 +371,8 @@ router.patch('/:id/restore', authenticate, async (req, res) => {
 
 router.delete('/:id/permanent', authenticate, async (req, res) => {
   try {
-    const conversation = await findUserConversation(req.params.id, req.user.id);
+    const ownerId = getWorkspaceOwnerId(req.user);
+    const conversation = await findWorkspaceConversation(req.params.id, ownerId);
     if (!conversation) {
       return res.status(404).json({ error: 'Conversation not found' });
     }
@@ -345,7 +383,7 @@ router.delete('/:id/permanent', authenticate, async (req, res) => {
 
     await prisma.conversation.delete({ where: { id: conversation.id } });
 
-    emitToUser(req.user.id, 'conversation_removed', {
+    emitToUser(ownerId, 'conversation_removed', {
       conversationId: conversation.id,
     });
 
@@ -362,7 +400,8 @@ router.delete('/:id/permanent', authenticate, async (req, res) => {
 
 router.put('/:id/draft', authenticate, async (req, res) => {
   try {
-    const conversation = await findUserConversation(req.params.id, req.user.id);
+    const ownerId = getWorkspaceOwnerId(req.user);
+    const conversation = await findWorkspaceConversation(req.params.id, ownerId);
     if (!conversation) {
       return res.status(404).json({ error: 'Conversation not found' });
     }
@@ -372,7 +411,7 @@ router.put('/:id/draft', authenticate, async (req, res) => {
     // If content is empty, delete the draft
     if (!content || !content.trim()) {
       await prisma.draft.deleteMany({ where: { conversationId: conversation.id } });
-      emitToUser(req.user.id, 'draft_update', {
+      emitToUser(ownerId, 'draft_update', {
         conversationId: conversation.id,
         draft: null,
       });
@@ -392,7 +431,7 @@ router.put('/:id/draft', authenticate, async (req, res) => {
       },
     });
 
-    emitToUser(req.user.id, 'draft_update', {
+    emitToUser(ownerId, 'draft_update', {
       conversationId: conversation.id,
       draft,
     });
@@ -410,7 +449,8 @@ router.put('/:id/draft', authenticate, async (req, res) => {
 
 router.get('/:id/draft', authenticate, async (req, res) => {
   try {
-    const conversation = await findUserConversation(req.params.id, req.user.id);
+    const ownerId = getWorkspaceOwnerId(req.user);
+    const conversation = await findWorkspaceConversation(req.params.id, ownerId);
     if (!conversation) {
       return res.status(404).json({ error: 'Conversation not found' });
     }
@@ -432,14 +472,15 @@ router.get('/:id/draft', authenticate, async (req, res) => {
 
 router.delete('/:id/draft', authenticate, async (req, res) => {
   try {
-    const conversation = await findUserConversation(req.params.id, req.user.id);
+    const ownerId = getWorkspaceOwnerId(req.user);
+    const conversation = await findWorkspaceConversation(req.params.id, ownerId);
     if (!conversation) {
       return res.status(404).json({ error: 'Conversation not found' });
     }
 
     await prisma.draft.deleteMany({ where: { conversationId: conversation.id } });
 
-    emitToUser(req.user.id, 'draft_update', {
+    emitToUser(ownerId, 'draft_update', {
       conversationId: conversation.id,
       draft: null,
     });

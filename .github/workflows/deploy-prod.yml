@@ -37,6 +37,7 @@ jobs:
           VITE_API_URL: ${{ secrets.PROD_API_URL }}
           VITE_META_APP_ID: ${{ secrets.VITE_META_APP_ID }}
           VITE_WA_CONFIG_ID: ${{ secrets.VITE_WA_CONFIG_ID }}
+          VITE_STRIPE_PUBLISHABLE_KEY: ${{ secrets.VITE_STRIPE_PUBLISHABLE_KEY }}
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4

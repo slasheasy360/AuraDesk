@@ -2,86 +2,8 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import api from '../services/api.js';
 import AuthLayout, { AuthInput, GradientButton } from '../components/AuthLayout.jsx';
-
-/* ─────────────── Password rules ─────────────── */
-// Mirror of the server-side rules in backend/src/routes/auth.js.
-// Returning a boolean per rule lets us render the live checklist + strength bar.
-
-function hasSequentialDigits(pw) {
-  for (let i = 0; i <= pw.length - 3; i++) {
-    const a = pw.charCodeAt(i);
-    const b = pw.charCodeAt(i + 1);
-    const c = pw.charCodeAt(i + 2);
-    const isDigit = (code) => code >= 48 && code <= 57;
-    if (isDigit(a) && isDigit(b) && isDigit(c) && b === a + 1 && c === b + 1) {
-      return true;
-    }
-  }
-  return false;
-}
-
-function evaluatePassword(pw) {
-  const rules = {
-    length:    pw.length >= 8,
-    upper:     /[A-Z]/.test(pw),
-    lower:     /[a-z]/.test(pw),
-    number:    /[0-9]/.test(pw),
-    special:   /[^A-Za-z0-9]/.test(pw),
-    noSequential: pw.length > 0 && !hasSequentialDigits(pw),
-  };
-  const passed = Object.values(rules).filter(Boolean).length;
-  const allValid = passed === 6;
-
-  // Strength label is keyed off the rule pass-count.
-  // 0–2: Weak, 3–4: Medium, 5–6: Strong (with all 6 = Strong).
-  let strength = 'Weak';
-  let strengthColor = '#ef4444';   // red-500
-  let strengthPct = 0;
-  if (passed === 0) {
-    strength = '';
-    strengthPct = 0;
-  } else if (passed <= 2) {
-    strength = 'Weak';
-    strengthColor = '#ef4444';
-    strengthPct = 33;
-  } else if (passed <= 4) {
-    strength = 'Medium';
-    strengthColor = '#f59e0b';     // amber-500
-    strengthPct = 66;
-  } else {
-    strength = 'Strong';
-    strengthColor = '#10b981';     // emerald-500
-    strengthPct = 100;
-  }
-
-  return { rules, passed, allValid, strength, strengthColor, strengthPct };
-}
-
-/* ─────────────── Inline rule checklist ─────────────── */
-function RuleItem({ ok, label }) {
-  return (
-    <li
-      className={`flex items-center gap-2 text-[12px] transition-colors ${
-        ok ? 'text-emerald-500' : 'text-white/55 lg:text-gray-500'
-      }`}
-    >
-      <span
-        className={`inline-flex items-center justify-center w-4 h-4 rounded-full border transition ${
-          ok
-            ? 'bg-emerald-500 border-emerald-500 text-white'
-            : 'border-white/30 lg:border-gray-300'
-        }`}
-      >
-        {ok ? (
-          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round">
-            <polyline points="20 6 9 17 4 12" />
-          </svg>
-        ) : null}
-      </span>
-      <span>{label}</span>
-    </li>
-  );
-}
+import PasswordStrengthChecker from '../components/PasswordStrengthChecker.jsx';
+import { evaluatePassword } from '../utils/passwordValidation.js';
 
 /* ─────────────── Page ─────────────── */
 export default function ResetPasswordPage() {
@@ -92,25 +14,42 @@ export default function ResetPasswordPage() {
   const [confirm, setConfirm] = useState('');
   const [showPw, setShowPw] = useState(false);
   const [showCPw, setShowCPw] = useState(false);
-  const [touched, setTouched] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState(false);
+  const [mismatchVisible, setMismatchVisible] = useState(false);
 
   const evaluation = useMemo(() => evaluatePassword(password), [password]);
   const passwordsMatch = confirm.length > 0 && password === confirm;
   const canSubmit = evaluation.allValid && passwordsMatch && !loading && !success;
 
-  // Auto-redirect to login a few seconds after a successful reset.
+  // Auto-redirect to login after a successful reset.
   useEffect(() => {
     if (!success) return;
     const t = setTimeout(() => navigate('/login', { replace: true }), 2500);
     return () => clearTimeout(t);
   }, [success, navigate]);
 
+  // Auto-clear banner error after 5 s
+  useEffect(() => {
+    if (!error) return;
+    const t = setTimeout(() => setError(''), 5000);
+    return () => clearTimeout(t);
+  }, [error]);
+
+  // Show inline mismatch hint and auto-hide after 5 s
+  useEffect(() => {
+    if (confirm.length === 0) { setMismatchVisible(false); return; }
+    if (!passwordsMatch) {
+      setMismatchVisible(true);
+      const t = setTimeout(() => setMismatchVisible(false), 5000);
+      return () => clearTimeout(t);
+    }
+    setMismatchVisible(false);
+  }, [confirm, passwordsMatch]);
+
   const handleSubmit = async (e) => {
     e.preventDefault();
-    setTouched(true);
     setError('');
     if (!canSubmit) return;
 
@@ -189,38 +128,8 @@ export default function ResetPasswordPage() {
                 required
               />
 
-              {/* Animated strength underline bar */}
-              <div className="mt-2 h-[3px] w-full rounded-full bg-white/10 lg:bg-gray-200 overflow-hidden">
-                <div
-                  className="h-full rounded-full transition-all duration-500 ease-out"
-                  style={{
-                    width: `${evaluation.strengthPct}%`,
-                    backgroundColor: evaluation.strengthColor,
-                  }}
-                />
-              </div>
-              {evaluation.strength && (
-                <div className="mt-1.5 flex items-center justify-between text-[11px]">
-                  <span className="text-white/55 lg:text-gray-500">Password strength</span>
-                  <span
-                    className="font-semibold tracking-wide"
-                    style={{ color: evaluation.strengthColor }}
-                  >
-                    {evaluation.strength}
-                  </span>
-                </div>
-              )}
+              <PasswordStrengthChecker evaluation={evaluation} dark />
             </div>
-
-            {/* Live rule checklist */}
-            <ul className="grid grid-cols-1 gap-1.5 px-1">
-              <RuleItem ok={evaluation.rules.length}       label="At least 8 characters" />
-              <RuleItem ok={evaluation.rules.upper}        label="One uppercase letter (A–Z)" />
-              <RuleItem ok={evaluation.rules.lower}        label="One lowercase letter (a–z)" />
-              <RuleItem ok={evaluation.rules.number}       label="One number (0–9)" />
-              <RuleItem ok={evaluation.rules.special}      label="One special character" />
-              <RuleItem ok={evaluation.rules.noSequential} label="No sequential numbers (e.g. 123, 456)" />
-            </ul>
 
             <div>
               <AuthInput
@@ -232,7 +141,7 @@ export default function ResetPasswordPage() {
                 onChange={(e) => setConfirm(e.target.value)}
                 required
               />
-              {touched && confirm.length > 0 && !passwordsMatch && (
+              {mismatchVisible && (
                 <p className="mt-1.5 text-[12px] text-red-400 lg:text-red-600">
                   Passwords do not match.
                 </p>

@@ -31,7 +31,53 @@ export async function handleEmbeddedSignup(userId, wabaId, phoneNumberId, userAc
     console.warn('[WhatsApp] Could not fetch phone details (non-fatal):', err.response?.data?.error?.message || err.message);
   }
 
-  // Check if this phone number is already connected to another account
+  // Helper: subscribe webhook (non-fatal, can be configured manually in Meta dashboard)
+  async function subscribeWebhook() {
+    try {
+      await axios.post(`${GRAPH_API}/${wabaId}/subscribed_apps`, null, {
+        params: { access_token: userAccessToken, subscribed_fields: 'messages' },
+      });
+      console.log('[WhatsApp] Webhook subscription successful for WABA:', wabaId);
+    } catch (err) {
+      console.warn('[WhatsApp] Webhook subscription failed (non-fatal):', err.response?.data?.error?.message || err.message);
+    }
+  }
+
+  // ── Case 1: Existing active WhatsApp account for this user with this phone ──
+  // Update in place instead of delete+recreate — preserves all conversation history.
+  const myExistingWhatsapp = await prisma.whatsappAccount.findFirst({
+    where: {
+      OR: [
+        { phoneNumberId },
+        ...(phoneNumber !== phoneNumberId ? [{ phoneNumber }] : []),
+      ],
+      connectedAccount: { userId },
+    },
+    include: { connectedAccount: true },
+  });
+
+  if (myExistingWhatsapp) {
+    console.log('[WhatsApp] Reconnecting existing account — preserving history, phoneNumberId:', phoneNumberId);
+    const [updatedAccount] = await Promise.all([
+      prisma.connectedAccount.update({
+        where: { id: myExistingWhatsapp.connectedAccountId },
+        data: { status: 'active', displayName: businessName || phoneNumber },
+      }),
+      prisma.whatsappAccount.update({
+        where: { id: myExistingWhatsapp.id },
+        data: { wabaId, phoneNumberId, phoneNumber, businessName, webhookVerified: true },
+      }),
+      prisma.authToken.upsert({
+        where: { connectedAccountId: myExistingWhatsapp.connectedAccountId },
+        update: { accessTokenEncrypted: encrypt(userAccessToken), tokenType, scopes: 'whatsapp_business_messaging,whatsapp_business_management' },
+        create: { connectedAccountId: myExistingWhatsapp.connectedAccountId, accessTokenEncrypted: encrypt(userAccessToken), tokenType, scopes: 'whatsapp_business_messaging,whatsapp_business_management' },
+      }),
+    ]);
+    await subscribeWebhook();
+    return updatedAccount;
+  }
+
+  // ── Check if this phone is already connected to a DIFFERENT user/workspace ──
   const existingWhatsapp = await prisma.whatsappAccount.findFirst({
     where: {
       OR: [
@@ -58,29 +104,37 @@ export async function handleEmbeddedSignup(userId, wabaId, phoneNumberId, userAc
     throw error;
   }
 
-  // Clean up any previous disconnected sessions for this user + WABA
-  await prisma.connectedAccount.deleteMany({
-    where: {
-      userId,
-      platform: 'whatsapp',
-      platformAccountId: wabaId,
-      status: 'disconnected',
-    },
+  // ── Case 2: Reconnect after explicit disconnect ──
+  // The whatsappAccount was deleted on disconnect but connectedAccount still exists
+  // with status='disconnected'. Reactivating preserves all conversation history.
+  const disconnectedAccount = await prisma.connectedAccount.findFirst({
+    where: { userId, platform: 'whatsapp', platformAccountId: wabaId, status: 'disconnected' },
   });
 
-  // Subscribe webhook to WABA for this tenant (non-fatal — can be configured manually in Meta dashboard)
-  try {
-    await axios.post(`${GRAPH_API}/${wabaId}/subscribed_apps`, null, {
-      params: {
-        access_token: userAccessToken,
-        subscribed_fields: 'messages',
-      },
-    });
-    console.log('[WhatsApp] Webhook subscription successful for WABA:', wabaId);
-  } catch (err) {
-    console.warn('[WhatsApp] Webhook subscription failed (non-fatal):', err.response?.data?.error?.message || err.message);
-    // (#200) Permissions error can happen — webhook can be configured manually in Meta dashboard
+  if (disconnectedAccount) {
+    console.log('[WhatsApp] Reactivating disconnected account — preserving conversation history, wabaId:', wabaId);
+    const [updatedAccount] = await Promise.all([
+      prisma.connectedAccount.update({
+        where: { id: disconnectedAccount.id },
+        data: { status: 'active', displayName: businessName || phoneNumber },
+      }),
+      prisma.whatsappAccount.upsert({
+        where: { connectedAccountId: disconnectedAccount.id },
+        update: { wabaId, phoneNumberId, phoneNumber, businessName, webhookVerified: true },
+        create: { connectedAccountId: disconnectedAccount.id, wabaId, phoneNumberId, phoneNumber, businessName, webhookVerified: true },
+      }),
+      prisma.authToken.upsert({
+        where: { connectedAccountId: disconnectedAccount.id },
+        update: { accessTokenEncrypted: encrypt(userAccessToken), tokenType, scopes: 'whatsapp_business_messaging,whatsapp_business_management' },
+        create: { connectedAccountId: disconnectedAccount.id, accessTokenEncrypted: encrypt(userAccessToken), tokenType, scopes: 'whatsapp_business_messaging,whatsapp_business_management' },
+      }),
+    ]);
+    await subscribeWebhook();
+    return updatedAccount;
   }
+
+  // ── Case 3: Fresh connection — no existing account for this user + phone ──
+  await subscribeWebhook();
 
   // Upsert connected account
   const connectedAccount = await prisma.connectedAccount.upsert({

@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import jwt from 'jsonwebtoken';
-import { authenticate } from '../middleware/auth.js';
+import { authenticate, requireAdmin } from '../middleware/auth.js';
 import * as instagramService from '../services/instagram.js';
 import { syncInstagramMessages } from '../services/instagram.sync.js';
 import prisma from '../utils/prisma.js';
@@ -16,8 +16,8 @@ function getFrontendUrl() {
   return (urls.length > 1 ? urls[urls.length - 1] : urls[0]).replace(/\/$/, '');
 }
 
-// Direct browser redirect to Instagram OAuth (requires token in query param)
-router.get('/', (req, res) => {
+// Direct browser redirect to Instagram OAuth (requires token in query param) — admin/owner only
+router.get('/', async (req, res) => {
   const { token } = req.query;
   if (!token) {
     return res.redirect(`${getFrontendUrl()}/login?error=auth_required`);
@@ -25,6 +25,11 @@ router.get('/', (req, res) => {
 
   try {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    // Enforce admin-only before starting the OAuth flow
+    const user = await prisma.user.findUnique({ where: { id: decoded.userId }, select: { role: true } });
+    if (!user || (user.role !== 'admin' && user.role !== 'owner')) {
+      return res.redirect(`${getFrontendUrl()}/connections?error=forbidden`);
+    }
     const state = Buffer.from(JSON.stringify({ userId: decoded.userId })).toString('base64url');
     const url = instagramService.getLoginUrl(state);
     res.redirect(url);
@@ -33,8 +38,8 @@ router.get('/', (req, res) => {
   }
 });
 
-// Start Instagram OAuth (authenticated API call)
-router.get('/start', authenticate, async (req, res) => {
+// Start Instagram OAuth (authenticated API call) — admin/owner only
+router.get('/start', authenticate, requireAdmin, async (req, res) => {
   try { await assertCanConnectPlatform(req.user, 'instagram', { context: 'instagram/start' }); } catch (_) { }
   const popup = String(req.query.popup || '') === '1';
   const state = Buffer.from(JSON.stringify({ userId: req.user.id, popup })).toString('base64url');

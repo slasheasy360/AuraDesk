@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext.jsx';
 import api from '../services/api.js';
-import { Check, ChevronRight, RefreshCw } from 'lucide-react';
+import { Check, CheckCircle, ChevronRight, RefreshCw, X } from 'lucide-react';
 import logoUrl from '../assets/logo.svg';
 
 /* ─────────────── BRAND ICONS ─────────────── */
@@ -59,6 +59,142 @@ const ICONS = {
   whatsapp: <WhatsAppIcon />,
   gmail: <GmailIcon />,
 };
+
+/* ─────────────── PLATFORM PREREQUISITES ─────────────── */
+const PLATFORM_REQUIREMENTS = {
+  whatsapp: [
+    { id: 'business_account', label: 'I have a WhatsApp Business account', help: 'Personal WhatsApp accounts cannot connect to the API. Download the WhatsApp Business app and set one up first.' },
+    { id: 'unused_number', label: 'My phone number is not already connected to another account', help: 'Each phone number can only be linked to one WhatsApp Business API account at a time.' },
+    { id: 'no_existing', label: "No existing WhatsApp connection is active (or I've already disconnected it)", help: 'Only one WhatsApp Business account can be active per workspace.' },
+  ],
+  instagram: [
+    { id: 'business_creator', label: 'I have an Instagram Business or Creator account', help: 'Personal accounts cannot receive DMs via the API. Go to Instagram → Settings → Account → Switch to Professional Account.' },
+    { id: 'linked_page', label: 'My Instagram account is linked to a Facebook Page', help: 'Required by Meta. Go to Facebook → Settings → Linked Accounts → Instagram and connect your account.' },
+  ],
+  facebook: [
+    { id: 'page_admin', label: 'I am an admin of the Facebook Page I want to connect', help: 'Only Page admins can authorize Messenger API access.' },
+    { id: 'grant_permissions', label: 'I am ready to grant the required permissions during the sign-in flow', help: 'The popup will request: manage_pages, pages_messaging, and pages_read_engagement.' },
+  ],
+  gmail: [
+    { id: 'valid_account', label: 'I have a valid Gmail or Google Workspace account', help: 'Any Google account with Gmail enabled works.' },
+    { id: 'grant_access', label: 'I am ready to grant AuraDesk access during the Google sign-in flow', help: 'Google will ask you to allow AuraDesk to read and send emails on your behalf.' },
+  ],
+};
+
+const PLATFORM_BTN_COLOR = {
+  whatsapp: '#25D366',
+  instagram: '#d6249f',
+  facebook: '#1877F2',
+  gmail: '#EA4335',
+};
+
+function ConnectModal({ platformId, platformName, onClose, onConfirm }) {
+  const reqs = PLATFORM_REQUIREMENTS[platformId] || [];
+  const [checked, setChecked] = useState(new Set());
+  const done = reqs.filter((r) => checked.has(r.id)).length;
+  const total = reqs.length;
+  const allDone = done === total;
+  const btnColor = PLATFORM_BTN_COLOR[platformId] || '#1787FE';
+
+  const toggle = (id) => setChecked((prev) => {
+    const next = new Set(prev);
+    next.has(id) ? next.delete(id) : next.add(id);
+    return next;
+  });
+
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  return (
+    <div
+      className="fixed inset-0 z-[80] flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/50 backdrop-blur-sm"
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    >
+      <div className="w-full sm:max-w-md bg-white rounded-t-3xl sm:rounded-2xl shadow-2xl overflow-hidden max-h-[85vh] flex flex-col">
+        {/* Mobile drag handle */}
+        <div className="pt-3 pb-1 flex justify-center sm:hidden">
+          <div className="w-10 h-1 rounded-full bg-gray-300" />
+        </div>
+
+        {/* Header */}
+        <div className="px-5 py-4 flex items-center justify-between border-b border-gray-100">
+          <div>
+            <h2 className="text-base font-bold text-gray-900">Connect {platformName}</h2>
+            <p className="text-xs text-gray-500">Confirm the requirements below before continuing</p>
+          </div>
+          <button onClick={onClose} className="w-8 h-8 rounded-full flex items-center justify-center text-gray-400 hover:bg-gray-100">
+            <X size={18} />
+          </button>
+        </div>
+
+        {/* Checklist */}
+        <div className="flex-1 overflow-y-auto px-5 py-4 space-y-3">
+          <div className="flex items-center justify-between mb-1">
+            <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Requirements</span>
+            <span className={`text-xs font-bold px-2.5 py-0.5 rounded-full transition-colors ${allDone ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}`}>
+              {done}/{total} completed
+            </span>
+          </div>
+          <div className="h-1 w-full rounded-full bg-gray-100 overflow-hidden">
+            <div
+              className="h-full rounded-full transition-all duration-300"
+              style={{ width: `${total > 0 ? (done / total) * 100 : 0}%`, backgroundColor: allDone ? '#10b981' : '#f59e0b' }}
+            />
+          </div>
+          <ul className="space-y-2 pt-1">
+            {reqs.map((req) => {
+              const isChecked = checked.has(req.id);
+              return (
+                <li key={req.id}>
+                  <button
+                    type="button"
+                    onClick={() => toggle(req.id)}
+                    className={`w-full flex items-start gap-3 p-3 rounded-xl border-2 text-left transition-all duration-200 ${
+                      isChecked ? 'border-green-200 bg-green-50' : 'border-gray-100 bg-gray-50 hover:border-gray-200 hover:bg-gray-100'
+                    }`}
+                  >
+                    <span className={`mt-0.5 flex-shrink-0 w-5 h-5 rounded-full border-2 flex items-center justify-center transition-all duration-200 ${
+                      isChecked ? 'bg-green-500 border-green-500' : 'bg-white border-gray-300'
+                    }`}>
+                      {isChecked && (
+                        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round">
+                          <polyline points="20 6 9 17 4 12" />
+                        </svg>
+                      )}
+                    </span>
+                    <div className="flex-1 min-w-0">
+                      <p className={`text-sm font-medium leading-snug ${isChecked ? 'text-green-700' : 'text-gray-700'}`}>{req.label}</p>
+                      {req.help && !isChecked && <p className="text-xs text-gray-400 mt-0.5 leading-snug">{req.help}</p>}
+                    </div>
+                    {isChecked && <CheckCircle size={16} className="text-green-500 flex-shrink-0 mt-0.5" />}
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+
+        {/* Footer */}
+        <div className="px-5 pb-6 pt-3 flex gap-3 border-t border-gray-100">
+          <button onClick={onClose} className="flex-1 py-2.5 text-sm font-medium text-gray-600 border border-gray-200 rounded-xl hover:bg-gray-50 transition">
+            Cancel
+          </button>
+          <button
+            onClick={onConfirm}
+            disabled={!allDone}
+            className="flex-1 py-2.5 text-sm font-semibold text-white rounded-xl transition-all duration-200 disabled:bg-gray-200 disabled:text-gray-400 disabled:cursor-not-allowed"
+            style={allDone ? { backgroundColor: btnColor } : undefined}
+          >
+            {allDone ? 'Continue →' : `${done}/${total} completed`}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 /* ─────────────── STEP INDICATOR ─────────────── */
 function StepIndicator({ current, onStepClick, maxStep }) {
@@ -132,6 +268,8 @@ function getPlatformBlockReason(platformId, userPlan, activeAccounts) {
 function PlatformStep({ onNext, successPlatform, errorInfo }) {
   const { user } = useAuth();
   const [errMsg, setErrMsg] = useState(errorInfo?.platform ? errorInfo : null);
+  // null | { id, name } — platform waiting for prerequisite acknowledgement
+  const [connectModal, setConnectModal] = useState(null);
   useEffect(() => {
     if (errMsg) {
       const t = setTimeout(() => setErrMsg(null), 6000);
@@ -285,8 +423,9 @@ function PlatformStep({ onNext, successPlatform, errorInfo }) {
         scope: 'whatsapp_business_messaging,business_management,whatsapp_business_management',
         extras: {
           feature: 'whatsapp_embedded_signup',
-          version: 2,
-          setup: {},
+          featureType: 'whatsapp_business_app_onboarding',
+          version: 'v4',
+          sessionInfoVersion: '3',
         },
       }
     );
@@ -377,7 +516,7 @@ function PlatformStep({ onNext, successPlatform, errorInfo }) {
           return (
             <div key={p.id} className="flex flex-col gap-1">
               <button
-                onClick={() => handleConnect(p.id)}
+                onClick={() => !isBlocked && setConnectModal(p)}
                 disabled={isBlocked}
                 title={blockReason || undefined}
                 className={`w-full flex items-center justify-between rounded-full px-5 py-3 transition-all duration-300
@@ -403,6 +542,19 @@ function PlatformStep({ onNext, successPlatform, errorInfo }) {
       <div className="mt-8 flex justify-center">
         <PrimaryButton onClick={onNext}>CONTINUE</PrimaryButton>
       </div>
+
+      {connectModal && (
+        <ConnectModal
+          platformId={connectModal.id}
+          platformName={connectModal.name}
+          onClose={() => setConnectModal(null)}
+          onConfirm={() => {
+            const p = connectModal;
+            setConnectModal(null);
+            handleConnect(p.id);
+          }}
+        />
+      )}
     </div>
   );
 }

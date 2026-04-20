@@ -3,7 +3,7 @@ import { Outlet, NavLink, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext.jsx';
 import { LinkAccountsProvider, useLinkAccounts } from '../context/LinkAccountsContext.jsx';
 import { connectSocket, disconnectSocket } from '../services/socket.js';
-import { LayoutDashboard, Inbox, Users, FileText, Brain, LogOut, Menu, X, ChevronRight } from 'lucide-react';
+import { LayoutDashboard, Inbox, Users, FileText, Brain, LogOut, X, ChevronRight } from 'lucide-react';
 import logoUrl from '../assets/logo.svg';
 import MobileBottomNav from './MobileBottomNav.jsx';
 import LinkAccountsSheet from './LinkAccountsSheet.jsx';
@@ -46,7 +46,7 @@ function DashboardLayoutInner() {
 
   const handleLogout = () => {
     logout();
-    navigate('/login');
+    navigate('/login', { replace: true });
   };
 
   const navItems = [
@@ -158,7 +158,7 @@ function DashboardLayoutInner() {
 
       {/* Main content */}
       <div className="flex-1 flex flex-col overflow-hidden">
-        {/* Mobile top bar — logo + wordmark on left, hamburger + company avatar on right */}
+        {/* Mobile top bar — logo on left, avatar on right; no hamburger (bottom nav handles navigation) */}
         <div className="lg:hidden bg-[#0B1628] border-b border-white/5 px-4 py-3 flex items-center justify-between gap-3">
           <button
             type="button"
@@ -169,33 +169,24 @@ function DashboardLayoutInner() {
             <img src={logoUrl} alt="AuraDesk" className="h-7 w-auto" />
             <span className="font-bold text-white text-[17px] tracking-tight">AuraDesk</span>
           </button>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => setSidebarOpen(true)}
-              className="text-gray-300 hover:text-white transition p-1.5"
-              aria-label="Open menu"
-            >
-              <Menu size={22} />
-            </button>
-            <button
-              type="button"
-              onClick={() => navigate('/settings?tab=Personal')}
-              className="flex-shrink-0"
-              title={companyName}
-              aria-label="Profile"
-            >
-              {companyLogo ? (
-                <img src={companyLogo} alt={companyName} className="w-9 h-9 rounded-full object-cover border border-white/10" />
-              ) : (
-                <div className="w-9 h-9 bg-[#1787FE] rounded-full flex items-center justify-center text-sm font-bold text-white border border-white/10">
-                  {companyName?.[0]?.toUpperCase()}
-                </div>
-              )}
-            </button>
-          </div>
+          <button
+            type="button"
+            onClick={() => navigate('/settings?tab=Personal')}
+            className="flex-shrink-0"
+            title={companyName}
+            aria-label="Profile"
+          >
+            {companyLogo ? (
+              <img src={companyLogo} alt={companyName} className="w-9 h-9 rounded-full object-cover border border-white/10" />
+            ) : (
+              <div className="w-9 h-9 bg-[#1787FE] rounded-full flex items-center justify-center text-sm font-bold text-white border border-white/10">
+                {companyName?.[0]?.toUpperCase()}
+              </div>
+            )}
+          </button>
         </div>
 
-        <main className="flex-1 overflow-hidden pb-16 lg:pb-0">
+        <main className="flex-1 overflow-hidden pb-20 lg:pb-0">
           <Outlet />
         </main>
 

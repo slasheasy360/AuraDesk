@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import {
   Search, Plus, X, ChevronDown, ChevronUp, Sparkles,
-  CheckCircle, Upload, Trash2, Edit2, Check, Info,
+  CheckCircle, Trash2, Edit2, Check, Info,
   Heart, FileText, Bell, Calendar, BookOpen, HelpCircle,
 } from 'lucide-react';
 import api from '../services/api.js';
@@ -76,13 +76,6 @@ function AddFaqModal({ onClose, onSaved, editFaq = null }) {
           {editFaq ? 'Edit FAQ' : 'Add FAQ'}
         </h2>
 
-        {/* Upload button */}
-        {!editFaq && (
-          <button className="w-full flex items-center justify-center gap-2 py-2.5 border border-gray-300 rounded-xl text-sm text-gray-700 hover:bg-gray-50 transition mb-6">
-            <Upload size={16} />
-            Upload FAQ file
-          </button>
-        )}
 
         <form onSubmit={handleSubmit} className="space-y-5">
           {/* Category */}

@@ -37,6 +37,7 @@ jobs:
           VITE_API_URL: ${{ secrets.STAGING_API_URL }}
           VITE_META_APP_ID: ${{ secrets.VITE_META_APP_ID }}
           VITE_WA_CONFIG_ID: ${{ secrets.VITE_WA_CONFIG_ID }}
+          VITE_STRIPE_PUBLISHABLE_KEY: ${{ secrets.VITE_STRIPE_PUBLISHABLE_KEY }}
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -110,12 +111,48 @@ jobs:
           fi
           echo "Migrations completed successfully"
 
+      - name: Register new task definition with updated image and env vars
+        id: task-def
+        env:
+          NEW_IMAGE: ${{ steps.build-image.outputs.IMAGE }}
+        run: |
+          # Get the task definition currently used by the service
+          CURRENT_TASK_DEF_ARN=$(aws ecs describe-services \
+            --cluster ${{ env.ECS_CLUSTER }} \
+            --services ${{ env.ECS_SERVICE }} \
+            --query 'services[0].taskDefinition' --output text)
+
+          # Fetch its JSON and strip AWS read-only fields
+          TASK_DEF=$(aws ecs describe-task-definition \
+            --task-definition "$CURRENT_TASK_DEF_ARN" \
+            --query 'taskDefinition' --output json | \
+            jq 'del(.taskDefinitionArn,.revision,.status,.requiresAttributes,
+                    .compatibilities,.registeredAt,.registeredBy,.deregisteredAt)')
+
+          # Update image, move FRONTEND_URL from secrets to plain env (avoids ECS conflict)
+          UPDATED=$(echo "$TASK_DEF" | jq \
+            --arg img "$NEW_IMAGE" \
+            --arg url "https://test.getauradesk.com" \
+            '.containerDefinitions |= map(
+              .image = $img |
+              .secrets = [.secrets[] | select(.name != "FRONTEND_URL")] |
+              .environment = ((.environment // [])
+                | map(select(.name != "FRONTEND_URL"))
+                + [{"name":"FRONTEND_URL","value":$url}])
+            )')
+
+          # Register as a new revision and capture the ARN
+          NEW_ARN=$(aws ecs register-task-definition \
+            --cli-input-json "$UPDATED" \
+            --query 'taskDefinition.taskDefinitionArn' --output text)
+          echo "ARN=$NEW_ARN" >> $GITHUB_OUTPUT
+
       - name: Deploy to ECS
         run: |
           aws ecs update-service \
             --cluster ${{ env.ECS_CLUSTER }} \
             --service ${{ env.ECS_SERVICE }} \
-            --force-new-deployment
+            --task-definition ${{ steps.task-def.outputs.ARN }}
 
       - name: Wait for service stability
         run: |

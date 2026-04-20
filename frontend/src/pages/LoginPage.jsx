@@ -106,19 +106,23 @@ export default function LoginPage() {
 
       <form onSubmit={handleSubmit} className="space-y-4">
         <AuthInput
-          label="EMAIL"
+          label="Email"
           type="email"
           value={email}
           onChange={(e) => setEmail(e.target.value)}
+          placeholder="you@example.com"
+          autoComplete="email"
           required
         />
         <AuthInput
-          label="PASSWORD"
+          label="Password"
           hasToggle
           show={showPw}
           onToggle={() => setShowPw((s) => !s)}
           value={password}
           onChange={(e) => setPassword(e.target.value)}
+          placeholder="Enter your password"
+          autoComplete="current-password"
           required
         />
         <div className="flex justify-end -mt-1">

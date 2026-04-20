@@ -430,6 +430,60 @@ export async function assertAndConsumeAiReply(user, { context = 'ai', meta = {} 
 }
 
 /**
+ * Read-only quota check. Does NOT increment the counter.
+ * Use this to gate AI generation before the user has acted on the result.
+ * Call assertAndConsumeAiReply (via consume-reply endpoint) when the user
+ * actually uses or copies the suggestion.
+ */
+export async function checkAiReplyQuota(user) {
+  if (getEnforcementMode() === ENFORCEMENT_MODES.OFF) {
+    return { ok: true, used: null, limit: null, unlimited: true };
+  }
+  if (!user) return { ok: true, used: null, limit: null, unlimited: true };
+
+  let owner;
+  try {
+    owner = await resolveWorkspaceOwner(user);
+  } catch {
+    return { ok: true, used: null, limit: null, unlimited: true };
+  }
+  if (!owner) return { ok: true, used: null, limit: null, unlimited: true };
+
+  const limits = getPlanLimits(owner);
+
+  if (limits.aiRepliesPerCycle === UNLIMITED) {
+    return { ok: true, used: null, limit: null, unlimited: true };
+  }
+
+  // Handle cycle rollover (same logic as assertAndConsumeAiReply)
+  const cycleAnchor = owner.currentPeriodStart || owner.aiRepliesCycleStart || new Date(0);
+  const lastReset = owner.aiRepliesCycleStart || new Date(0);
+  let currentUsed = owner.aiRepliesUsed || 0;
+  if (new Date(cycleAnchor).getTime() > new Date(lastReset).getTime()) {
+    currentUsed = 0; // cycle rolled over since last DB sync
+  }
+
+  if (currentUsed >= limits.aiRepliesPerCycle) {
+    return handleViolation(
+      'ai/check-quota',
+      VIOLATION_CODES.AI_LIMIT,
+      `You've used all ${limits.aiRepliesPerCycle} AI replies for this cycle.`,
+      {
+        userId: user.id,
+        workspaceOwnerId: owner.id,
+        plan: owner.plan,
+        limit: limits.aiRepliesPerCycle,
+        used: currentUsed,
+        resetsAt: owner.currentPeriodEnd,
+        upgradeTo: nextPlanAbove(owner.plan),
+      }
+    );
+  }
+
+  return { ok: true, used: currentUsed, limit: limits.aiRepliesPerCycle, unlimited: false };
+}
+
+/**
  * Refund a consumed AI reply. Call this when the downstream AI provider
  * fails AFTER `assertAndConsumeAiReply` already incremented the counter.
  * Also removes the matching audit row.

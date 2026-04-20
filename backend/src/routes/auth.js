@@ -4,10 +4,12 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import prisma from '../utils/prisma.js';
 import { authenticate } from '../middleware/auth.js';
-import { sendMail, buildPasswordResetEmail } from '../utils/mailer.js';
+import { sendWelcomeEmail } from '../emails/senders/sendWelcomeEmail.js';
+import { sendPasswordResetEmail } from '../emails/senders/sendPasswordResetEmail.js';
 import { getOrCreateStripeCustomer } from '../utils/stripe.js';
 import { getUsageSnapshot } from '../services/planGuard.js';
 import { getPresignedUrl } from '../utils/s3.js';
+import { validatePassword } from '../utils/passwordValidator.js';
 
 // If companyLogo is an S3 key (not already a URL), resolve it to a fresh presigned URL.
 async function resolveLogoUrl(companyLogo) {
@@ -28,33 +30,8 @@ function hashResetToken(rawToken) {
   return crypto.createHash('sha256').update(rawToken).digest('hex');
 }
 
-function frontendBaseUrl() {
-  return (process.env.FRONTEND_URL || 'http://localhost:5173')
-    .split(',')[0]
-    .replace(/\/$/, '');
-}
-
-// Mirror of the frontend rules so the server can never be bypassed.
-// Keep these in sync with frontend/src/pages/ResetPasswordPage.jsx.
-function validatePasswordRules(pw) {
-  if (typeof pw !== 'string') return 'Password is required';
-  if (pw.length < 8) return 'Password must be at least 8 characters';
-  if (!/[A-Z]/.test(pw)) return 'Password must include an uppercase letter';
-  if (!/[a-z]/.test(pw)) return 'Password must include a lowercase letter';
-  if (!/[0-9]/.test(pw)) return 'Password must include a number';
-  if (!/[^A-Za-z0-9]/.test(pw)) return 'Password must include a special character';
-  // No three+ ascending sequential digits anywhere (e.g. 123, 456, 789)
-  for (let i = 0; i <= pw.length - 3; i++) {
-    const a = pw.charCodeAt(i);
-    const b = pw.charCodeAt(i + 1);
-    const c = pw.charCodeAt(i + 2);
-    const isDigit = (code) => code >= 48 && code <= 57;
-    if (isDigit(a) && isDigit(b) && isDigit(c) && b === a + 1 && c === b + 1) {
-      return 'Password must not contain sequential numbers';
-    }
-  }
-  return null;
-}
+// validatePassword is imported from ../utils/passwordValidator.js
+// (centralized — shared with profile.js and mirrored on the frontend)
 
 // Register
 router.post('/register', async (req, res) => {
@@ -63,6 +40,9 @@ router.post('/register', async (req, res) => {
     if (!email || !name || !password) {
       return res.status(400).json({ error: 'Email, name, and password are required' });
     }
+
+    const pwError = validatePassword(password);
+    if (pwError) return res.status(400).json({ error: pwError });
 
     const existing = await prisma.user.findUnique({ where: { email } });
     if (existing) {
@@ -97,6 +77,11 @@ router.post('/register', async (req, res) => {
     } catch (e) {
       console.warn(`[auth/register] Stripe customer creation deferred for ${user.email}: ${e.message}`);
     }
+
+    // Fire welcome email non-blocking — registration must not fail if email delivery fails
+    sendWelcomeEmail(user).catch((err) => {
+      console.error('[auth/register] welcome email failed (non-blocking):', err.message);
+    });
 
     const token = jwt.sign({ userId: user.id }, process.env.JWT_SECRET, { expiresIn: '7d' });
 
@@ -169,14 +154,22 @@ router.get('/me', authenticate, async (req, res) => {
   const user = await prisma.user.findUnique({ where: { id: req.user.id } });
   if (!user) return res.status(404).json({ error: 'User not found' });
 
-  // Auto-expire trial
-  if (user.plan === 'trial' && user.trialEndsAt && new Date() > new Date(user.trialEndsAt)) {
+  // For team members, resolve subscription data from the workspace owner so
+  // the frontend's hasUsableAccess check always reflects the owner's live plan.
+  let owner = null;
+  if (user.inviterUserId) {
+    owner = await prisma.user.findUnique({ where: { id: user.inviterUserId } });
+  }
+  const subSource = owner || user;
+
+  // Auto-expire trial (only for workspace owners; members inherit owner status)
+  if (!owner && subSource.plan === 'trial' && subSource.trialEndsAt && new Date() > new Date(subSource.trialEndsAt)) {
     await prisma.user.update({
       where: { id: user.id },
       data: { plan: 'expired', subscriptionStatus: 'expired' },
     });
-    user.plan = 'expired';
-    user.subscriptionStatus = 'expired';
+    subSource.plan = 'expired';
+    subSource.subscriptionStatus = 'expired';
   }
 
   // Snapshot plan limits + current usage so the frontend can render plan
@@ -184,7 +177,7 @@ router.get('/me', authenticate, async (req, res) => {
   // round-trip. Failure here is non-fatal — we still return the user.
   let planSnapshot = null;
   try {
-    planSnapshot = await getUsageSnapshot(user);
+    planSnapshot = await getUsageSnapshot(subSource);
   } catch (err) {
     console.error('[auth/me] getUsageSnapshot failed:', err.message);
   }
@@ -194,19 +187,21 @@ router.get('/me', authenticate, async (req, res) => {
   res.json({
     user: {
       id: user.id, email: user.email, name: user.name,
-      plan: user.plan, subscriptionStatus: user.subscriptionStatus,
-      isSubscribed: user.isSubscribed,
-      trialEndsAt: user.trialEndsAt,
+      // Subscription fields always come from the owner for team members
+      plan: subSource.plan, subscriptionStatus: subSource.subscriptionStatus,
+      isSubscribed: subSource.isSubscribed,
+      trialEndsAt: subSource.trialEndsAt,
+      currentPeriodStart: subSource.currentPeriodStart,
+      currentPeriodEnd: subSource.currentPeriodEnd,
+      cancelAtPeriodEnd: subSource.cancelAtPeriodEnd,
+      gracePeriodEndsAt: subSource.gracePeriodEndsAt,
+      billingCycle: subSource.billingCycle,
+      // Profile fields always from the user's own row
       onboardingStep: user.onboardingStep,
       onboardingCompleted: user.onboardingCompleted,
       companyName: user.companyName, companyLogo: companyLogoUrl,
       brandColor: user.brandColor, firstName: user.firstName,
       lastName: user.lastName, cannedResponse: user.cannedResponse,
-      currentPeriodStart: user.currentPeriodStart,
-      currentPeriodEnd: user.currentPeriodEnd,
-      cancelAtPeriodEnd: user.cancelAtPeriodEnd,
-      gracePeriodEndsAt: user.gracePeriodEndsAt,
-      billingCycle: user.billingCycle,
       role: user.role, inviterUserId: user.inviterUserId,
       // Embedded plan data (single source of truth from backend/src/config/plans.js)
       planLimits: planSnapshot?.limits || null,
@@ -248,13 +243,7 @@ router.post('/forgot-password', async (req, res) => {
         },
       });
 
-      const resetLink = `${frontendBaseUrl()}/reset-password/${rawToken}`;
-      const mail = buildPasswordResetEmail({ resetLink, userName: user.firstName || user.name });
-      const result = await sendMail({ to: user.email, ...mail });
-      if (!result.sent) {
-        // Log but DON'T leak failure details to the client.
-        console.warn(`[auth] forgot-password email NOT sent to ${user.email}: ${result.reason}`);
-      }
+      await sendPasswordResetEmail({ user, resetToken: rawToken, expiresInMinutes: 10 });
     }
 
     // Identical response regardless of email existence.
@@ -281,7 +270,7 @@ router.post('/reset-password', async (req, res) => {
       return res.status(400).json({ error: 'Reset token is required' });
     }
 
-    const ruleError = validatePasswordRules(password);
+    const ruleError = validatePassword(password);
     if (ruleError) {
       return res.status(400).json({ error: ruleError });
     }
