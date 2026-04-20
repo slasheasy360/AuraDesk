@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { Plus, Check, X, Trash2 } from 'lucide-react';
+import { Plus, Check, X, Trash2, AlertTriangle } from 'lucide-react';
 import api from '../services/api.js';
 
 const TAX_RATE = 7;
@@ -36,8 +36,10 @@ export default function CreateInvoicePage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [previewNumber, setPreviewNumber] = useState('INV-2025-001');
+  const [showDiscardConfirm, setShowDiscardConfirm] = useState(false);
+  const [leadWarning, setLeadWarning] = useState(null); // { message, activeInvoiceId }
 
-  // Pre-fill from lead
+  // Pre-fill from lead and check for active invoices
   useEffect(() => {
     if (!leadIdParam) return;
     api.get('/api/leads').then((res) => {
@@ -49,6 +51,20 @@ export default function CreateInvoicePage() {
           clientEmail: lead.email || '',
           clientPhone: lead.phone || '',
         }));
+      }
+    }).catch(() => {});
+
+    // Check for active invoices on this lead
+    api.get('/api/invoices', { params: { leadId: leadIdParam } }).then((res) => {
+      const active = (res.data.invoices || []).find((i) => ['Draft', 'Sent', 'Overdue'].includes(i.status));
+      if (active) {
+        const msg =
+          active.status === 'Draft'
+            ? 'This lead has an unfinished draft invoice.'
+            : active.status === 'Sent'
+            ? 'This lead already has a sent invoice awaiting payment.'
+            : 'This lead has an overdue invoice.';
+        setLeadWarning({ message: msg, activeInvoiceId: active.id });
       }
     }).catch(() => {});
   }, [leadIdParam]);
@@ -94,7 +110,7 @@ export default function CreateInvoicePage() {
           <h1 className="text-2xl font-bold text-gray-900">Create Invoice</h1>
           <div className="flex items-center gap-3">
             <button
-              onClick={() => navigate('/invoices')}
+              onClick={() => setShowDiscardConfirm(true)}
               className="px-6 py-2.5 bg-white border border-gray-200 rounded-lg text-sm font-semibold text-gray-700 hover:bg-gray-50"
             >
               DISCARD
@@ -109,6 +125,23 @@ export default function CreateInvoicePage() {
             </button>
           </div>
         </div>
+
+        {leadWarning && (
+          <div className="mb-4 p-4 bg-amber-50 border border-amber-200 rounded-lg flex items-start gap-3">
+            <AlertTriangle size={16} className="text-amber-600 mt-0.5 shrink-0" />
+            <div className="flex-1 text-sm text-amber-800">
+              <span>{leadWarning.message}</span>
+              {leadWarning.activeInvoiceId && (
+                <button
+                  onClick={() => navigate(`/invoices/${leadWarning.activeInvoiceId}`)}
+                  className="ml-2 underline font-semibold hover:text-amber-900"
+                >
+                  View invoice →
+                </button>
+              )}
+            </div>
+          </div>
+        )}
 
         {error && (
           <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-600">{error}</div>
@@ -185,6 +218,31 @@ export default function CreateInvoicePage() {
           </div>
         </div>
       </div>
+
+      {showDiscardConfirm && (
+        <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center px-4">
+          <div className="w-full max-w-md bg-white rounded-2xl p-8 shadow-2xl">
+            <h2 className="text-xl font-bold text-gray-900 mb-3">Discard Invoice?</h2>
+            <p className="text-sm text-gray-600 mb-6">All unsaved changes will be lost. Are you sure you want to exit?</p>
+            <div className="flex gap-3">
+              <button
+                type="button"
+                onClick={() => setShowDiscardConfirm(false)}
+                className="flex-1 px-4 py-2.5 bg-white border border-gray-200 rounded-lg text-sm font-semibold text-gray-700 hover:bg-gray-50"
+              >
+                Keep Editing
+              </button>
+              <button
+                type="button"
+                onClick={() => navigate('/invoices')}
+                className="flex-1 px-4 py-2.5 bg-red-500 hover:bg-red-600 text-white text-sm font-semibold rounded-lg"
+              >
+                Discard
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

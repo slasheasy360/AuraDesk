@@ -5,9 +5,10 @@ import { getSocket } from '../services/socket.js';
 
 const STATUS_STYLES = {
   Draft: 'bg-gray-100 text-gray-700',
-  Sent: 'bg-violet-100 text-violet-700',
+  Sent: 'bg-blue-100 text-blue-700',
   Paid: 'bg-green-100 text-green-700',
-  Overdue: 'bg-red-100 text-red-600',
+  Overdue: 'bg-amber-100 text-amber-700',
+  Cancelled: 'bg-red-50 text-red-500',
 };
 
 function fmtDate(d) {
@@ -60,7 +61,15 @@ export default function LeadInvoicesModal({ lead, onClose, onOpenInvoice, onCrea
     };
   }, [fetchInvoices, lead.id]);
 
-  const hasActive = invoices.some((i) => i.status !== 'Paid');
+  const activeInvoice = invoices.find((i) => ['Draft', 'Sent', 'Overdue'].includes(i.status));
+  const hasActive = !!activeInvoice;
+  const activeTooltip = activeInvoice
+    ? activeInvoice.status === 'Draft'
+      ? 'This lead has an unfinished draft invoice. Complete or delete it first.'
+      : activeInvoice.status === 'Sent'
+      ? 'This lead already has a sent invoice awaiting payment.'
+      : 'This lead has an overdue invoice. Resolve it before creating a new one.'
+    : '';
 
   return (
     <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center px-4">
@@ -75,7 +84,7 @@ export default function LeadInvoicesModal({ lead, onClose, onOpenInvoice, onCrea
             <button
               onClick={() => { onCreateInvoice(); onClose(); }}
               disabled={hasActive}
-              title={hasActive ? 'Complete the active invoice before creating a new one' : ''}
+              title={hasActive ? activeTooltip : ''}
               className="flex items-center gap-2 px-4 py-2 bg-blue-500 hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-semibold rounded-lg shadow shadow-blue-500/20"
             >
               <Plus size={14} /> CREATE INVOICE

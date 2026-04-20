@@ -3,14 +3,11 @@ import crypto from 'crypto';
 import { authenticate, requireActiveSubscription } from '../middleware/auth.js';
 import prisma from '../utils/prisma.js';
 import { emitToUser } from '../utils/socket.js';
-import * as facebookService from '../services/facebook.js';
-import * as instagramService from '../services/instagram.js';
-import * as whatsappService from '../services/whatsapp.js';
 import { sendMail } from '../utils/mailer.js';
 
 const router = Router();
 
-const VALID_STATUSES = ['Draft', 'Sent', 'Paid', 'Overdue'];
+const VALID_STATUSES = ['Draft', 'Sent', 'Paid', 'Overdue', 'Cancelled'];
 
 // ── helpers ──────────────────────────────────────────────────────────
 function makeSlug() {
@@ -23,102 +20,6 @@ async function nextInvoiceNumber(userId) {
     where: { userId, createdAt: { gte: new Date(`${year}-01-01`) } },
   });
   return `INV-${year}-${String(count + 1).padStart(4, '0')}`;
-}
-
-// ── Send a plain-text message via the conversation's platform ───────────────
-async function sendOnPlatform(conversation, content) {
-  const { platform } = conversation.connectedAccount;
-  switch (platform) {
-    case 'facebook': {
-      const r = await facebookService.sendMessage(
-        conversation.connectedAccountId,
-        conversation.platformConversationId,
-        content
-      );
-      return { platformMessageId: r?.message_id || null, subject: null };
-    }
-    case 'instagram': {
-      const recipientId = conversation.contact?.platformUserId || conversation.platformConversationId;
-      const r = await instagramService.sendMessage(
-        conversation.connectedAccountId,
-        recipientId,
-        content
-      );
-      return { platformMessageId: r?.message_id || null, subject: null };
-    }
-    case 'whatsapp': {
-      const r = await whatsappService.sendMessage(
-        conversation.connectedAccountId,
-        conversation.platformConversationId,
-        content
-      );
-      return { platformMessageId: r?.messages?.[0]?.id || null, subject: null };
-    }
-    case 'gmail': {
-      const recipientEmail = conversation.contact?.platformUserId;
-      if (!recipientEmail) throw new Error('No recipient email on conversation');
-      // Reply to the latest thread subject so it threads correctly
-      const lastMsg = await prisma.message.findFirst({
-        where: { conversationId: conversation.id },
-        orderBy: { sentAt: 'desc' },
-        select: { subject: true },
-      });
-      const subject = lastMsg?.subject
-        ? (lastMsg.subject.startsWith('Re:') ? lastMsg.subject : `Re: ${lastMsg.subject}`)
-        : 'Your invoice';
-      const headers = await getThreadingHeaders(conversation.id);
-      const mailResult = await sendMail({
-        from: conversation.connectedAccount.platformAccountId,
-        to: recipientEmail,
-        subject,
-        text: content,
-        headers: headers || undefined,
-      });
-      if (!mailResult.sent) {
-        throw new Error(`SMTP send failed: ${mailResult.reason || 'Unknown error'}`);
-      }
-      console.log('[Invoice SMTP] Gmail thread reply sent:', {
-        to: recipientEmail,
-        subject,
-        messageId: mailResult.messageId,
-        response: mailResult.response,
-        accepted: mailResult.accepted,
-        rejected: mailResult.rejected,
-      });
-      return { platformMessageId: mailResult.messageId || null, subject };
-    }
-    default:
-      throw new Error(`Unsupported platform: ${platform}`);
-  }
-}
-
-function extractHeader(headers = [], name) {
-  const target = name.toLowerCase();
-  const header = headers.find((h) => String(h.name || '').toLowerCase() === target);
-  return header?.value || '';
-}
-
-async function getThreadingHeaders(conversationId) {
-  const lastWithPayload = await prisma.message.findFirst({
-    where: { conversationId, rawPayload: { not: null } },
-    orderBy: { sentAt: 'desc' },
-    select: { rawPayload: true },
-  });
-
-  const headers = lastWithPayload?.rawPayload?.payload?.headers || [];
-  const messageId = extractHeader(headers, 'Message-ID');
-  const references = extractHeader(headers, 'References');
-
-  if (!messageId && !references) return null;
-
-  const refValue = references
-    ? `${references} ${messageId || ''}`.trim()
-    : messageId || '';
-
-  return {
-    'In-Reply-To': messageId || undefined,
-    References: refValue || undefined,
-  };
 }
 
 function buildInvoiceEmail({ invoice, company, publicLink }) {
@@ -173,7 +74,7 @@ async function recomputeStatus(invoiceId) {
     where: { id: invoiceId },
     include: { payments: true },
   });
-  if (!inv) return;
+  if (!inv || inv.status === 'Cancelled') return;
   const paid = inv.payments.reduce((s, p) => s + Number(p.amount), 0);
   let status = inv.status;
   if (paid >= inv.total && inv.total > 0) status = 'Paid';
@@ -193,7 +94,6 @@ router.get('/public/:slug', async (req, res) => {
     const invoice = await loadInvoiceWithComputed({ publicSlug: req.params.slug });
     if (!invoice) return res.status(404).json({ error: 'Invoice not found' });
 
-    // Include company branding from owning user
     const user = await prisma.user.findUnique({
       where: { id: invoice.userId },
       select: { companyName: true, companyLogo: true, brandColor: true, email: true },
@@ -254,7 +154,7 @@ router.get('/:id', authenticate, requireActiveSubscription, async (req, res) => 
 });
 
 // ═══════════════════════════════════════════════════════════════════
-// POST /api/invoices — create
+// POST /api/invoices — create (saves as Draft only, no auto-send)
 // ═══════════════════════════════════════════════════════════════════
 router.post('/', authenticate, requireActiveSubscription, async (req, res) => {
   try {
@@ -294,18 +194,25 @@ router.post('/', authenticate, requireActiveSubscription, async (req, res) => {
     const tax = Number(taxRate) || 0;
     const totals = calcTotals(cleanItems, tax);
 
-    // Validate lead ownership if provided + block duplicate active invoices
-    let lead = null;
+    // Validate lead ownership and block duplicate active invoices
     if (leadId) {
-      lead = await prisma.lead.findFirst({ where: { id: leadId, userId: req.user.id } });
+      const lead = await prisma.lead.findFirst({ where: { id: leadId, userId: req.user.id } });
       if (!lead) return res.status(400).json({ error: 'Invalid leadId' });
+
       const activeInvoice = await prisma.invoice.findFirst({
-        where: { leadId, status: { not: 'Paid' } },
+        where: { leadId, status: { in: ['Draft', 'Sent', 'Overdue'] } },
       });
       if (activeInvoice) {
+        const msg =
+          activeInvoice.status === 'Draft'
+            ? 'This lead has an unfinished draft invoice. Complete or delete it before creating a new one.'
+            : activeInvoice.status === 'Sent'
+            ? 'This lead already has a sent invoice awaiting payment.'
+            : 'This lead has an overdue invoice. Resolve it before creating a new one.';
         return res.status(409).json({
-          error: 'This lead already has an active invoice. Complete payment before creating a new one.',
+          error: msg,
           activeInvoiceId: activeInvoice.id,
+          activeStatus: activeInvoice.status,
         });
       }
     }
@@ -337,122 +244,155 @@ router.post('/', authenticate, requireActiveSubscription, async (req, res) => {
       include: { items: true, payments: true },
     });
 
-    let gmailConversationRecipient = null;
-
-    // ── Auto-send to chat if lead has conversation: real platform delivery ──
-    if (lead?.conversationId) {
-      try {
-        const frontendBase = (process.env.FRONTEND_URL || 'http://localhost:5173').split(',')[0].trim();
-        const link = `${frontendBase}/i/${publicSlug}`;
-        const content = `Your invoice is ready: ${link}`;
-
-        const conversation = await prisma.conversation.findUnique({
-          where: { id: lead.conversationId },
-          include: {
-            connectedAccount: true,
-            contact: true,
-          },
-        });
-
-        if (!conversation) {
-          throw new Error('Linked conversation not found');
-        }
-
-        // Actually send via the platform (Gmail / WhatsApp / IG / FB)
-        const { platformMessageId, subject } = await sendOnPlatform(conversation, content);
-
-        if (conversation.connectedAccount.platform === 'gmail') {
-          gmailConversationRecipient = conversation.contact?.platformUserId || null;
-        }
-
-        // Persist the outbound message in our DB
-        const platform = conversation.connectedAccount.platform;
-        const message = await prisma.message.create({
-          data: {
-            conversationId: lead.conversationId,
-            platformMessageId,
-            direction: 'outbound',
-            sender: req.user.name || req.user.email,
-            subject,
-            content,
-            contentType: platform === 'gmail' ? 'email' : 'text',
-            status: 'sent',
-            sentAt: new Date(),
-          },
-        });
-
-        // Bump conversation lastMessageAt
-        const updatedConv = await prisma.conversation.update({
-          where: { id: lead.conversationId },
-          data: { lastMessageAt: message.sentAt },
-        });
-
-        // Emit the same events the inbox listens to
-        emitToUser(req.user.id, 'new_message', {
-          conversationId: lead.conversationId,
-          message,
-          platform,
-          _fromSender: true,
-        });
-        emitToUser(req.user.id, 'conversation_update', {
-          conversationId: lead.conversationId,
-          lastMessageAt: updatedConv.lastMessageAt,
-          unreadCount: updatedConv.unreadCount,
-        });
-      } catch (e) {
-        // Don't fail invoice creation if delivery fails — just log + surface a flag
-        console.error('[Invoice] Auto-send to platform failed:', e?.response?.data || e?.message || e);
-      }
-    }
-
-    let emailDelivery = null;
-    if (clientEmail && clientEmail !== gmailConversationRecipient) {
-      const frontendBase = (process.env.FRONTEND_URL || 'http://localhost:5173').split(',')[0].trim();
-      const publicLink = `${frontendBase}/i/${publicSlug}`;
-      const { subject, text, html } = buildInvoiceEmail({
-        invoice,
-        company: req.user.companyName || req.user.name,
-        publicLink,
-      });
-
-      const mailResult = await sendMail({
-        from: process.env.SMTP_FROM || `${req.user.name || 'AuraDesk'} <${req.user.email}>`,
-        to: clientEmail,
-        subject,
-        text,
-        html,
-      });
-
-      emailDelivery = {
-        sent: mailResult.sent,
-        messageId: mailResult.messageId || null,
-        reason: mailResult.sent ? null : mailResult.reason || 'Unknown error',
-        response: mailResult.response || null,
-      };
-
-      if (mailResult.sent) {
-        console.log('[Invoice SMTP] Invoice email sent:', {
-          to: clientEmail,
-          subject,
-          messageId: mailResult.messageId,
-          response: mailResult.response,
-          accepted: mailResult.accepted,
-          rejected: mailResult.rejected,
-        });
-      } else {
-        console.error('[Invoice SMTP] Invoice email failed:', {
-          to: clientEmail,
-          subject,
-          reason: mailResult.reason,
-        });
-      }
-    }
-
     emitToUser(req.user.id, 'invoice_created', { invoice });
-    res.status(201).json({ invoice, emailDelivery });
+    res.status(201).json({ invoice });
   } catch (err) {
     console.error('Create invoice error:', err);
     res.status(500).json({ error: 'Failed to create invoice' });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════
+// PATCH /api/invoices/:id — edit draft
+// ═══════════════════════════════════════════════════════════════════
+router.patch('/:id', authenticate, requireActiveSubscription, async (req, res) => {
+  try {
+    const existing = await prisma.invoice.findFirst({
+      where: { id: req.params.id, userId: req.user.id },
+    });
+    if (!existing) return res.status(404).json({ error: 'Invoice not found' });
+    if (existing.status !== 'Draft') {
+      return res.status(409).json({ error: 'Only Draft invoices can be edited' });
+    }
+
+    const { clientName, clientEmail, clientPhone, billingAddress, issueDate, dueDate, note, currency, taxRate, items } = req.body;
+
+    const data = {};
+    if (clientName !== undefined) data.clientName = String(clientName).trim() || existing.clientName;
+    if (clientEmail !== undefined) data.clientEmail = clientEmail || null;
+    if (clientPhone !== undefined) data.clientPhone = clientPhone || null;
+    if (billingAddress !== undefined) data.billingAddress = billingAddress || null;
+    if (issueDate !== undefined) data.issueDate = new Date(issueDate);
+    if (dueDate !== undefined) data.dueDate = new Date(dueDate);
+    if (note !== undefined) data.note = note || null;
+    if (currency !== undefined) data.currency = currency;
+
+    const effectiveTaxRate = taxRate !== undefined ? Number(taxRate) : existing.taxRate;
+    if (taxRate !== undefined) data.taxRate = effectiveTaxRate;
+
+    if (items !== undefined) {
+      const cleanItems = (items || [])
+        .filter((it) => it && (it.description || it.unitPrice))
+        .map((it, idx) => ({
+          description: String(it.description || ''),
+          quantity: Math.max(0, Number(it.quantity) || 0),
+          unitPrice: Math.max(0, Number(it.unitPrice) || 0),
+          amount: +((Number(it.quantity) || 0) * (Number(it.unitPrice) || 0)).toFixed(2),
+          position: idx,
+        }));
+      const totals = calcTotals(cleanItems, effectiveTaxRate);
+      data.subtotal = totals.subtotal;
+      data.taxAmount = totals.taxAmount;
+      data.total = totals.total;
+
+      await prisma.$transaction(async (tx) => {
+        await tx.invoiceItem.deleteMany({ where: { invoiceId: existing.id } });
+        if (cleanItems.length > 0) {
+          await tx.invoiceItem.createMany({
+            data: cleanItems.map((item) => ({ invoiceId: existing.id, ...item })),
+          });
+        }
+        await tx.invoice.update({ where: { id: existing.id }, data });
+      });
+    } else {
+      await prisma.invoice.update({ where: { id: existing.id }, data });
+    }
+
+    const fresh = await loadInvoiceWithComputed({ id: existing.id });
+    emitToUser(req.user.id, 'invoice_updated', { invoice: fresh });
+    res.json({ invoice: fresh });
+  } catch (err) {
+    console.error('Edit draft invoice error:', err);
+    res.status(500).json({ error: 'Failed to update invoice' });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════
+// POST /api/invoices/:id/send — send Draft invoice to client via email
+// ═══════════════════════════════════════════════════════════════════
+router.post('/:id/send', authenticate, requireActiveSubscription, async (req, res) => {
+  try {
+    const existing = await prisma.invoice.findFirst({
+      where: { id: req.params.id, userId: req.user.id },
+      include: { items: true },
+    });
+    if (!existing) return res.status(404).json({ error: 'Invoice not found' });
+    if (existing.status !== 'Draft') {
+      return res.status(409).json({ error: 'Only Draft invoices can be sent' });
+    }
+    if (!existing.clientEmail) {
+      return res.status(400).json({ error: 'Client email is required to send the invoice' });
+    }
+
+    const frontendBase = (process.env.FRONTEND_URL || 'http://localhost:5173').split(',')[0].trim();
+    const publicLink = `${frontendBase}/i/${existing.publicSlug}`;
+    const { subject, text, html } = buildInvoiceEmail({
+      invoice: existing,
+      company: req.user.companyName || req.user.name,
+      publicLink,
+    });
+
+    const mailResult = await sendMail({
+      from: process.env.SMTP_FROM || `${req.user.name || 'AuraDesk'} <${req.user.email}>`,
+      to: existing.clientEmail,
+      subject,
+      text,
+      html,
+    });
+
+    if (!mailResult.sent) {
+      return res.status(502).json({ error: `Failed to send email: ${mailResult.reason || 'Unknown error'}` });
+    }
+
+    console.log('[Invoice SMTP] Invoice sent:', {
+      to: existing.clientEmail,
+      subject,
+      messageId: mailResult.messageId,
+    });
+
+    await prisma.invoice.update({ where: { id: existing.id }, data: { status: 'Sent' } });
+
+    const fresh = await loadInvoiceWithComputed({ id: existing.id });
+    emitToUser(req.user.id, 'invoice_updated', { invoice: fresh });
+    res.json({ invoice: fresh, emailDelivery: { sent: true, messageId: mailResult.messageId || null } });
+  } catch (err) {
+    console.error('Send invoice error:', err);
+    res.status(500).json({ error: 'Failed to send invoice' });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════
+// PATCH /api/invoices/:id/cancel — cancel a Draft, Sent, or Overdue invoice
+// ═══════════════════════════════════════════════════════════════════
+router.patch('/:id/cancel', authenticate, requireActiveSubscription, async (req, res) => {
+  try {
+    const existing = await prisma.invoice.findFirst({
+      where: { id: req.params.id, userId: req.user.id },
+    });
+    if (!existing) return res.status(404).json({ error: 'Invoice not found' });
+    if (!['Draft', 'Sent', 'Overdue'].includes(existing.status)) {
+      return res.status(409).json({ error: 'Only Draft, Sent, or Overdue invoices can be cancelled' });
+    }
+
+    const updated = await prisma.invoice.update({
+      where: { id: existing.id },
+      data: { status: 'Cancelled' },
+    });
+    emitToUser(req.user.id, 'invoice_updated', { invoice: updated });
+    res.json({ invoice: updated });
+  } catch (err) {
+    console.error('Cancel invoice error:', err);
+    res.status(500).json({ error: 'Failed to cancel invoice' });
   }
 });
 
@@ -483,7 +423,7 @@ router.patch('/:id/status', authenticate, requireActiveSubscription, async (req,
 });
 
 // ═══════════════════════════════════════════════════════════════════
-// DELETE /api/invoices/:id
+// DELETE /api/invoices/:id — only Draft invoices can be deleted
 // ═══════════════════════════════════════════════════════════════════
 router.delete('/:id', authenticate, requireActiveSubscription, async (req, res) => {
   try {
@@ -491,6 +431,9 @@ router.delete('/:id', authenticate, requireActiveSubscription, async (req, res) 
       where: { id: req.params.id, userId: req.user.id },
     });
     if (!existing) return res.status(404).json({ error: 'Invoice not found' });
+    if (existing.status !== 'Draft') {
+      return res.status(409).json({ error: 'Only Draft invoices can be deleted' });
+    }
     await prisma.invoice.delete({ where: { id: existing.id } });
     emitToUser(req.user.id, 'invoice_deleted', { id: existing.id });
     res.json({ deleted: true });
