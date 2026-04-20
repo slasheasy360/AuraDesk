@@ -3,8 +3,23 @@ import { execSync } from 'child_process';
 import express from 'express';
 
 // Run pending migrations before the server starts.
-// Safe to call on every boot — no-ops when DB is up to date.
+// If any migration is stuck in a failed state, resolve it first so deploy can proceed.
 try {
+  try {
+    const statusOutput = execSync('npx prisma migrate status 2>&1', { encoding: 'utf8' });
+    const failedMatch = statusOutput.match(/migration `([^`]+)` (?:started at .+ )?failed/g);
+    if (failedMatch) {
+      for (const match of failedMatch) {
+        const nameMatch = match.match(/`([^`]+)`/);
+        if (nameMatch) {
+          const migrationName = nameMatch[1];
+          console.log(`[Startup] Resolving failed migration: ${migrationName}`);
+          execSync(`npx prisma migrate resolve --rolled-back "${migrationName}"`, { stdio: 'inherit' });
+        }
+      }
+    }
+  } catch (_) { /* status check is best-effort */ }
+
   execSync('npx prisma migrate deploy', { stdio: 'inherit' });
 } catch (err) {
   console.error('[Startup] prisma migrate deploy failed:', err.message);
