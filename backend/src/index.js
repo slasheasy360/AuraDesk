@@ -3,32 +3,44 @@ import { execSync } from 'child_process';
 import express from 'express';
 
 // Run pending migrations before the server starts.
-// If a migration is stuck in a failed state (P3009), mark it as applied
-// (schema already exists in production) so deploy can continue.
+// Handles P3009 (stuck failed migration) and P3018 (migration fails because
+// the schema object already exists) by marking them as applied and retrying.
+// Loops up to 20 times so a chain of already-applied migrations all resolve.
 try {
-  // stdio: pipe so the thrown error object holds stdout/stderr for parsing.
-  // We re-print the output so it still appears in Render logs.
-  try {
-    const out = execSync('npx prisma migrate deploy', { encoding: 'utf8', stdio: ['inherit', 'pipe', 'pipe'] });
-    if (out) process.stdout.write(out);
-  } catch (deployErr) {
-    const stdout = (deployErr.stdout || '').toString();
-    const stderr = (deployErr.stderr || '').toString();
-    if (stdout) process.stdout.write(stdout);
-    if (stderr) process.stderr.write(stderr);
+  const MAX_RETRIES = 20;
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      const out = execSync('npx prisma migrate deploy', { encoding: 'utf8', stdio: ['inherit', 'pipe', 'pipe'] });
+      if (out) process.stdout.write(out);
+      break; // success — exit loop
+    } catch (deployErr) {
+      const stdout = (deployErr.stdout || '').toString();
+      const stderr = (deployErr.stderr || '').toString();
+      if (stdout) process.stdout.write(stdout);
+      if (stderr) process.stderr.write(stderr);
+      const combined = stdout + stderr;
 
-    // P3009: "The `<name>` migration started at ... failed"
-    const combined = stdout + stderr;
-    const matches = [...combined.matchAll(/`([^`]+)` migration started at .+? failed/gs)];
-    if (matches.length === 0) throw deployErr; // unrelated error — re-throw
+      // P3009: previous run left a migration in a failed state
+      // "The `<name>` migration started at ... failed"
+      const p3009 = [...combined.matchAll(/`([^`]+)` migration started at .+? failed/gs)];
 
-    for (const m of matches) {
-      const name = m[1];
-      console.log(`[Startup] Marking failed migration as applied: ${name}`);
-      execSync(`npx prisma migrate resolve --applied "${name}"`, { stdio: 'inherit' });
+      // P3018: migration fails because object already exists in DB (42710 / 42P07)
+      // "Migration name: <name>" paired with an already-exists DB error
+      const alreadyExists = /already exists|42710|42P07/i.test(combined);
+      const p3018 = alreadyExists
+        ? [...combined.matchAll(/Migration name: ([^\n\r]+)/g)]
+        : [];
+
+      const toResolve = [...p3009, ...p3018];
+      if (toResolve.length === 0 || attempt === MAX_RETRIES) throw deployErr;
+
+      for (const m of toResolve) {
+        const name = m[1].trim();
+        console.log(`[Startup] Marking migration as applied: ${name}`);
+        execSync(`npx prisma migrate resolve --applied "${name}"`, { stdio: 'inherit' });
+      }
+      // loop continues → retries migrate deploy
     }
-    // Retry after resolving all stuck migrations
-    execSync('npx prisma migrate deploy', { stdio: 'inherit' });
   }
 } catch (err) {
   console.error('[Startup] prisma migrate deploy failed:', err.message);
