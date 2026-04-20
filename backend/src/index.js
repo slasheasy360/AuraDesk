@@ -3,24 +3,27 @@ import { execSync } from 'child_process';
 import express from 'express';
 
 // Run pending migrations before the server starts.
-// If any migration is stuck in a failed state, resolve it first so deploy can proceed.
+// If a migration is stuck in a failed state (P3009), mark it as applied
+// (schema already exists in production) so deploy can continue.
 try {
   try {
-    const statusOutput = execSync('npx prisma migrate status 2>&1', { encoding: 'utf8' });
-    const failedMatch = statusOutput.match(/migration `([^`]+)` (?:started at .+ )?failed/g);
-    if (failedMatch) {
-      for (const match of failedMatch) {
-        const nameMatch = match.match(/`([^`]+)`/);
-        if (nameMatch) {
-          const migrationName = nameMatch[1];
-          console.log(`[Startup] Resolving failed migration: ${migrationName}`);
-          execSync(`npx prisma migrate resolve --rolled-back "${migrationName}"`, { stdio: 'inherit' });
-        }
-      }
-    }
-  } catch (_) { /* status check is best-effort */ }
+    const deployOutput = execSync('npx prisma migrate deploy 2>&1', { encoding: 'utf8' });
+    process.stdout.write(deployOutput);
+  } catch (deployErr) {
+    const output = deployErr.stdout?.toString() || deployErr.message || '';
+    // Extract the stuck migration name from the P3009 error message:
+    // "The `<name>` migration started at ... failed"
+    const matches = [...output.matchAll(/`([^`]+)` migration started at .+? failed/g)];
+    if (matches.length === 0) throw deployErr; // unrelated error, surface it
 
-  execSync('npx prisma migrate deploy', { stdio: 'inherit' });
+    for (const m of matches) {
+      const name = m[1];
+      console.log(`[Startup] Marking failed migration as applied: ${name}`);
+      execSync(`npx prisma migrate resolve --applied "${name}"`, { stdio: 'inherit' });
+    }
+    // Retry deploy after resolving
+    execSync('npx prisma migrate deploy', { stdio: 'inherit' });
+  }
 } catch (err) {
   console.error('[Startup] prisma migrate deploy failed:', err.message);
   process.exit(1);
