@@ -94,6 +94,8 @@ export default function InboxPage() {
   const [fileError, setFileError] = useState(null);
   const fileErrorTimerRef = useRef(null);
   const sendErrorTimerRef = useRef(null);
+  const [leadToast, setLeadToast] = useState(null); // { name, added }
+  const leadToastTimerRef = useRef(null);
   const [attachments, setAttachments] = useState([]);
   const [dragOver, setDragOver] = useState(false);
   const [replyingTo, setReplyingTo] = useState(null);
@@ -897,7 +899,7 @@ export default function InboxPage() {
     fileErrorTimerRef.current = setTimeout(() => setFileError(null), 5000);
   }, []);
 
-  useEffect(() => () => { clearTimeout(fileErrorTimerRef.current); clearTimeout(sendErrorTimerRef.current); }, []);
+  useEffect(() => () => { clearTimeout(fileErrorTimerRef.current); clearTimeout(sendErrorTimerRef.current); clearTimeout(leadToastTimerRef.current); }, []);
 
   const handleFileSelect = useCallback(async (files) => {
     const ALLOWED_TYPES = [
@@ -1053,15 +1055,26 @@ export default function InboxPage() {
 
   const toggleLead = useCallback(async (convId, e) => {
     if (e) e.stopPropagation();
-    setConversations((prev) =>
-      prev.map((c) => (c.id === convId ? { ...c, isLead: !c.isLead } : c))
-    );
+    // Optimistic update
+    let prevIsLead = false;
+    setConversations((prev) => {
+      const conv = prev.find((c) => c.id === convId);
+      prevIsLead = conv?.isLead || false;
+      return prev.map((c) => (c.id === convId ? { ...c, isLead: !c.isLead } : c));
+    });
     try {
-      await api.patch(`/api/conversations/${convId}/lead`);
+      const res = await api.patch(`/api/conversations/${convId}/lead`);
+      const { isLead: newIsLead, lead } = res.data;
+      const name = lead?.name || activeConversationRef.current?.contact?.name || 'Contact';
+      // Show toast
+      clearTimeout(leadToastTimerRef.current);
+      setLeadToast({ name, added: newIsLead });
+      leadToastTimerRef.current = setTimeout(() => setLeadToast(null), 4000);
     } catch (err) {
       console.error('Failed to toggle lead:', err);
+      // Rollback
       setConversations((prev) =>
-        prev.map((c) => (c.id === convId ? { ...c, isLead: !c.isLead } : c))
+        prev.map((c) => (c.id === convId ? { ...c, isLead: prevIsLead } : c))
       );
     }
   }, []);
@@ -1609,6 +1622,28 @@ export default function InboxPage() {
                       {fileError.details && <p className="text-xs text-red-200 mt-1 leading-snug">{fileError.details}</p>}
                     </div>
                     <button onClick={() => { clearTimeout(fileErrorTimerRef.current); setFileError(null); }} className="flex-shrink-0 text-red-200 hover:text-white transition"><X size={16} /></button>
+                  </div>
+                </div>
+              )}
+
+              {/* Lead added toast */}
+              {leadToast && (
+                <div className="absolute bottom-24 left-1/2 -translate-x-1/2 z-50 w-[90%] max-w-md animate-fade-in">
+                  <div className="bg-green-600 text-white rounded-xl shadow-lg px-4 py-3 flex items-center gap-3">
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium leading-snug">
+                        {leadToast.added ? `✓ ${leadToast.name} added to Leads` : `${leadToast.name} removed from Leads`}
+                      </p>
+                    </div>
+                    {leadToast.added && (
+                      <button
+                        onClick={() => { clearTimeout(leadToastTimerRef.current); setLeadToast(null); navigate('/leads'); }}
+                        className="flex-shrink-0 text-green-100 hover:text-white text-xs font-semibold underline transition"
+                      >
+                        View Leads →
+                      </button>
+                    )}
+                    <button onClick={() => { clearTimeout(leadToastTimerRef.current); setLeadToast(null); }} className="flex-shrink-0 text-green-200 hover:text-white transition"><X size={16} /></button>
                   </div>
                 </div>
               )}
