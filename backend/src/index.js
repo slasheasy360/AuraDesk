@@ -7,21 +7,20 @@ import express from 'express';
 // (schema already exists in production) so deploy can continue.
 try {
   try {
-    const deployOutput = execSync('npx prisma migrate deploy 2>&1', { encoding: 'utf8' });
-    process.stdout.write(deployOutput);
+    execSync('npx prisma migrate deploy', { stdio: 'inherit' });
   } catch (deployErr) {
-    const output = deployErr.stdout?.toString() || deployErr.message || '';
-    // Extract the stuck migration name from the P3009 error message:
+    const output = deployErr.stdout?.toString() || deployErr.stderr?.toString() || deployErr.message || '';
+    // P3009: extract stuck migration name from error text:
     // "The `<name>` migration started at ... failed"
-    const matches = [...output.matchAll(/`([^`]+)` migration started at .+? failed/g)];
-    if (matches.length === 0) throw deployErr; // unrelated error, surface it
+    const matches = [...output.matchAll(/`([^`]+)` migration started at .+? failed/gs)];
+    if (matches.length === 0) throw deployErr; // unrelated error — re-throw
 
     for (const m of matches) {
       const name = m[1];
       console.log(`[Startup] Marking failed migration as applied: ${name}`);
       execSync(`npx prisma migrate resolve --applied "${name}"`, { stdio: 'inherit' });
     }
-    // Retry deploy after resolving
+    // Retry after resolving all stuck migrations
     execSync('npx prisma migrate deploy', { stdio: 'inherit' });
   }
 } catch (err) {
