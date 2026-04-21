@@ -2588,7 +2588,21 @@ function renderChatBubble(msg, isOutbound, contact, platform) {
           ? 'bg-[#1787FE] text-white rounded-br-md'
           : 'bg-gray-100 text-gray-800 rounded-bl-md'
       } ${isSending ? 'opacity-70' : ''}`}>
-        {textContent && <p className="whitespace-pre-wrap break-words leading-relaxed">{textContent}</p>}
+        {textContent && (() => {
+          const isInvoice = /Invoice\s*#|inv-/i.test(textContent);
+          const invoiceLink = textContent.match(/https?:\/\/[^\s]+/)?.[0];
+          if (isInvoice && invoiceLink) {
+            return (
+              <button
+                onClick={() => window.open(invoiceLink, '_blank')}
+                className="w-full text-left hover:opacity-80 transition"
+              >
+                <p className="whitespace-pre-wrap break-words leading-relaxed underline">{textContent}</p>
+              </button>
+            );
+          }
+          return <p className="whitespace-pre-wrap break-words leading-relaxed">{textContent}</p>;
+        })()}
         <MessageAttachments attachments={msg.attachments} messageId={msg.id} isOutbound={isOutbound} />
         <p className={`text-[10px] mt-1.5 text-right ${isOutbound ? 'text-blue-100' : 'text-gray-500'}`}>
           {isSending ? 'Sending...' : formatTime(msg.sentAt)}
