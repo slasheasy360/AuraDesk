@@ -15,9 +15,15 @@ const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
 router.post('/', async (req, res) => {
   // Stripe webhooks send raw body, not JSON
   const sig = req.headers['stripe-signature'];
-  if (!sig || !webhookSecret) {
-    console.warn('[Stripe Webhook] Missing signature or webhook secret');
+
+  if (!sig) {
+    console.warn('[Stripe Webhook] Missing stripe-signature header');
     return res.status(400).json({ error: 'Missing signature' });
+  }
+
+  if (!webhookSecret) {
+    console.error('[Stripe Webhook] STRIPE_WEBHOOK_SECRET not configured');
+    return res.status(500).json({ error: 'Webhook secret not configured' });
   }
 
   let event;
@@ -27,6 +33,7 @@ router.post('/', async (req, res) => {
       sig,
       webhookSecret
     );
+    console.log(`[Stripe Webhook] Event received: ${event.type} (${event.id})`);
   } catch (err) {
     console.error('[Stripe Webhook] Signature verification failed:', err.message);
     return res.status(400).json({ error: `Webhook Error: ${err.message}` });
@@ -87,35 +94,47 @@ router.post('/', async (req, res) => {
       const updatedInvoice = await prisma.invoice.update({
         where: { id: invoiceId },
         data: { status: 'Paid' },
-        include: { items: true, payments: true },
+        include: {
+          items: true,
+          payments: true,
+          lead: { select: { conversationId: true, name: true } },
+        },
       });
 
-      // Send confirmation message to chat if lead exists
-      if (invoice.lead?.conversationId) {
-        const confirmationMessage = await prisma.message.create({
-          data: {
-            conversationId: invoice.lead.conversationId,
-            platformMessageId: `payment-${payment.id}`,
-            direction: 'outbound',
-            sender: 'AuraDesk',
-            subject: `Payment Received for Invoice #${invoice.invoiceNumber}`,
-            content: `✅ Payment received!\n\nInvoice #${invoice.invoiceNumber}\nAmount: $${invoice.total.toFixed(2)}\n\nThank you for your payment.`,
-            contentType: 'text',
-            status: 'sent',
-            sentAt: new Date(),
-          },
-        });
+      console.log(`[Stripe Webhook] Invoice ${invoiceId} updated to Paid status`);
 
-        // Emit socket events to update UI in real-time
-        emitToUser(userId, 'invoice_updated', { invoice: updatedInvoice });
-        emitToUser(userId, 'new_message', {
-          message: confirmationMessage,
-          conversationId: invoice.lead.conversationId,
-          platform: 'system',
-        });
+      // Send confirmation message to chat
+      if (invoice.lead?.conversationId) {
+        try {
+          const confirmationMessage = await prisma.message.create({
+            data: {
+              conversationId: invoice.lead.conversationId,
+              platformMessageId: `payment-${payment.id}`,
+              direction: 'outbound',
+              sender: 'AuraDesk',
+              subject: `Payment Received for Invoice #${invoice.invoiceNumber}`,
+              content: `✅ Payment received!\n\nInvoice #${invoice.invoiceNumber}\nAmount: $${invoice.total.toFixed(2)}\n\nThank you for your payment.`,
+              contentType: 'text',
+              status: 'sent',
+              sentAt: new Date(),
+            },
+          });
+
+          console.log(`[Stripe Webhook] Confirmation message sent for invoice ${invoiceId}`);
+
+          // Emit socket events to update UI in real-time
+          emitToUser(userId, 'invoice_updated', { invoice: updatedInvoice });
+          emitToUser(userId, 'new_message', {
+            message: confirmationMessage,
+            conversationId: invoice.lead.conversationId,
+            platform: 'system',
+          });
+        } catch (msgErr) {
+          console.error('[Stripe Webhook] Failed to send confirmation message:', msgErr.message);
+        }
       }
 
-      console.log(`[Stripe Webhook] Payment received for invoice ${invoiceId}`);
+      console.log(`[Stripe Webhook] Payment successfully processed for invoice ${invoiceId}`);
       return res.json({ received: true });
     } catch (err) {
       console.error('[Stripe Webhook] Error processing checkout.session.completed:', err);

@@ -2598,39 +2598,57 @@ function renderChatBubble(msg, isOutbound, contact, platform) {
             return <p className="whitespace-pre-wrap break-words leading-relaxed">{textContent}</p>;
           }
 
-          // Extract payment link (💳 Pay now:) or invoice view link
-          const paymentMatch = textContent.match(/💳\s*Pay now:\s*(https?:\/\/[^\s]+)/);
-          const viewMatch = textContent.match(/👉\s*View:\s*(https?:\/\/[^\s]+)/);
-          const invoiceLink = paymentMatch?.[1] || viewMatch?.[1];
-          const isPaymentLink = !!paymentMatch;
+          // Extract payment link more robustly - handle URL at end of line or with/without colon
+          const paymentMatch = textContent.match(/💳\s*Pay\s+now[:\s]*(https?:\/\/\S+)/i) ||
+                               textContent.match(/Pay\s+now[:\s]*(https?:\/\/\S+)/i);
+          const viewMatch = textContent.match(/👉\s*View[:\s]*(https?:\/\/\S+)/i) ||
+                            textContent.match(/View[:\s]*(https?:\/\/\S+)/i);
+
+          let invoiceLink = null;
+          let isPaymentLink = false;
+
+          if (paymentMatch) {
+            invoiceLink = paymentMatch[1].trim();
+            isPaymentLink = true;
+          } else if (viewMatch) {
+            invoiceLink = viewMatch[1].trim();
+            isPaymentLink = false;
+          }
 
           if (invoiceLink) {
-            // Extract invoice details for display
-            const invoiceNumberMatch = textContent.match(/Invoice\s*#([A-Z0-9\-]+)/i);
-            const amountMatch = textContent.match(/Amount:\s*\$?([\d.]+)/);
-            const dueMatch = textContent.match(/Due:\s*([\d/]+)/);
+            // Display the invoice details
+            const detailLines = textContent
+              .split('\n')
+              .filter(line => line.trim() && !line.match(/💳|👉|Pay|View|https?/i))
+              .join('\n');
 
             return (
-              <div className="space-y-3">
-                <div className="whitespace-pre-wrap break-words leading-relaxed">
-                  {textContent.split('\n').filter(line => !line.match(/💳|👉|Pay now|View:)).map((line, i) =>
-                    line.trim() ? <div key={i}>{line}</div> : null
-                  )}
-                </div>
-                <button
-                  onClick={() => window.open(invoiceLink, '_blank')}
-                  className={`w-full py-2.5 px-4 rounded-lg font-semibold transition-all ${
+              <div className="space-y-3 w-full">
+                {detailLines && (
+                  <div className="whitespace-pre-wrap break-words leading-relaxed text-sm">
+                    {detailLines}
+                  </div>
+                )}
+                <a
+                  href={invoiceLink}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    window.open(invoiceLink, '_blank');
+                  }}
+                  className={`block w-full py-3 px-4 rounded-lg font-semibold text-center transition-all cursor-pointer no-underline ${
                     isPaymentLink
                       ? (isOutbound
-                          ? 'bg-green-500 hover:bg-green-600 text-white'
-                          : 'bg-green-500 hover:bg-green-600 text-white')
+                          ? 'bg-white text-green-600 hover:bg-gray-50 border-2 border-green-600'
+                          : 'bg-green-600 hover:bg-green-700 text-white border-2 border-green-600')
                       : (isOutbound
                           ? 'bg-white/20 hover:bg-white/30 text-white'
-                          : 'bg-blue-500 hover:bg-blue-600 text-white')
+                          : 'bg-blue-600 hover:bg-blue-700 text-white')
                   }`}
                 >
                   {isPaymentLink ? '💳 Pay Now' : '👉 View Invoice'}
-                </button>
+                </a>
               </div>
             );
           }
