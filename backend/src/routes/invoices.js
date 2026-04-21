@@ -5,6 +5,7 @@ import prisma from '../utils/prisma.js';
 import { emitToUser } from '../utils/socket.js';
 import { sendMail } from '../utils/mailer.js';
 import { createInvoiceCheckoutSession } from '../utils/invoice-payments.js';
+import { sendInvoiceThroughChannel } from '../utils/invoice-channel-send.js';
 
 const router = Router();
 
@@ -358,12 +359,26 @@ router.post('/:id/send', authenticate, requireActiveSubscription, async (req, re
       },
     });
 
-    // Send invoice to client's chat with payment link
+    // Send invoice through appropriate channel (email/WhatsApp/Instagram/Facebook)
+    // and also to the chat
     if (existing.leadId) {
       const lead = await prisma.lead.findUnique({
         where: { id: existing.leadId },
-        select: { conversationId: true, name: true },
+        select: { conversationId: true, name: true, platform: true },
       });
+
+      // Send through the channel the lead came from
+      if (paymentLink && lead?.platform) {
+        const channelResult = await sendInvoiceThroughChannel(
+          existing,
+          lead,
+          paymentLink,
+          req.user
+        );
+        console.log(`[Invoice Send] Channel send result for ${lead.platform}:`, channelResult);
+      }
+
+      // Also send to chat
       if (lead?.conversationId) {
         const messageContent = paymentLink
           ? `📄 Invoice #${existing.invoiceNumber}\n\n💰 Amount: $${existing.total.toFixed(2)}\n📅 Due: ${new Date(existing.dueDate).toLocaleDateString()}\n\n💳 Pay now: ${paymentLink}`
