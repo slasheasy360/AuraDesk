@@ -4,6 +4,7 @@ import { authenticate, requireActiveSubscription } from '../middleware/auth.js';
 import prisma from '../utils/prisma.js';
 import { emitToUser } from '../utils/socket.js';
 import { sendMail } from '../utils/mailer.js';
+import { createInvoiceCheckoutSession } from '../utils/invoice-payments.js';
 
 const router = Router();
 
@@ -337,15 +338,37 @@ router.post('/:id/send', authenticate, requireActiveSubscription, async (req, re
     const frontendBase = (process.env.FRONTEND_URL || 'http://localhost:5173').split(',')[0].trim();
     const publicLink = `${frontendBase}/i/${existing.publicSlug}`;
 
-    await prisma.invoice.update({ where: { id: existing.id }, data: { status: 'Sent' } });
+    // Create Stripe checkout session for payment
+    let paymentLink = null;
+    let stripeCheckoutId = null;
+    if (existing.clientEmail) {
+      const checkoutResult = await createInvoiceCheckoutSession(existing, req.user, frontendBase);
+      if (checkoutResult) {
+        paymentLink = checkoutResult.checkoutUrl;
+        stripeCheckoutId = checkoutResult.sessionId;
+      }
+    }
 
-    // Send invoice to client's chat
+    await prisma.invoice.update({
+      where: { id: existing.id },
+      data: {
+        status: 'Sent',
+        paymentLink,
+        stripeCheckoutId,
+      },
+    });
+
+    // Send invoice to client's chat with payment link
     if (existing.leadId) {
       const lead = await prisma.lead.findUnique({
         where: { id: existing.leadId },
         select: { conversationId: true, name: true },
       });
       if (lead?.conversationId) {
+        const messageContent = paymentLink
+          ? `📄 Invoice #${existing.invoiceNumber}\n\n💰 Amount: $${existing.total.toFixed(2)}\n📅 Due: ${new Date(existing.dueDate).toLocaleDateString()}\n\n💳 Pay now: ${paymentLink}`
+          : `📄 Invoice #${existing.invoiceNumber}\n\n💰 Amount: $${existing.total.toFixed(2)}\n📅 Due: ${new Date(existing.dueDate).toLocaleDateString()}\n\n👉 View: ${publicLink}`;
+
         const invoiceMessage = await prisma.message.create({
           data: {
             conversationId: lead.conversationId,
@@ -353,7 +376,7 @@ router.post('/:id/send', authenticate, requireActiveSubscription, async (req, re
             direction: 'outbound',
             sender: req.user.name || 'AuraDesk',
             subject: `Invoice #${existing.invoiceNumber}`,
-            content: `📄 Invoice #${existing.invoiceNumber}\n\nAmount: $${existing.total.toFixed(2)}\nDue: ${new Date(existing.dueDate).toLocaleDateString()}\n\n👉 Click here to view: ${publicLink}`,
+            content: messageContent,
             contentType: 'text',
             status: 'sent',
             sentAt: new Date(),

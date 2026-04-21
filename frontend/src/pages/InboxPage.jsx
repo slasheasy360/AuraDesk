@@ -2590,12 +2590,21 @@ function renderChatBubble(msg, isOutbound, contact, platform) {
       } ${isSending ? 'opacity-70' : ''}`}>
         {textContent && (() => {
           const isInvoice = /Invoice\s*#|inv-/i.test(textContent);
-          const invoiceLink = textContent.match(/https?:\/\/[^\s]+/)?.[0];
-          if (isInvoice && invoiceLink) {
+          if (!isInvoice) {
+            return <p className="whitespace-pre-wrap break-words leading-relaxed">{textContent}</p>;
+          }
+
+          // Extract payment link (💳 Pay now:) or invoice view link
+          const paymentMatch = textContent.match(/💳\s*Pay now:\s*(https?:\/\/[^\s]+)/);
+          const viewMatch = textContent.match(/👉\s*View:\s*(https?:\/\/[^\s]+)/);
+          const invoiceLink = paymentMatch?.[1] || viewMatch?.[1];
+          const isPaymentLink = !!paymentMatch;
+
+          if (invoiceLink) {
             return (
               <button
                 onClick={() => window.open(invoiceLink, '_blank')}
-                className="w-full text-left hover:opacity-80 transition"
+                className={`w-full text-left hover:opacity-80 transition p-0 ${isPaymentLink ? 'bg-blue-50 -mx-4 px-4 py-2' : ''}`}
               >
                 <p className="whitespace-pre-wrap break-words leading-relaxed underline">{textContent}</p>
               </button>
