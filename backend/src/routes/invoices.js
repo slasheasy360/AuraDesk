@@ -359,15 +359,14 @@ router.post('/:id/send', authenticate, requireActiveSubscription, async (req, re
       },
     });
 
-    // Send invoice through appropriate channel (email/WhatsApp/Instagram/Facebook)
-    // and also to the chat
+    // Send invoice through the channel the lead came from (email only, not chat)
     if (existing.leadId) {
       const lead = await prisma.lead.findUnique({
         where: { id: existing.leadId },
         select: { conversationId: true, name: true, platform: true },
       });
 
-      // Send through the channel the lead came from
+      // Send through the channel the lead came from (not editable, email/platform only)
       if (paymentLink && lead?.platform) {
         const channelResult = await sendInvoiceThroughChannel(
           existing,
@@ -376,32 +375,6 @@ router.post('/:id/send', authenticate, requireActiveSubscription, async (req, re
           req.user
         );
         console.log(`[Invoice Send] Channel send result for ${lead.platform}:`, channelResult);
-      }
-
-      // Also send to chat
-      if (lead?.conversationId) {
-        const messageContent = paymentLink
-          ? `📄 Invoice #${existing.invoiceNumber}\n\n💰 Amount: $${existing.total.toFixed(2)}\n📅 Due: ${new Date(existing.dueDate).toLocaleDateString()}\n\n💳 Pay now: ${paymentLink}`
-          : `📄 Invoice #${existing.invoiceNumber}\n\n💰 Amount: $${existing.total.toFixed(2)}\n📅 Due: ${new Date(existing.dueDate).toLocaleDateString()}\n\n👉 View: ${publicLink}`;
-
-        const invoiceMessage = await prisma.message.create({
-          data: {
-            conversationId: lead.conversationId,
-            platformMessageId: `inv-${existing.id}`,
-            direction: 'outbound',
-            sender: req.user.name || 'AuraDesk',
-            subject: `Invoice #${existing.invoiceNumber}`,
-            content: messageContent,
-            contentType: 'text',
-            status: 'sent',
-            sentAt: new Date(),
-          },
-        });
-        emitToUser(req.user.id, 'new_message', {
-          message: invoiceMessage,
-          conversationId: lead.conversationId,
-          platform: 'system',
-        });
       }
     }
 
