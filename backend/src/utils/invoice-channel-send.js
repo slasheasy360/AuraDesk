@@ -1,4 +1,6 @@
 import { sendMail } from './mailer.js';
+import { sendEmail as sendGmailEmail } from '../services/gmail.js';
+import prisma from './prisma.js';
 
 /**
  * Send invoice through the channel the lead came from
@@ -43,37 +45,53 @@ async function sendViaEmail(invoice, lead, paymentLink, user, invoiceText) {
   }
 
   const subject = `Invoice ${invoice.invoiceNumber} from ${user.companyName || 'AuraDesk'}`;
-  const html = `
-    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
-      <h2 style="color: #333;">Invoice ${invoice.invoiceNumber}</h2>
-      <p>Hello ${invoice.clientName || 'there'},</p>
-      <p>Here is your invoice for services provided.</p>
-      <hr style="border: none; border-top: 1px solid #ddd; margin: 20px 0;">
-      <p><strong>Amount Due:</strong> $${invoice.total.toFixed(2)}</p>
-      <p><strong>Due Date:</strong> ${new Date(invoice.dueDate).toLocaleDateString()}</p>
-      <hr style="border: none; border-top: 1px solid #ddd; margin: 20px 0;">
-      <p><a href="${paymentLink}" style="background-color: #4CAF50; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px; display: inline-block; font-weight: bold;">💳 Pay Now</a></p>
-      <p style="margin-top: 20px; color: #666; font-size: 12px;">Thank you for your business!</p>
-    </div>
-  `;
+  const bodyText = `Invoice ${invoice.invoiceNumber}\n\nAmount Due: $${invoice.total.toFixed(2)}\nDue Date: ${new Date(invoice.dueDate).toLocaleDateString()}\n\nPay Now: ${paymentLink}\n\nThank you for your business!`;
 
   try {
     console.log(`[Invoice Channel] Attempting to send email to ${invoice.clientEmail} for invoice ${invoice.invoiceNumber}`);
+
+    // Try Gmail API first (more reliable, already authenticated)
+    const gmailAccount = await prisma.connectedAccount.findFirst({
+      where: {
+        userId: user.id,
+        platform: 'gmail',
+        status: 'active',
+      },
+    });
+
+    if (gmailAccount) {
+      try {
+        console.log(`[Invoice Channel] Using Gmail API to send invoice email`);
+        const result = await sendGmailEmail(
+          gmailAccount.id,
+          invoice.clientEmail,
+          subject,
+          bodyText
+        );
+        console.log(`[Invoice Channel] ✅ Gmail API: Invoice email sent to ${invoice.clientEmail}`, {
+          messageId: result.id,
+        });
+        return { success: true, channel: 'email', method: 'gmail_api', messageId: result.id };
+      } catch (gmailErr) {
+        console.warn(`[Invoice Channel] Gmail API send failed, trying SMTP:`, gmailErr.message);
+      }
+    }
+
+    // Fall back to SMTP if Gmail API not available
+    console.log(`[Invoice Channel] Falling back to SMTP for email send`);
     const result = await sendMail({
       to: invoice.clientEmail,
       subject,
-      html,
-      text: invoiceText,
+      text: bodyText,
     });
 
     if (result.sent) {
-      console.log(`[Invoice Channel] ✅ Email sent successfully to ${invoice.clientEmail}`, {
+      console.log(`[Invoice Channel] ✅ SMTP: Invoice email sent to ${invoice.clientEmail}`, {
         messageId: result.messageId,
-        accepted: result.accepted,
       });
-      return { success: true, channel: 'email', messageId: result.messageId };
+      return { success: true, channel: 'email', method: 'smtp', messageId: result.messageId };
     } else {
-      console.error(`[Invoice Channel] ❌ Email send failed: ${result.reason}`);
+      console.error(`[Invoice Channel] ❌ SMTP send failed: ${result.reason}`);
       return { success: false, reason: result.reason };
     }
   } catch (err) {
