@@ -362,6 +362,34 @@ router.post('/:id/send', authenticate, requireActiveSubscription, async (req, re
 
     await prisma.invoice.update({ where: { id: existing.id }, data: { status: 'Sent' } });
 
+    // Send invoice to client's chat if a lead/conversation exists
+    if (existing.leadId) {
+      const lead = await prisma.lead.findUnique({
+        where: { id: existing.leadId },
+        select: { conversationId: true, name: true },
+      });
+      if (lead?.conversationId) {
+        const invoiceMessage = await prisma.message.create({
+          data: {
+            conversationId: lead.conversationId,
+            platformMessageId: `inv-${existing.id}`,
+            direction: 'outbound',
+            sender: req.user.name || 'AuraDesk',
+            subject: `Invoice #${existing.invoiceNumber}`,
+            content: `Invoice sent: ${existing.invoiceNumber}\nAmount: $${existing.total.toFixed(2)}\nDue: ${new Date(existing.dueDate).toLocaleDateString()}\n\nView invoice: ${publicLink}`,
+            contentType: 'text',
+            status: 'sent',
+            sentAt: new Date(),
+          },
+        });
+        emitToUser(req.user.id, 'new_message', {
+          message: invoiceMessage,
+          conversationId: lead.conversationId,
+          platform: 'system',
+        });
+      }
+    }
+
     const fresh = await loadInvoiceWithComputed({ id: existing.id });
     emitToUser(req.user.id, 'invoice_updated', { invoice: fresh });
     res.json({ invoice: fresh, emailDelivery: { sent: true, messageId: mailResult.messageId || null } });
