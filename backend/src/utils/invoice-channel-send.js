@@ -44,8 +44,20 @@ async function sendViaEmail(invoice, lead, paymentLink, user, invoiceText) {
     return { success: false, reason: 'no_client_email' };
   }
 
-  const subject = `Invoice ${invoice.invoiceNumber} from ${user.companyName || 'AuraDesk'}`;
-  const bodyText = `Invoice ${invoice.invoiceNumber}\n\nAmount Due: $${invoice.total.toFixed(2)}\nDue Date: ${new Date(invoice.dueDate).toLocaleDateString()}\n\nPay Now: ${paymentLink}\n\nThank you for your business!`;
+  const subject = `Invoice ${invoice.invoiceNumber}`;
+  const bodyText = `# Invoice ${invoice.invoiceNumber}
+
+**Client:** ${invoice.clientName}
+**Amount:** $${invoice.total.toFixed(2)}
+**Due:** ${new Date(invoice.dueDate).toLocaleDateString()}
+
+---
+
+[Pay Now](${paymentLink})
+
+---
+
+Thank you for your business!`;
 
   try {
     console.log(`[Invoice Channel] Attempting to send email to ${invoice.clientEmail} for invoice ${invoice.invoiceNumber}`);
