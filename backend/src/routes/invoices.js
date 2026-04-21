@@ -336,33 +336,10 @@ router.post('/:id/send', authenticate, requireActiveSubscription, async (req, re
 
     const frontendBase = (process.env.FRONTEND_URL || 'http://localhost:5173').split(',')[0].trim();
     const publicLink = `${frontendBase}/i/${existing.publicSlug}`;
-    const { subject, text, html } = buildInvoiceEmail({
-      invoice: existing,
-      company: req.user.companyName || req.user.name,
-      publicLink,
-    });
-
-    const mailResult = await sendMail({
-      from: process.env.SMTP_FROM || `${req.user.name || 'AuraDesk'} <${req.user.email}>`,
-      to: existing.clientEmail,
-      subject,
-      text,
-      html,
-    });
-
-    if (!mailResult.sent) {
-      return res.status(502).json({ error: `Failed to send email: ${mailResult.reason || 'Unknown error'}` });
-    }
-
-    console.log('[Invoice SMTP] Invoice sent:', {
-      to: existing.clientEmail,
-      subject,
-      messageId: mailResult.messageId,
-    });
 
     await prisma.invoice.update({ where: { id: existing.id }, data: { status: 'Sent' } });
 
-    // Send invoice to client's chat if a lead/conversation exists
+    // Send invoice to client's chat
     if (existing.leadId) {
       const lead = await prisma.lead.findUnique({
         where: { id: existing.leadId },
@@ -376,7 +353,7 @@ router.post('/:id/send', authenticate, requireActiveSubscription, async (req, re
             direction: 'outbound',
             sender: req.user.name || 'AuraDesk',
             subject: `Invoice #${existing.invoiceNumber}`,
-            content: `Invoice sent: ${existing.invoiceNumber}\nAmount: $${existing.total.toFixed(2)}\nDue: ${new Date(existing.dueDate).toLocaleDateString()}\n\nView invoice: ${publicLink}`,
+            content: `Invoice: ${existing.invoiceNumber}\nAmount: $${existing.total.toFixed(2)}\nDue: ${new Date(existing.dueDate).toLocaleDateString()}\n\nView: ${publicLink}`,
             contentType: 'text',
             status: 'sent',
             sentAt: new Date(),
@@ -392,7 +369,7 @@ router.post('/:id/send', authenticate, requireActiveSubscription, async (req, re
 
     const fresh = await loadInvoiceWithComputed({ id: existing.id });
     emitToUser(req.user.id, 'invoice_updated', { invoice: fresh });
-    res.json({ invoice: fresh, emailDelivery: { sent: true, messageId: mailResult.messageId || null } });
+    res.json({ invoice: fresh, sent: true });
   } catch (err) {
     console.error('Send invoice error:', err);
     res.status(500).json({ error: 'Failed to send invoice' });
