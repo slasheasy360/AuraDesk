@@ -38,24 +38,49 @@ export default function CreateInvoicePage() {
   const [previewNumber, setPreviewNumber] = useState('INV-2025-001');
   const [showDiscardConfirm, setShowDiscardConfirm] = useState(false);
   const [leadWarning, setLeadWarning] = useState(null); // { message, activeInvoiceId }
+  const [leads, setLeads] = useState([]); // Available leads for selection
 
-  // Pre-fill from lead and check for active invoices
+  // Load available leads and pre-fill from lead param
   useEffect(() => {
-    if (!leadIdParam) return;
     api.get('/api/leads').then((res) => {
-      const lead = (res.data.leads || []).find((l) => l.id === leadIdParam);
-      if (lead) {
-        setForm((f) => ({
-          ...f,
-          clientName: lead.name || '',
-          clientEmail: lead.email || '',
-          clientPhone: lead.phone || '',
-        }));
+      setLeads(res.data.leads || []);
+
+      // If leadIdParam provided, auto-fill from that lead
+      if (leadIdParam) {
+        const lead = (res.data.leads || []).find((l) => l.id === leadIdParam);
+        if (lead) {
+          setForm((f) => ({
+            ...f,
+            leadId: lead.id,
+            clientName: lead.name || '',
+            clientEmail: lead.email || '',
+            clientPhone: lead.phone || '',
+          }));
+        }
       }
     }).catch(() => {});
+  }, [leadIdParam]);
+
+  // Handle lead selection - auto-fill email and other fields
+  const handleLeadChange = (selectedLeadId) => {
+    setForm((f) => ({ ...f, leadId: selectedLeadId }));
+    setLeadWarning(null);
+
+    if (!selectedLeadId) return;
+
+    const selectedLead = leads.find((l) => l.id === selectedLeadId);
+    if (selectedLead) {
+      // Auto-fill from selected lead
+      setForm((f) => ({
+        ...f,
+        clientName: selectedLead.name || f.clientName,
+        clientEmail: selectedLead.email || f.clientEmail,
+        clientPhone: selectedLead.phone || f.clientPhone,
+      }));
+    }
 
     // Check for active invoices on this lead
-    api.get('/api/invoices', { params: { leadId: leadIdParam } }).then((res) => {
+    api.get('/api/invoices', { params: { leadId: selectedLeadId } }).then((res) => {
       const active = (res.data.invoices || []).find((i) => ['Draft', 'Sent', 'Overdue'].includes(i.status));
       if (active) {
         const msg =
@@ -67,7 +92,7 @@ export default function CreateInvoicePage() {
         setLeadWarning({ message: msg, activeInvoiceId: active.id });
       }
     }).catch(() => {});
-  }, [leadIdParam]);
+  };
 
   const totals = useMemo(() => {
     const subtotal = items.reduce((s, it) => s + (Number(it.quantity) || 0) * (Number(it.unitPrice) || 0), 0);
@@ -150,6 +175,18 @@ export default function CreateInvoicePage() {
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
           {/* LEFT: Form */}
           <div className="space-y-5">
+            <div>
+              <FieldLabel>SELECT FROM LEAD</FieldLabel>
+              <select value={form.leadId} onChange={(e) => handleLeadChange(e.target.value)} className={inputCls}>
+                <option value="">-- Choose a lead (optional) --</option>
+                {leads.map((lead) => (
+                  <option key={lead.id} value={lead.id}>
+                    {lead.name} {lead.email ? `(${lead.email})` : ''}
+                  </option>
+                ))}
+              </select>
+            </div>
+
             <FieldLabel required>CLIENT NAME</FieldLabel>
             <input type="text" value={form.clientName} onChange={(e) => update('clientName', e.target.value)} className={inputCls} />
 
