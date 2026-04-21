@@ -70,6 +70,7 @@ import aiTrainingRoutes from './routes/ai-training.js';
 import contactRoutes from './routes/contacts.js';
 import metaWebhook from './webhooks/meta.js';
 import gmailWebhook from './webhooks/gmail.js';
+import stripeWebhook from './webhooks/stripe.js';
 import { renewExpiringWatches, reRegisterAllWatches } from './services/gmail.js';
 import prisma from './utils/prisma.js';
 import { authenticate, requireActiveSubscription } from './middleware/auth.js';
@@ -226,6 +227,7 @@ app.get('/api/user/onboarding-status', authenticate, async (req, res) => {
 // Webhook routes
 app.use('/webhooks/meta', metaWebhook);
 app.use('/webhooks/gmail', gmailWebhook);
+app.use('/webhooks/stripe', stripeWebhook);
 
 // ── Global error handler ─────────────────────────────────────────────────────
 // Catches any error passed via next(err) or thrown inside async route handlers
