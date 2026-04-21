@@ -38,35 +38,46 @@ function buildInvoiceText(invoice, paymentLink) {
 
 async function sendViaEmail(invoice, lead, paymentLink, user, invoiceText) {
   if (!invoice.clientEmail) {
+    console.warn('[Invoice Channel] No client email for invoice', invoice.id);
     return { success: false, reason: 'no_client_email' };
   }
 
   const subject = `Invoice ${invoice.invoiceNumber} from ${user.companyName || 'AuraDesk'}`;
   const html = `
-    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-      <h2>Invoice ${invoice.invoiceNumber}</h2>
+    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+      <h2 style="color: #333;">Invoice ${invoice.invoiceNumber}</h2>
       <p>Hello ${invoice.clientName || 'there'},</p>
       <p>Here is your invoice for services provided.</p>
-      <hr>
+      <hr style="border: none; border-top: 1px solid #ddd; margin: 20px 0;">
       <p><strong>Amount Due:</strong> $${invoice.total.toFixed(2)}</p>
       <p><strong>Due Date:</strong> ${new Date(invoice.dueDate).toLocaleDateString()}</p>
-      <hr>
-      <p><a href="${paymentLink}" style="background-color: #4CAF50; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; display: inline-block;">Pay Now</a></p>
-      <p>Thank you for your business!</p>
+      <hr style="border: none; border-top: 1px solid #ddd; margin: 20px 0;">
+      <p><a href="${paymentLink}" style="background-color: #4CAF50; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px; display: inline-block; font-weight: bold;">💳 Pay Now</a></p>
+      <p style="margin-top: 20px; color: #666; font-size: 12px;">Thank you for your business!</p>
     </div>
   `;
 
   try {
-    await sendMail({
+    console.log(`[Invoice Channel] Attempting to send email to ${invoice.clientEmail} for invoice ${invoice.invoiceNumber}`);
+    const result = await sendMail({
       to: invoice.clientEmail,
       subject,
       html,
       text: invoiceText,
     });
-    console.log(`[Invoice Channel] Email sent to ${invoice.clientEmail}`);
-    return { success: true, channel: 'email' };
+
+    if (result.sent) {
+      console.log(`[Invoice Channel] ✅ Email sent successfully to ${invoice.clientEmail}`, {
+        messageId: result.messageId,
+        accepted: result.accepted,
+      });
+      return { success: true, channel: 'email', messageId: result.messageId };
+    } else {
+      console.error(`[Invoice Channel] ❌ Email send failed: ${result.reason}`);
+      return { success: false, reason: result.reason };
+    }
   } catch (err) {
-    console.error('[Invoice Channel] Email send failed:', err.message);
+    console.error('[Invoice Channel] Email send exception:', err.message);
     return { success: false, reason: 'email_error', error: err.message };
   }
 }
