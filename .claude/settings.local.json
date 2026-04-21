@@ -28,7 +28,8 @@
       "Bash(git pull *)",
       "Bash(xargs basename *)",
       "Bash(node --check src/webhooks/stripe.js)",
-      "Bash(node --check \"c:\\\\Users\\\\gondy\\\\OneDrive\\\\Desktop\\\\AuraDesk-c95011bfd8ce24744fa00916cd9e931522da589f\\\\backend\\\\src\\\\webhooks\\\\stripe.js\")"
+      "Bash(node --check \"c:\\\\Users\\\\gondy\\\\OneDrive\\\\Desktop\\\\AuraDesk-c95011bfd8ce24744fa00916cd9e931522da589f\\\\backend\\\\src\\\\webhooks\\\\stripe.js\")",
+      "Bash(node --check \"c:\\\\Users\\\\gondy\\\\OneDrive\\\\Desktop\\\\AuraDesk-c95011bfd8ce24744fa00916cd9e931522da589f\\\\frontend\\\\src\\\\pages\\\\InboxPage.jsx\")"
     ]
   }
 }

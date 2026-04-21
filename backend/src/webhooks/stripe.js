@@ -47,11 +47,29 @@ router.post('/', async (req, res) => {
       // Fetch invoice to verify ownership
       const invoice = await prisma.invoice.findFirst({
         where: { id: invoiceId, userId },
-        include: { lead: { select: { conversationId: true, name: true } } },
+        include: {
+          lead: { select: { conversationId: true, name: true } },
+          payments: true,
+        },
       });
 
       if (!invoice) {
         console.warn(`[Stripe Webhook] Invoice ${invoiceId} not found for user ${userId}`);
+        return res.json({ received: true });
+      }
+
+      // Check if already paid to prevent duplicate payments
+      if (invoice.status === 'Paid') {
+        console.log(`[Stripe Webhook] Invoice ${invoiceId} already paid, ignoring duplicate webhook`);
+        return res.json({ received: true });
+      }
+
+      // Check if payment for this session already exists
+      const existingPayment = invoice.payments.find(p =>
+        p.note && p.note.includes(session.id)
+      );
+      if (existingPayment) {
+        console.log(`[Stripe Webhook] Payment already recorded for session ${session.id}`);
         return res.json({ received: true });
       }
 

@@ -385,6 +385,9 @@ export default function InboxPage() {
       socket.on('conversation_update', handleConversationUpdate);
       socket.on('conversation_state_change', handleStateChange);
       socket.on('draft_update', handleDraftUpdate);
+      socket.on('invoice_updated', (data) => {
+        console.log('[InboxPage] Invoice updated:', data);
+      });
 
       cleanupFn = () => {
         socket.off('connect', handleReconnect);
@@ -392,6 +395,7 @@ export default function InboxPage() {
         socket.off('conversation_update', handleConversationUpdate);
         socket.off('conversation_state_change', handleStateChange);
         socket.off('draft_update', handleDraftUpdate);
+        socket.off('invoice_updated');
       };
       return true;
     };
@@ -2601,13 +2605,33 @@ function renderChatBubble(msg, isOutbound, contact, platform) {
           const isPaymentLink = !!paymentMatch;
 
           if (invoiceLink) {
+            // Extract invoice details for display
+            const invoiceNumberMatch = textContent.match(/Invoice\s*#([A-Z0-9\-]+)/i);
+            const amountMatch = textContent.match(/Amount:\s*\$?([\d.]+)/);
+            const dueMatch = textContent.match(/Due:\s*([\d/]+)/);
+
             return (
-              <button
-                onClick={() => window.open(invoiceLink, '_blank')}
-                className={`w-full text-left hover:opacity-80 transition p-0 ${isPaymentLink ? 'bg-blue-50 -mx-4 px-4 py-2' : ''}`}
-              >
-                <p className="whitespace-pre-wrap break-words leading-relaxed underline">{textContent}</p>
-              </button>
+              <div className="space-y-3">
+                <div className="whitespace-pre-wrap break-words leading-relaxed">
+                  {textContent.split('\n').filter(line => !line.match(/💳|👉|Pay now|View:)).map((line, i) =>
+                    line.trim() ? <div key={i}>{line}</div> : null
+                  )}
+                </div>
+                <button
+                  onClick={() => window.open(invoiceLink, '_blank')}
+                  className={`w-full py-2.5 px-4 rounded-lg font-semibold transition-all ${
+                    isPaymentLink
+                      ? (isOutbound
+                          ? 'bg-green-500 hover:bg-green-600 text-white'
+                          : 'bg-green-500 hover:bg-green-600 text-white')
+                      : (isOutbound
+                          ? 'bg-white/20 hover:bg-white/30 text-white'
+                          : 'bg-blue-500 hover:bg-blue-600 text-white')
+                  }`}
+                >
+                  {isPaymentLink ? '💳 Pay Now' : '👉 View Invoice'}
+                </button>
+              </div>
             );
           }
           return <p className="whitespace-pre-wrap break-words leading-relaxed">{textContent}</p>;
