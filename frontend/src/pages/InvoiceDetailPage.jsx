@@ -375,20 +375,23 @@ export default function InvoiceDetailPage() {
               {invoice.status}
             </div>
 
-            {isDraft && (
+            {(isDraft || invoice.status === 'Sent') && (
               <div className="bg-white rounded-xl border border-gray-200 p-5 space-y-3">
                 <button
-                  onClick={() => { setActionError(''); setShowSendConfirm(true); }}
-                  className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-blue-500 hover:bg-blue-600 text-white text-sm font-semibold rounded-lg shadow"
+                  onClick={() => { if (isDraft) { setActionError(''); setShowSendConfirm(true); } }}
+                  disabled={!isDraft}
+                  className={`w-full flex items-center justify-center gap-2 px-4 py-2.5 text-white text-sm font-semibold rounded-lg shadow ${isDraft ? 'bg-blue-500 hover:bg-blue-600' : 'bg-green-500 cursor-default'}`}
                 >
-                  <Send size={14} /> Send to Client
+                  {isDraft ? <><Send size={14} /> Send to Client</> : <><Check size={14} /> Sent to Client</>}
                 </button>
-                <button
-                  onClick={() => { setActionError(''); setShowDeleteConfirm(true); }}
-                  className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-white hover:bg-red-50 border border-red-200 text-red-600 text-sm font-semibold rounded-lg"
-                >
-                  <Trash2 size={14} /> Delete Draft
-                </button>
+                {isDraft && (
+                  <button
+                    onClick={() => { setActionError(''); setShowDeleteConfirm(true); }}
+                    className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-white hover:bg-red-50 border border-red-200 text-red-600 text-sm font-semibold rounded-lg"
+                  >
+                    <Trash2 size={14} /> Delete Draft
+                  </button>
+                )}
               </div>
             )}
 

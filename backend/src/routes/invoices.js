@@ -353,7 +353,7 @@ router.post('/:id/send', authenticate, requireActiveSubscription, async (req, re
             direction: 'outbound',
             sender: req.user.name || 'AuraDesk',
             subject: `Invoice #${existing.invoiceNumber}`,
-            content: `Invoice: ${existing.invoiceNumber}\nAmount: $${existing.total.toFixed(2)}\nDue: ${new Date(existing.dueDate).toLocaleDateString()}\n\nView: ${publicLink}`,
+            content: `📄 Invoice #${existing.invoiceNumber}\n\nAmount: $${existing.total.toFixed(2)}\nDue: ${new Date(existing.dueDate).toLocaleDateString()}\n\n👉 Click here to view: ${publicLink}`,
             contentType: 'text',
             status: 'sent',
             sentAt: new Date(),
