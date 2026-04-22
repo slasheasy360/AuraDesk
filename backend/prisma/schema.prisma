@@ -77,6 +77,8 @@ model User {
   aiReplyUsage      AiReplyUsage[]
   aiSettings        AiSettings?
   faqs              Faq[]
+  trainingFiles     TrainingFile[]
+  uploadedFiles     TrainingFile[] @relation("UploadedFiles")
 
   @@map("users")
 }
@@ -492,4 +494,46 @@ enum ContentType {
   file
   sticker
   email
+}
+
+enum FileProcessingStatus {
+  pending
+  processing
+  ready
+  error
+}
+
+model TrainingFile {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  filename  String
+  mimeType  String   @map("mime_type")
+  sizeBytes Int      @map("size_bytes")
+  s3Key     String   @map("s3_key")
+  status    FileProcessingStatus @default(pending)
+  errorMsg  String?  @map("error_msg")
+  createdAt DateTime @default(now()) @map("created_at")
+  uploadedBy String  @map("uploaded_by")
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  uploadedByUser User @relation("UploadedFiles", fields: [uploadedBy], references: [id], onDelete: Cascade)
+  chunks    FileChunk[]
+
+  @@index([userId])
+  @@map("training_files")
+}
+
+model FileChunk {
+  id        String   @id @default(uuid())
+  fileId    String   @map("file_id")
+  userId    String   @map("user_id")
+  chunkIdx  Int      @map("chunk_idx")
+  text      String
+  embedding Unsupported("vector")?
+  createdAt DateTime @default(now()) @map("created_at")
+
+  file      TrainingFile @relation(fields: [fileId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("file_chunks")
 }

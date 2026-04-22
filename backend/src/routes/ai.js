@@ -8,11 +8,24 @@ import {
   PlanLimitError,
 } from '../services/planGuard.js';
 import prisma from '../utils/prisma.js';
-import { searchSimilarFaqs } from '../services/embeddings.js';
+import { searchSimilarFaqs, searchSimilarChunks } from '../services/embeddings.js';
 
 const router = Router();
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
+/**
+ * Query result cache: 2-minute TTL to avoid repeated vector searches for the same prompt.
+ * Key: "${userId}:${prompt}", Value: { faqs, chunks, expiresAt }
+ */
+const _queryCache = new Map();
+const _QUERY_CACHE_TTL_MS = 2 * 60 * 1000; // 2 minutes
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, entry] of _queryCache) {
+    if (entry.expiresAt < now) _queryCache.delete(key);
+  }
+}, 60 * 1000); // Clean up every minute
 
 /**
  * In-memory idempotency store for consume-reply.
@@ -107,23 +120,73 @@ router.post('/generate-reply', authenticate, requireActiveSubscription, async (r
     // Team members share the workspace owner's knowledge base.
     const faqOwnerId = req.user.inviterUserId || req.user.id;
 
-    // Fetch FAQs: try vector search first, fall back to all FAQs
-    const [relevantFaqs, user] = await Promise.all([
-      searchSimilarFaqs(faqOwnerId, prompt, 5),
-      prisma.user.findUnique({
+    // Check cache
+    const cacheKey = `${faqOwnerId}:${prompt}`;
+    let cached = _queryCache.get(cacheKey);
+    let relevantFaqs, relevantChunks, user;
+
+    if (cached && cached.expiresAt > Date.now()) {
+      console.log(`[AI] Cache hit for "${prompt.slice(0, 80)}"`);
+      relevantFaqs = cached.faqs;
+      relevantChunks = cached.chunks;
+    } else {
+      // Search FAQs and file chunks in parallel
+      [relevantFaqs, relevantChunks, user] = await Promise.all([
+        searchSimilarFaqs(faqOwnerId, prompt, 5),
+        searchSimilarChunks(faqOwnerId, prompt, 5),
+        prisma.user.findUnique({
+          where: { id: faqOwnerId },
+          select: { companyName: true },
+        }),
+      ]);
+
+      // Cache results
+      _queryCache.set(cacheKey, {
+        faqs: relevantFaqs,
+        chunks: relevantChunks,
+        expiresAt: Date.now() + _QUERY_CACHE_TTL_MS,
+      });
+    }
+
+    if (!user) {
+      user = await prisma.user.findUnique({
         where: { id: faqOwnerId },
         select: { companyName: true },
-      }),
-    ]);
+      });
+    }
 
     const companyName = user?.companyName || 'our company';
     const SIMILARITY_THRESHOLD = 0.3;
+
+    // Filter FAQs and chunks by threshold
     let matchedFaqs = relevantFaqs.filter(f => Number(f.similarity) >= SIMILARITY_THRESHOLD);
+    let matchedChunks = relevantChunks.filter(c => Number(c.similarity) >= SIMILARITY_THRESHOLD);
 
-    console.log(`[AI] Query: "${prompt.slice(0, 80)}" | Vector: ${relevantFaqs.length} results, ${matchedFaqs.length} above ${SIMILARITY_THRESHOLD} | owner: ${faqOwnerId} (${companyName})`);
+    console.log(`[AI] Query: "${prompt.slice(0, 80)}" | FAQs: ${relevantFaqs.length} → ${matchedFaqs.length} | Chunks: ${relevantChunks.length} → ${matchedChunks.length} | owner: ${faqOwnerId}`);
 
-    if (matchedFaqs.length === 0) {
-      console.log(`[AI] Falling back to all FAQs for owner ${faqOwnerId}`);
+    // Build context from FAQs and file chunks
+    let context = '';
+
+    if (matchedFaqs.length > 0) {
+      const faqContext = matchedFaqs
+        .slice(0, 5)
+        .map((f, i) => `${i + 1}. Q: ${f.question}\n   A: ${f.answer}`)
+        .join('\n\n');
+      context += faqContext;
+    }
+
+    if (matchedChunks.length > 0) {
+      const chunkContext = matchedChunks
+        .slice(0, 5)
+        .map((c, i) => `[Document]: ${c.text}`)
+        .join('\n\n');
+      if (context) context += '\n\n';
+      context += chunkContext;
+    }
+
+    // Fallback: if neither FAQs nor chunks matched, use all FAQs
+    if (matchedFaqs.length === 0 && matchedChunks.length === 0) {
+      console.log(`[AI] No vector matches, falling back to all FAQs for owner ${faqOwnerId}`);
       const allFaqs = await prisma.faq.findMany({
         where: { userId: faqOwnerId },
         select: { question: true, answer: true, category: true },
@@ -131,26 +194,22 @@ router.post('/generate-reply', authenticate, requireActiveSubscription, async (r
       });
 
       if (allFaqs.length === 0) {
-        console.warn(`[AI] No FAQs found for owner ${faqOwnerId} (requester: ${req.user.id})`);
-        // No quota consumed — reply is useless so we don't charge
+        console.warn(`[AI] No FAQs or chunks found for owner ${faqOwnerId} (requester: ${req.user.id})`);
         return res.json({
           reply: "I don't have enough data about this question.",
-          replyId: null, // no replyId = consume-reply won't be called
+          replyId: null,
           usage: { used: quota.used, limit: quota.limit, unlimited: quota.unlimited },
           planWarning: null,
-          _debug: { faqOwnerId, requesterId: req.user.id, faqCount: 0 },
+          _debug: { faqOwnerId, requesterId: req.user.id, faqCount: 0, chunkCount: 0 },
         });
       }
 
-      matchedFaqs = allFaqs;
+      context = allFaqs
+        .slice(0, 10)
+        .map((f, i) => `${i + 1}. Q: ${f.question}\n   A: ${f.answer}`)
+        .join('\n\n');
       console.log(`[AI] Using ${allFaqs.length} plain FAQs as context`);
     }
-
-    // Format FAQ context
-    const context = matchedFaqs
-      .slice(0, 10)
-      .map((f, i) => `${i + 1}. Q: ${f.question}\n   A: ${f.answer}`)
-      .join('\n\n');
 
     // Call OpenAI
     const response = await openai.chat.completions.create({
