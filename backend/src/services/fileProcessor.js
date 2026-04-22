@@ -1,8 +1,7 @@
-import pdfParse from 'pdf-parse/legacy/build/pdf.js';
-
 export async function extractText(buffer, mimeType) {
   if (mimeType === 'application/pdf') {
-    const data = await pdfParse(buffer);
+    const pdfParse = await import('pdf-parse');
+    const data = await pdfParse.default(buffer);
     return data.text;
   }
   if (mimeType === 'text/plain') {
