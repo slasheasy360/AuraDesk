@@ -517,41 +517,43 @@ export default function AITrainingPage() {
             />
           </div>
           {activeTab === 'Files' ? (
-            <input
-              type="file"
-              accept=".pdf,.txt"
-              onChange={e => {
-                const file = e.target.files?.[0];
-                if (!file) return;
-                if (file.size > 25 * 1024 * 1024) {
-                  alert('File exceeds 25MB limit');
-                  return;
-                }
-                const formData = new FormData();
-                formData.append('file', file);
-                const uploadFile = async () => {
-                  try {
-                    const res = await api.post('/api/ai-training/files', formData, {
-                      headers: { 'Content-Type': 'multipart/form-data' },
-                    });
-                    handleFileUpload(res.data.file);
-                  } catch (err) {
-                    console.error('Upload failed:', err);
-                    alert('Upload failed');
+            <>
+              <input
+                type="file"
+                accept=".pdf,.txt"
+                onChange={e => {
+                  const file = e.target.files?.[0];
+                  if (!file) return;
+                  if (file.size > 25 * 1024 * 1024) {
+                    alert('File exceeds 25MB limit');
+                    return;
                   }
-                };
-                uploadFile();
-              }}
-              hidden
-              id="fileUploadBtn"
-            />
-            <button
-              onClick={() => document.getElementById('fileUploadBtn')?.click()}
-              className="flex items-center gap-2 px-4 py-2.5 bg-[#1787FE] hover:bg-[#1377e0] text-white text-sm font-semibold rounded-full transition shadow-lg shadow-[#1787FE]/20 whitespace-nowrap"
-            >
-              <Upload size={16} />
-              UPLOAD FILE
-            </button>
+                  const formData = new FormData();
+                  formData.append('file', file);
+                  const uploadFile = async () => {
+                    try {
+                      const res = await api.post('/api/ai-training/files', formData, {
+                        headers: { 'Content-Type': 'multipart/form-data' },
+                      });
+                      handleFileUpload(res.data.file);
+                    } catch (err) {
+                      console.error('Upload failed:', err);
+                      alert('Upload failed');
+                    }
+                  };
+                  uploadFile();
+                }}
+                hidden
+                id="fileUploadBtn"
+              />
+              <button
+                onClick={() => document.getElementById('fileUploadBtn')?.click()}
+                className="flex items-center gap-2 px-4 py-2.5 bg-[#1787FE] hover:bg-[#1377e0] text-white text-sm font-semibold rounded-full transition shadow-lg shadow-[#1787FE]/20 whitespace-nowrap"
+              >
+                <Upload size={16} />
+                UPLOAD FILE
+              </button>
+            </>
           ) : (
             <button
               onClick={() => setShowAddModal(true)}
