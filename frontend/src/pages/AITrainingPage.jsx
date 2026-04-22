@@ -1,12 +1,13 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   Search, Plus, X, ChevronDown, ChevronUp, Sparkles,
   CheckCircle, Trash2, Edit2, Check, Info,
-  Heart, FileText, Bell, Calendar, BookOpen, HelpCircle,
+  Heart, FileText, Bell, Calendar, BookOpen, HelpCircle, Upload, File, Download,
 } from 'lucide-react';
 import api from '../services/api.js';
+import { io } from 'socket.io-client';
 
-const TABS = ['General', 'Features', 'Resources'];
+const TABS = ['General', 'Features', 'Resources', 'Files'];
 
 const CATEGORY_MAP = {
   General: 'general',
@@ -231,12 +232,170 @@ function FaqItem({ faq, onDeleted, onEdited }) {
   );
 }
 
+// ─── Files Tab ─────────────────────────────────────────────────────────────
+function FilesTab({ files, loading, onFileUpload, onFileDelete, onFileDownload }) {
+  const [uploading, setUploading] = useState(false);
+  const [search, setSearch] = useState('');
+  const [typeFilter, setTypeFilter] = useState('all');
+  const fileInputRef = useRef(null);
+
+  const handleFileSelect = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (file.size > 25 * 1024 * 1024) {
+      alert('File exceeds 25MB limit');
+      return;
+    }
+
+    const formData = new FormData();
+    formData.append('file', file);
+
+    setUploading(true);
+    try {
+      const res = await api.post('/api/ai-training/files', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
+      onFileUpload(res.data.file);
+    } catch (err) {
+      console.error('Upload failed:', err);
+      alert('Upload failed');
+    } finally {
+      setUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  };
+
+  const filteredFiles = files.filter(f => {
+    const nameMatch = !search || f.filename.toLowerCase().includes(search.toLowerCase());
+    const typeMatch = typeFilter === 'all' || f.mimeType.startsWith(typeFilter === 'pdf' ? 'application/pdf' : 'text/plain');
+    return nameMatch && typeMatch;
+  });
+
+  const getFileIcon = (mimeType) => {
+    if (mimeType === 'application/pdf') return '📄';
+    if (mimeType === 'text/plain') return '📝';
+    return '📁';
+  };
+
+  const getStatusColor = (status) => {
+    if (status === 'ready') return 'bg-green-50 text-green-700 border-green-200';
+    if (status === 'processing') return 'bg-yellow-50 text-yellow-700 border-yellow-200';
+    if (status === 'error') return 'bg-red-50 text-red-700 border-red-200';
+    return 'bg-gray-50 text-gray-700 border-gray-200';
+  };
+
+  return (
+    <div className="h-full flex flex-col">
+      {/* Upload section */}
+      <div className="px-6 py-4 border-b border-gray-100">
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept=".pdf,.txt"
+          onChange={handleFileSelect}
+          disabled={uploading}
+          className="hidden"
+        />
+        <button
+          onClick={() => fileInputRef.current?.click()}
+          disabled={uploading}
+          className="w-full flex items-center justify-center gap-2 py-3 border-2 border-dashed border-gray-300 rounded-xl text-sm font-semibold text-gray-600 hover:border-[#1787FE] hover:text-[#1787FE] transition disabled:opacity-50"
+        >
+          <Upload size={16} />
+          {uploading ? 'Uploading...' : 'Click to upload PDF or TXT'}
+        </button>
+      </div>
+
+      {/* Search & filter */}
+      <div className="px-6 py-3 border-b border-gray-100 flex gap-2">
+        <input
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+          placeholder="Search files..."
+          className="flex-1 border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-[#1787FE]"
+        />
+        <select
+          value={typeFilter}
+          onChange={e => setTypeFilter(e.target.value)}
+          className="border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-[#1787FE]"
+        >
+          <option value="all">All</option>
+          <option value="pdf">PDF</option>
+          <option value="txt">TXT</option>
+        </select>
+      </div>
+
+      {/* Files list */}
+      <div className="flex-1 overflow-y-auto">
+        {loading ? (
+          <div className="space-y-3 p-6">
+            {[...Array(3)].map((_, i) => (
+              <div key={i} className="h-16 bg-gray-100 rounded-xl animate-pulse" />
+            ))}
+          </div>
+        ) : filteredFiles.length === 0 ? (
+          <div className="flex flex-col items-center justify-center py-16 text-gray-400 px-6">
+            <FileText size={40} className="mb-3 text-gray-200" />
+            <p className="text-sm font-medium text-gray-500">
+              {files.length === 0 ? 'No files yet' : 'No files match your search'}
+            </p>
+            <p className="text-xs mt-1">Upload PDF or TXT files to train your AI</p>
+          </div>
+        ) : (
+          <div className="px-6 py-3 space-y-2">
+            {filteredFiles.map(file => (
+              <div
+                key={file.id}
+                className="flex items-center gap-3 p-3 border border-gray-100 rounded-lg hover:bg-gray-50 transition group"
+              >
+                <span className="text-xl flex-shrink-0">{getFileIcon(file.mimeType)}</span>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium text-gray-900 truncate">{file.filename}</p>
+                  <p className="text-xs text-gray-500">
+                    {(file.sizeBytes / 1024).toFixed(1)} KB
+                  </p>
+                </div>
+                <span
+                  className={`text-xs font-medium px-2 py-1 rounded-full border ${getStatusColor(
+                    file.status
+                  )}`}
+                >
+                  {file.status === 'processing' ? '⏳ Processing' : file.status === 'ready' ? '✅ Ready' : '❌ Error'}
+                </span>
+                <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition">
+                  <button
+                    onClick={() => onFileDownload(file.id)}
+                    className="p-1.5 text-gray-400 hover:text-gray-700 rounded"
+                    title="Download"
+                  >
+                    <Download size={14} />
+                  </button>
+                  <button
+                    onClick={() => onFileDelete(file.id)}
+                    className="p-1.5 text-gray-400 hover:text-red-500 rounded"
+                    title="Delete"
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ─── Main Page ─────────────────────────────────────────────────────────────
 export default function AITrainingPage() {
   const [activeTab, setActiveTab] = useState('General');
   const [faqs, setFaqs] = useState([]);
+  const [files, setFiles] = useState([]);
   const [settings, setSettings] = useState({ tones: ['friendly'], automations: [] });
   const [loading, setLoading] = useState(true);
+  const [filesLoading, setFilesLoading] = useState(false);
   const [search, setSearch] = useState('');
   const [showAddModal, setShowAddModal] = useState(false);
   const [automationInput, setAutomationInput] = useState('');
@@ -244,20 +403,59 @@ export default function AITrainingPage() {
 
   const fetchData = useCallback(async () => {
     try {
-      const [faqRes, settingsRes] = await Promise.all([
+      const [faqRes, settingsRes, filesRes] = await Promise.all([
         api.get('/api/ai-training/faqs'),
         api.get('/api/ai-training/settings'),
+        api.get('/api/ai-training/files'),
       ]);
       setFaqs(faqRes.data.faqs || []);
       setSettings(settingsRes.data.settings || { tones: ['friendly'], automations: [] });
+      setFiles(filesRes.data.files || []);
     } catch (err) {
       console.error('Failed to load AI training data:', err);
     } finally {
       setLoading(false);
+      setFilesLoading(false);
     }
   }, []);
 
   useEffect(() => { fetchData(); }, [fetchData]);
+
+  // Socket.io listener for real-time file processing updates
+  useEffect(() => {
+    const socket = io();
+    socket.on('file:processed', (data) => {
+      setFiles(prev =>
+        prev.map(f => f.id === data.fileId ? { ...f, status: data.status } : f)
+      );
+    });
+    return () => socket.disconnect();
+  }, []);
+
+  const handleFileUpload = (newFile) => {
+    setFiles(prev => [newFile, ...prev]);
+  };
+
+  const handleFileDelete = async (fileId) => {
+    if (!confirm('Delete this file? Its content will no longer be used for AI training.')) return;
+    try {
+      await api.delete(`/api/ai-training/files/${fileId}`);
+      setFiles(prev => prev.filter(f => f.id !== fileId));
+    } catch (err) {
+      console.error('Delete failed:', err);
+      alert('Delete failed');
+    }
+  };
+
+  const handleFileDownload = async (fileId) => {
+    try {
+      const res = await api.get(`/api/ai-training/files/${fileId}/url`);
+      window.open(res.data.url, '_blank');
+    } catch (err) {
+      console.error('Download failed:', err);
+      alert('Download failed');
+    }
+  };
 
   const filteredFaqs = faqs.filter(f => {
     const catMatch = f.category === CATEGORY_MAP[activeTab];
@@ -318,13 +516,51 @@ export default function AITrainingPage() {
               className="w-full pl-9 pr-4 py-2.5 bg-[#0F1D33] border border-white/5 rounded-full text-sm text-white placeholder-white/40 focus:border-[#1787FE] outline-none transition"
             />
           </div>
-          <button
-            onClick={() => setShowAddModal(true)}
-            className="flex items-center gap-2 px-4 py-2.5 bg-[#1787FE] hover:bg-[#1377e0] text-white text-sm font-semibold rounded-full transition shadow-lg shadow-[#1787FE]/20 whitespace-nowrap"
-          >
-            <Plus size={16} />
-            ADD FAQ
-          </button>
+          {activeTab === 'Files' ? (
+            <input
+              type="file"
+              accept=".pdf,.txt"
+              onChange={e => {
+                const file = e.target.files?.[0];
+                if (!file) return;
+                if (file.size > 25 * 1024 * 1024) {
+                  alert('File exceeds 25MB limit');
+                  return;
+                }
+                const formData = new FormData();
+                formData.append('file', file);
+                const uploadFile = async () => {
+                  try {
+                    const res = await api.post('/api/ai-training/files', formData, {
+                      headers: { 'Content-Type': 'multipart/form-data' },
+                    });
+                    handleFileUpload(res.data.file);
+                  } catch (err) {
+                    console.error('Upload failed:', err);
+                    alert('Upload failed');
+                  }
+                };
+                uploadFile();
+              }}
+              hidden
+              id="fileUploadBtn"
+            />
+            <button
+              onClick={() => document.getElementById('fileUploadBtn')?.click()}
+              className="flex items-center gap-2 px-4 py-2.5 bg-[#1787FE] hover:bg-[#1377e0] text-white text-sm font-semibold rounded-full transition shadow-lg shadow-[#1787FE]/20 whitespace-nowrap"
+            >
+              <Upload size={16} />
+              UPLOAD FILE
+            </button>
+          ) : (
+            <button
+              onClick={() => setShowAddModal(true)}
+              className="flex items-center gap-2 px-4 py-2.5 bg-[#1787FE] hover:bg-[#1377e0] text-white text-sm font-semibold rounded-full transition shadow-lg shadow-[#1787FE]/20 whitespace-nowrap"
+            >
+              <Plus size={16} />
+              ADD FAQ
+            </button>
+          )}
         </div>
       </div>
 
@@ -349,31 +585,41 @@ export default function AITrainingPage() {
             ))}
           </div>
 
-          {/* FAQ list */}
-          <div className="flex-1 overflow-y-auto px-6 py-2">
-            {loading ? (
-              <div className="space-y-4 py-4">
-                {[...Array(4)].map((_, i) => (
-                  <div key={i} className="h-12 bg-gray-100 rounded-xl animate-pulse" />
-                ))}
-              </div>
-            ) : filteredFaqs.length === 0 ? (
-              <div className="flex flex-col items-center justify-center py-16 text-gray-400">
-                <BookOpen size={40} className="mb-3 text-gray-200" />
-                <p className="text-sm font-medium text-gray-500">No FAQs yet</p>
-                <p className="text-xs mt-1">Click "ADD FAQ" to start training your AI</p>
-              </div>
-            ) : (
-              filteredFaqs.map(faq => (
-                <FaqItem
-                  key={faq.id}
-                  faq={faq}
-                  onDeleted={id => setFaqs(prev => prev.filter(f => f.id !== id))}
-                  onEdited={updated => setFaqs(prev => prev.map(f => f.id === updated.id ? updated : f))}
-                />
-              ))
-            )}
-          </div>
+          {/* Content based on tab */}
+          {activeTab === 'Files' ? (
+            <FilesTab
+              files={files}
+              loading={loading || filesLoading}
+              onFileUpload={handleFileUpload}
+              onFileDelete={handleFileDelete}
+              onFileDownload={handleFileDownload}
+            />
+          ) : (
+            <div className="flex-1 overflow-y-auto px-6 py-2">
+              {loading ? (
+                <div className="space-y-4 py-4">
+                  {[...Array(4)].map((_, i) => (
+                    <div key={i} className="h-12 bg-gray-100 rounded-xl animate-pulse" />
+                  ))}
+                </div>
+              ) : filteredFaqs.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-16 text-gray-400">
+                  <BookOpen size={40} className="mb-3 text-gray-200" />
+                  <p className="text-sm font-medium text-gray-500">No FAQs yet</p>
+                  <p className="text-xs mt-1">Click "ADD FAQ" to start training your AI</p>
+                </div>
+              ) : (
+                filteredFaqs.map(faq => (
+                  <FaqItem
+                    key={faq.id}
+                    faq={faq}
+                    onDeleted={id => setFaqs(prev => prev.filter(f => f.id !== id))}
+                    onEdited={updated => setFaqs(prev => prev.map(f => f.id === updated.id ? updated : f))}
+                  />
+                ))
+              )}
+            </div>
+          )}
         </div>
 
         {/* Right: AI Settings Panel */}
@@ -394,7 +640,7 @@ export default function AITrainingPage() {
               </div>
               <div className="flex justify-between items-center">
                 <span className="text-white/80">Training Data</span>
-                <span className="font-semibold">{faqs.length} FAQs</span>
+                <span className="font-semibold">{faqs.length} FAQs, {files.length} Files</span>
               </div>
               <div className="flex justify-between items-center">
                 <span className="text-white/80">Response Rate</span>
