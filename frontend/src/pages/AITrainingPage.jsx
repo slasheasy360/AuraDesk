@@ -484,10 +484,11 @@ export default function AITrainingPage() {
 
   // Socket.io listener for real-time file processing updates
   useEffect(() => {
-    const socket = io();
-    socket.on('file:processed', (data) => {
+    const BACKEND_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
+    const socket = io(BACKEND_URL, { withCredentials: true });
+    socket.on('file:processed', ({ fileId, status, errorMsg }) => {
       setFiles(prev =>
-        prev.map(f => f.id === data.fileId ? { ...f, status: data.status } : f)
+        prev.map(f => f.id === fileId ? { ...f, status, ...(errorMsg ? { errorMsg } : {}) } : f)
       );
     });
     return () => socket.disconnect();

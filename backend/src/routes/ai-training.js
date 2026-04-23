@@ -205,7 +205,8 @@ router.post('/files', authenticate, upload.single('file'), async (req, res) => {
     console.log(`[AI Training] File uploaded: ${fileId} (${originalname})`);
 
     // Process file asynchronously in background
-    processFile(fileId, buffer, mimetype, ownerId).catch((err) => {
+    const io = req.app.get('io');
+    processFile(fileId, buffer, mimetype, ownerId, io).catch((err) => {
       console.error(`[AI Training] File processing failed for ${fileId}:`, err.message);
     });
 
@@ -293,17 +294,15 @@ router.delete('/files/:id', authenticate, async (req, res) => {
 });
 
 // ── Background: Process file (extract text, chunk, embed) ──────────────
-async function processFile(fileId, buffer, mimeType, ownerId) {
+async function processFile(fileId, buffer, mimeType, ownerId, io) {
+  const emit = (status, extra = {}) => {
+    if (io) io.to(`user:${ownerId}`).emit('file:processed', { fileId, status, ...extra });
+  };
+
   try {
-    // Update status to "processing"
-    await prisma.trainingFile.update({
-      where: { id: fileId },
-      data: { status: 'processing' },
-    });
+    await prisma.trainingFile.update({ where: { id: fileId }, data: { status: 'processing' } });
+    emit('processing');
 
-    console.log(`[AI Training] Processing file: ${fileId}`);
-
-    // Extract text
     console.log(`[AI Training] Extracting text from ${fileId} (mimeType: ${mimeType}, bufferSize: ${buffer.length})`);
     let text;
     try {
@@ -314,49 +313,26 @@ async function processFile(fileId, buffer, mimeType, ownerId) {
     }
     console.log(`[AI Training] Extracted ${text.length} characters from ${fileId}`);
 
-    if (!text || text.trim().length === 0) {
-      throw new Error('Extracted text is empty');
-    }
+    if (!text || text.trim().length === 0) throw new Error('Extracted text is empty');
 
-    // Chunk text
-    let chunks;
-    try {
-      chunks = chunkText(text);
-    } catch (chunkErr) {
-      console.error(`[AI Training] Text chunking failed for ${fileId}:`, chunkErr.message);
-      throw chunkErr;
-    }
+    const chunks = chunkText(text);
     console.log(`[AI Training] Split into ${chunks.length} chunk(s) for ${fileId}`);
+    if (chunks.length === 0) throw new Error('No chunks generated from text');
 
-    if (chunks.length === 0) {
-      throw new Error('No chunks generated from text');
-    }
-
-    // Store chunks with embeddings
     console.log(`[AI Training] Storing ${chunks.length} chunks with embeddings for ${fileId}`);
-    try {
-      await storeFileChunkEmbeddings(fileId, ownerId, chunks);
-    } catch (storeErr) {
-      console.error(`[AI Training] Embedding storage failed for ${fileId}:`, storeErr.message);
-      throw storeErr;
-    }
+    await storeFileChunkEmbeddings(fileId, ownerId, chunks);
 
-    // Update status to "ready"
-    await prisma.trainingFile.update({
-      where: { id: fileId },
-      data: { status: 'ready' },
-    });
-
+    await prisma.trainingFile.update({ where: { id: fileId }, data: { status: 'ready' } });
+    emit('ready');
     console.log(`[AI Training] File processing complete: ${fileId}`);
   } catch (err) {
     console.error(`[AI Training] Processing failed for ${fileId}:`, err.message);
-    console.error(`[AI Training] Full error:`, err);
+    const errorMsg = err.message;
     await prisma.trainingFile.update({
       where: { id: fileId },
-      data: { status: 'error', errorMsg: err.message },
-    }).catch(updateErr => {
-      console.error(`[AI Training] Failed to update error status for ${fileId}:`, updateErr.message);
-    });
+      data: { status: 'error', errorMsg },
+    }).catch(() => {});
+    emit('error', { errorMsg });
   }
 }
 
