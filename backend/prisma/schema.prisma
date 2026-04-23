@@ -77,7 +77,7 @@ model User {
   aiReplyUsage      AiReplyUsage[]
   aiSettings        AiSettings?
   faqs              Faq[]
-  trainingFiles     TrainingFile[]
+  trainingFiles     TrainingFile[] @relation("TrainingFiles")
   uploadedFiles     TrainingFile[] @relation("UploadedFiles")
 
   @@map("users")
@@ -515,7 +515,7 @@ model TrainingFile {
   createdAt DateTime @default(now()) @map("created_at")
   uploadedBy String  @map("uploaded_by")
 
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user      User     @relation("TrainingFiles", fields: [userId], references: [id], onDelete: Cascade)
   uploadedByUser User @relation("UploadedFiles", fields: [uploadedBy], references: [id], onDelete: Cascade)
   chunks    FileChunk[]
 
