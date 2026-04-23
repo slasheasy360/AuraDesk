@@ -1,12 +1,22 @@
 export async function extractText(buffer, mimeType) {
   if (mimeType === 'application/pdf') {
     try {
-      const pdfParse = await import('pdf-parse');
-      const parseFunction = pdfParse.default || pdfParse;
-      if (typeof parseFunction !== 'function') {
-        throw new Error('pdf-parse module does not export a function');
+      // Try importing from the build folder (ESM compatible path)
+      let pdfParse;
+      try {
+        const pdfModule = await import('pdf-parse/lib/pdf.js');
+        pdfParse = pdfModule.default || pdfModule;
+      } catch {
+        // Fallback to main package export
+        const pdfModule = await import('pdf-parse');
+        pdfParse = pdfModule.default || pdfModule;
       }
-      const data = await parseFunction(buffer);
+
+      if (!pdfParse || typeof pdfParse !== 'function') {
+        throw new Error(`pdf-parse not a function: received ${typeof pdfParse}`);
+      }
+
+      const data = await pdfParse(buffer);
       if (!data || !data.text) {
         throw new Error('PDF parsing returned no text data');
       }
