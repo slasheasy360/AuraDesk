@@ -232,19 +232,36 @@ function FaqItem({ faq, onDeleted, onEdited }) {
   );
 }
 
+const ACCEPTED_TYPES = '.pdf,.txt,.doc,.docx,.xls,.xlsx';
+const MAX_FILE_MB = 5;
+const MAX_TOTAL_MB = 5;
+
 // ─── Files Tab ─────────────────────────────────────────────────────────────
 function FilesTab({ files, loading, onFileUpload, onFileDelete, onFileDownload }) {
   const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState('');
   const [search, setSearch] = useState('');
   const [typeFilter, setTypeFilter] = useState('all');
   const fileInputRef = useRef(null);
 
+  const totalUsedBytes = files.reduce((sum, f) => sum + (f.sizeBytes || 0), 0);
+  const totalUsedMB = totalUsedBytes / 1024 / 1024;
+  const storagePercent = Math.min((totalUsedMB / MAX_TOTAL_MB) * 100, 100);
+
   const handleFileSelect = async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    setUploadError('');
 
-    if (file.size > 25 * 1024 * 1024) {
-      alert('File exceeds 25MB limit');
+    if (file.size > MAX_FILE_MB * 1024 * 1024) {
+      setUploadError(`File exceeds ${MAX_FILE_MB} MB limit`);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+      return;
+    }
+
+    if (totalUsedBytes + file.size > MAX_TOTAL_MB * 1024 * 1024) {
+      setUploadError(`Total storage limit of ${MAX_TOTAL_MB} MB reached. Delete files to upload more.`);
+      if (fileInputRef.current) fileInputRef.current.value = '';
       return;
     }
 
@@ -258,8 +275,8 @@ function FilesTab({ files, loading, onFileUpload, onFileDelete, onFileDownload }
       });
       onFileUpload(res.data.file);
     } catch (err) {
-      console.error('Upload failed:', err);
-      alert('Upload failed');
+      const msg = err.response?.data?.error || 'Upload failed';
+      setUploadError(msg);
     } finally {
       setUploading(false);
       if (fileInputRef.current) fileInputRef.current.value = '';
@@ -268,13 +285,20 @@ function FilesTab({ files, loading, onFileUpload, onFileDelete, onFileDownload }
 
   const filteredFiles = files.filter(f => {
     const nameMatch = !search || f.filename.toLowerCase().includes(search.toLowerCase());
-    const typeMatch = typeFilter === 'all' || f.mimeType.startsWith(typeFilter === 'pdf' ? 'application/pdf' : 'text/plain');
+    const typeMatch =
+      typeFilter === 'all' ||
+      (typeFilter === 'pdf' && f.mimeType === 'application/pdf') ||
+      (typeFilter === 'txt' && f.mimeType === 'text/plain') ||
+      (typeFilter === 'doc' && (f.mimeType.includes('word') || f.mimeType === 'application/msword')) ||
+      (typeFilter === 'excel' && f.mimeType.includes('spreadsheet') || f.mimeType.includes('excel') || f.mimeType.includes('ms-excel'));
     return nameMatch && typeMatch;
   });
 
   const getFileIcon = (mimeType) => {
     if (mimeType === 'application/pdf') return '📄';
     if (mimeType === 'text/plain') return '📝';
+    if (mimeType?.includes('word') || mimeType === 'application/msword') return '📘';
+    if (mimeType?.includes('spreadsheet') || mimeType?.includes('excel') || mimeType?.includes('ms-excel')) return '📊';
     return '📁';
   };
 
@@ -289,30 +313,50 @@ function FilesTab({ files, loading, onFileUpload, onFileDelete, onFileDownload }
     if (!errorMsg) return 'Error';
     if (errorMsg.includes('scanned or encrypted')) return 'Scanned PDF';
     if (errorMsg.includes('Illegal character')) return 'Corrupt PDF';
-    if (errorMsg.includes('no text content')) return 'No Text';
+    if (errorMsg.includes('no text content') || errorMsg.includes('no extractable')) return 'No Text';
     return 'Error';
   };
 
   return (
     <div className="h-full flex flex-col">
       {/* Upload section */}
-      <div className="px-6 py-4 border-b border-gray-100">
+      <div className="px-6 py-4 border-b border-gray-100 space-y-2">
         <input
           ref={fileInputRef}
           type="file"
-          accept=".pdf,.txt"
+          accept={ACCEPTED_TYPES}
           onChange={handleFileSelect}
           disabled={uploading}
           className="hidden"
         />
         <button
-          onClick={() => fileInputRef.current?.click()}
-          disabled={uploading}
-          className="w-full flex items-center justify-center gap-2 py-3 border-2 border-dashed border-gray-300 rounded-xl text-sm font-semibold text-gray-600 hover:border-[#1787FE] hover:text-[#1787FE] transition disabled:opacity-50"
+          onClick={() => { setUploadError(''); fileInputRef.current?.click(); }}
+          disabled={uploading || totalUsedMB >= MAX_TOTAL_MB}
+          className="w-full flex items-center justify-center gap-2 py-3 border-2 border-dashed border-gray-300 rounded-xl text-sm font-semibold text-gray-600 hover:border-[#1787FE] hover:text-[#1787FE] transition disabled:opacity-50 disabled:cursor-not-allowed"
         >
           <Upload size={16} />
-          {uploading ? 'Uploading...' : 'Click to upload PDF or TXT'}
+          {uploading ? 'Uploading...' : 'Click to upload PDF, TXT, DOC, DOCX, XLS, XLSX'}
         </button>
+
+        {/* Storage bar */}
+        <div className="space-y-1">
+          <div className="flex justify-between text-xs text-gray-500">
+            <span>Storage used</span>
+            <span>{totalUsedMB.toFixed(1)} / {MAX_TOTAL_MB} MB</span>
+          </div>
+          <div className="w-full bg-gray-100 rounded-full h-1.5">
+            <div
+              className={`h-1.5 rounded-full transition-all ${storagePercent >= 90 ? 'bg-red-500' : storagePercent >= 70 ? 'bg-yellow-500' : 'bg-[#1787FE]'}`}
+              style={{ width: `${storagePercent}%` }}
+            />
+          </div>
+        </div>
+
+        {uploadError && (
+          <p className="text-xs text-red-600 flex items-center gap-1">
+            <span>⚠️</span> {uploadError}
+          </p>
+        )}
       </div>
 
       {/* Search & filter */}
@@ -331,6 +375,8 @@ function FilesTab({ files, loading, onFileUpload, onFileDelete, onFileDownload }
           <option value="all">All</option>
           <option value="pdf">PDF</option>
           <option value="txt">TXT</option>
+          <option value="doc">DOC/DOCX</option>
+          <option value="excel">XLS/XLSX</option>
         </select>
       </div>
 

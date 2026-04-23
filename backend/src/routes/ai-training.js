@@ -124,8 +124,20 @@ router.put('/settings', authenticate, async (req, res) => {
   res.json({ settings });
 });
 
+const ALLOWED_TRAINING_TYPES = new Set([
+  'application/pdf',
+  'text/plain',
+  'application/msword',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'application/vnd.ms-excel',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+]);
+
+const MAX_FILE_BYTES = 5 * 1024 * 1024;       // 5 MB per file
+const MAX_TOTAL_BYTES = 5 * 1024 * 1024;      // 5 MB total per workspace
+
 // ── POST /api/ai-training/files ──────────────────────────────────────
-// Upload a training file (PDF or TXT), store in S3, create DB record
+// Upload a training file, store in S3, create DB record
 router.post('/files', authenticate, upload.single('file'), async (req, res) => {
   try {
     const ownerId = resolveOwnerId(req.user);
@@ -138,15 +150,27 @@ router.post('/files', authenticate, upload.single('file'), async (req, res) => {
     const { mimetype, originalname, buffer, size } = req.file;
 
     // Validate file type
-    if (mimetype !== 'application/pdf' && mimetype !== 'text/plain') {
+    if (!ALLOWED_TRAINING_TYPES.has(mimetype)) {
       console.warn(`[AI Training] Unsupported file type: ${mimetype}`);
-      return res.status(400).json({ error: 'Only PDF and TXT files are supported' });
+      return res.status(400).json({ error: 'Only PDF, TXT, DOC, DOCX, XLS, and XLSX files are supported' });
     }
 
-    // Validate file size (25MB cap from middleware)
-    if (size > 25 * 1024 * 1024) {
-      console.warn(`[AI Training] File size exceeds limit: ${size}`);
-      return res.status(400).json({ error: 'File exceeds 25MB limit' });
+    // Validate individual file size (5 MB cap)
+    if (size > MAX_FILE_BYTES) {
+      return res.status(400).json({ error: 'File exceeds 5 MB limit' });
+    }
+
+    // Validate total storage across all files for this workspace
+    const { _sum } = await prisma.trainingFile.aggregate({
+      where: { userId: ownerId },
+      _sum: { sizeBytes: true },
+    });
+    const currentTotal = _sum.sizeBytes || 0;
+    if (currentTotal + size > MAX_TOTAL_BYTES) {
+      const usedMB = (currentTotal / 1024 / 1024).toFixed(1);
+      return res.status(400).json({
+        error: `Total storage limit of 5 MB reached (${usedMB} MB used). Delete existing files to upload more.`,
+      });
     }
 
     const fileId = `file_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
