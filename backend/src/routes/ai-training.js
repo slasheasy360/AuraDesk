@@ -238,19 +238,25 @@ router.delete('/files/:id', authenticate, async (req, res) => {
       return res.status(404).json({ error: 'File not found' });
     }
 
-    // Delete from S3
-    await deleteFile(file.s3Key);
+    // Delete from S3 (non-blocking — continue even if fails)
+    try {
+      await deleteFile(file.s3Key);
+      console.log(`[AI Training] S3 deletion successful: ${file.s3Key}`);
+    } catch (s3Err) {
+      console.warn(`[AI Training] S3 deletion failed (non-blocking): ${s3Err.message}`);
+      // Continue with DB deletion anyway
+    }
 
     // Delete from DB (cascade deletes chunks)
     await prisma.trainingFile.delete({
       where: { id: req.params.id },
     });
 
-    console.log(`[AI Training] File deleted: ${req.params.id}`);
+    console.log(`[AI Training] File deleted from DB: ${req.params.id}`);
     res.json({ success: true });
   } catch (err) {
     console.error('[AI Training] Delete file failed:', err.message);
-    res.status(500).json({ error: 'Failed to delete file' });
+    res.status(500).json({ error: 'Failed to delete file', details: err.message });
   }
 });
 
