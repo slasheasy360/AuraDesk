@@ -1,13 +1,49 @@
 export async function extractText(buffer, mimeType) {
   if (mimeType === 'application/pdf') {
     try {
-      // Import pdf-parse (exports a class that needs 'new')
+      // Import pdf-parse - try different export patterns
       const pdfModule = await import('pdf-parse');
-      const PDFParse = pdfModule.default || pdfModule;
 
-      // pdf-parse exports a class, so use 'new' to instantiate it
-      const parser = new PDFParse(buffer);
-      const data = await parser;
+      // pdf-parse might export as: default, direct, or as an object with a parse method
+      let PDFParse;
+
+      // Try direct import first
+      if (typeof pdfModule.default === 'function') {
+        PDFParse = pdfModule.default;
+      } else if (typeof pdfModule === 'function') {
+        PDFParse = pdfModule;
+      } else {
+        // Log what we got for debugging
+        console.error('[PDF] Module keys:', Object.keys(pdfModule));
+        console.error('[PDF] Module.default type:', typeof pdfModule.default);
+
+        // Try finding a function in the module
+        for (const [key, value] of Object.entries(pdfModule)) {
+          if (typeof value === 'function') {
+            console.log(`[PDF] Found function at key: ${key}`);
+            PDFParse = value;
+            break;
+          }
+        }
+      }
+
+      if (!PDFParse) {
+        throw new Error('Could not find PDF parser function in module');
+      }
+
+      // Try to call it - could be a class or function
+      let data;
+      try {
+        // Try as a class first
+        data = await new PDFParse(buffer);
+      } catch (classErr) {
+        // If that fails, try as a function
+        try {
+          data = await PDFParse(buffer);
+        } catch (funcErr) {
+          throw new Error(`Failed both as class and function: ${funcErr.message}`);
+        }
+      }
 
       if (!data || !data.text) {
         throw new Error('PDF parsing returned no text data');
