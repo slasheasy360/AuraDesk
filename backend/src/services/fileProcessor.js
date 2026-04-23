@@ -1,28 +1,14 @@
 export async function extractText(buffer, mimeType) {
   if (mimeType === 'application/pdf') {
     try {
-      // Import pdf-parse and handle different export patterns
+      // Import pdf-parse (exports a class that needs 'new')
       const pdfModule = await import('pdf-parse');
-      let pdfParse = pdfModule.default || pdfModule;
+      const PDFParse = pdfModule.default || pdfModule;
 
-      // If it's an object, try to find a parsing function
-      if (typeof pdfParse !== 'function' && typeof pdfParse === 'object') {
-        // Try common function property names
-        for (const key of ['parse', 'parsePdf', 'pdf', 'PDFParse']) {
-          if (typeof pdfParse[key] === 'function') {
-            pdfParse = pdfParse[key];
-            break;
-          }
-        }
-      }
+      // pdf-parse exports a class, so use 'new' to instantiate it
+      const parser = new PDFParse(buffer);
+      const data = await parser;
 
-      if (typeof pdfParse !== 'function') {
-        console.error('pdfParse type:', typeof pdfParse);
-        console.error('pdfParse object keys:', Object.keys(pdfParse || {}));
-        throw new Error(`pdf-parse: received ${typeof pdfParse}, expected function`);
-      }
-
-      const data = await pdfParse(buffer);
       if (!data || !data.text) {
         throw new Error('PDF parsing returned no text data');
       }
