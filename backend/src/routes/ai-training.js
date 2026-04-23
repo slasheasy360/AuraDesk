@@ -6,6 +6,7 @@ import prisma from '../utils/prisma.js';
 import { storeFaqEmbedding, chunkText, storeFileChunkEmbeddings } from '../services/embeddings.js';
 import { extractText } from '../services/fileProcessor.js';
 import { uploadFile, getPresignedUrl, deleteFile } from '../utils/s3.js';
+import { clearUserQueryCache } from './ai.js';
 
 const router = Router();
 
@@ -44,6 +45,7 @@ router.post('/faqs', authenticate, async (req, res) => {
   created.forEach(faq => {
     storeFaqEmbedding(faq.id, faq.question, faq.answer);
   });
+  clearUserQueryCache(ownerId);
 
   res.status(201).json({ faqs: created });
 });
@@ -64,6 +66,7 @@ router.put('/faqs/:id', authenticate, async (req, res) => {
 
   // Re-embed since content changed
   storeFaqEmbedding(updated.id, updated.question, updated.answer);
+  clearUserQueryCache(ownerId);
 
   res.json({ faq: updated });
 });
@@ -76,6 +79,7 @@ router.delete('/faqs/:id', authenticate, async (req, res) => {
   });
   if (!faq) return res.status(404).json({ error: 'FAQ not found' });
   await prisma.faq.delete({ where: { id: req.params.id } });
+  clearUserQueryCache(ownerId);
   res.json({ success: true });
 });
 
@@ -247,11 +251,15 @@ router.delete('/files/:id', authenticate, async (req, res) => {
       // Continue with DB deletion anyway
     }
 
-    // Delete from DB (cascade deletes chunks)
+    // Explicitly delete chunks first (belt-and-suspenders over DB cascade)
+    await prisma.$executeRaw`DELETE FROM "file_chunks" WHERE "file_id" = ${req.params.id}`;
+
+    // Delete the training file record
     await prisma.trainingFile.delete({
       where: { id: req.params.id },
     });
 
+    clearUserQueryCache(ownerId);
     console.log(`[AI Training] File deleted from DB: ${req.params.id}`);
     res.json({ success: true });
   } catch (err) {

@@ -28,6 +28,18 @@ setInterval(() => {
 }, 60 * 1000); // Clean up every minute
 
 /**
+ * Clear all cached query results for a given userId.
+ * Call this when FAQs or training files are added, updated, or deleted.
+ */
+export function clearUserQueryCache(userId) {
+  const prefix = `${userId}:`;
+  for (const key of _queryCache.keys()) {
+    if (key.startsWith(prefix)) _queryCache.delete(key);
+  }
+  console.log(`[AI Cache] Cleared query cache for user ${userId}`);
+}
+
+/**
  * In-memory idempotency store for consume-reply.
  * Maps replyId → { userId, consumedAt } so the same suggestion can only
  * consume one quota unit, even if the user clicks Use Reply then Copy Text.
