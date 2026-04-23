@@ -285,6 +285,14 @@ function FilesTab({ files, loading, onFileUpload, onFileDelete, onFileDownload }
     return 'bg-gray-50 text-gray-700 border-gray-200';
   };
 
+  const getErrorLabel = (errorMsg) => {
+    if (!errorMsg) return 'Error';
+    if (errorMsg.includes('scanned or encrypted')) return 'Scanned PDF';
+    if (errorMsg.includes('Illegal character')) return 'Corrupt PDF';
+    if (errorMsg.includes('no text content')) return 'No Text';
+    return 'Error';
+  };
+
   return (
     <div className="h-full flex flex-col">
       {/* Upload section */}
@@ -360,8 +368,15 @@ function FilesTab({ files, loading, onFileUpload, onFileDelete, onFileDownload }
                   className={`text-xs font-medium px-2 py-1 rounded-full border ${getStatusColor(
                     file.status
                   )}`}
+                  title={file.status === 'error' ? (file.errorMsg || 'Processing failed') : undefined}
                 >
-                  {file.status === 'processing' ? '⏳ Processing' : file.status === 'ready' ? '✅ Ready' : '❌ Error'}
+                  {file.status === 'processing'
+                    ? '⏳ Processing'
+                    : file.status === 'ready'
+                    ? '✅ Ready'
+                    : file.status === 'pending'
+                    ? '🕐 Pending'
+                    : `❌ ${getErrorLabel(file.errorMsg)}`}
                 </span>
                 <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition">
                   <button
