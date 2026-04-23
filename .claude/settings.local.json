@@ -31,7 +31,12 @@
       "Bash(node --check \"c:\\\\Users\\\\gondy\\\\OneDrive\\\\Desktop\\\\AuraDesk-c95011bfd8ce24744fa00916cd9e931522da589f\\\\backend\\\\src\\\\webhooks\\\\stripe.js\")",
       "Bash(node --check \"c:\\\\Users\\\\gondy\\\\OneDrive\\\\Desktop\\\\AuraDesk-c95011bfd8ce24744fa00916cd9e931522da589f\\\\frontend\\\\src\\\\pages\\\\InboxPage.jsx\")",
       "Bash(node --check \"c:\\\\Users\\\\gondy\\\\OneDrive\\\\Desktop\\\\AuraDesk-c95011bfd8ce24744fa00916cd9e931522da589f\\\\backend\\\\src\\\\utils\\\\invoice-channel-send.js\")",
-      "Bash(node --check \"c:\\\\Users\\\\gondy\\\\OneDrive\\\\Desktop\\\\AuraDesk-c95011bfd8ce24744fa00916cd9e931522da589f\\\\backend\\\\src/utils/invoice-channel-send.js\")"
+      "Bash(node --check \"c:\\\\Users\\\\gondy\\\\OneDrive\\\\Desktop\\\\AuraDesk-c95011bfd8ce24744fa00916cd9e931522da589f\\\\backend\\\\src/utils/invoice-channel-send.js\")",
+      "Bash(git -C c:/Users/gondy/OneDrive/Desktop/AuraDesk-c95011bfd8ce24744fa00916cd9e931522da589f/backend add prisma/schema.prisma)",
+      "Bash(git -C c:/Users/gondy/OneDrive/Desktop/AuraDesk-c95011bfd8ce24744fa00916cd9e931522da589f/backend commit -m 'fix: add explicit relation names for dual User relations in TrainingFile *)",
+      "Bash(git -C c:/Users/gondy/OneDrive/Desktop/AuraDesk-c95011bfd8ce24744fa00916cd9e931522da589f/backend push origin main)",
+      "Bash(git -C c:/Users/gondy/OneDrive/Desktop/AuraDesk-c95011bfd8ce24744fa00916cd9e931522da589f/backend add src/routes/ai-training.js)",
+      "Bash(git -C c:/Users/gondy/OneDrive/Desktop/AuraDesk-c95011bfd8ce24744fa00916cd9e931522da589f/backend commit -m 'fix: make S3 upload non-blocking and improve fileId generation *)"
     ]
   }
 }

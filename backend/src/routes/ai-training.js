@@ -266,15 +266,42 @@ async function processFile(fileId, buffer, mimeType, ownerId) {
     console.log(`[AI Training] Processing file: ${fileId}`);
 
     // Extract text
-    const text = await extractText(buffer, mimeType);
+    console.log(`[AI Training] Extracting text from ${fileId} (mimeType: ${mimeType}, bufferSize: ${buffer.length})`);
+    let text;
+    try {
+      text = await extractText(buffer, mimeType);
+    } catch (extractErr) {
+      console.error(`[AI Training] Text extraction failed for ${fileId}:`, extractErr.message);
+      throw extractErr;
+    }
     console.log(`[AI Training] Extracted ${text.length} characters from ${fileId}`);
 
+    if (!text || text.trim().length === 0) {
+      throw new Error('Extracted text is empty');
+    }
+
     // Chunk text
-    const chunks = chunkText(text);
+    let chunks;
+    try {
+      chunks = chunkText(text);
+    } catch (chunkErr) {
+      console.error(`[AI Training] Text chunking failed for ${fileId}:`, chunkErr.message);
+      throw chunkErr;
+    }
     console.log(`[AI Training] Split into ${chunks.length} chunk(s) for ${fileId}`);
 
+    if (chunks.length === 0) {
+      throw new Error('No chunks generated from text');
+    }
+
     // Store chunks with embeddings
-    await storeFileChunkEmbeddings(fileId, ownerId, chunks);
+    console.log(`[AI Training] Storing ${chunks.length} chunks with embeddings for ${fileId}`);
+    try {
+      await storeFileChunkEmbeddings(fileId, ownerId, chunks);
+    } catch (storeErr) {
+      console.error(`[AI Training] Embedding storage failed for ${fileId}:`, storeErr.message);
+      throw storeErr;
+    }
 
     // Update status to "ready"
     await prisma.trainingFile.update({
@@ -285,9 +312,12 @@ async function processFile(fileId, buffer, mimeType, ownerId) {
     console.log(`[AI Training] File processing complete: ${fileId}`);
   } catch (err) {
     console.error(`[AI Training] Processing failed for ${fileId}:`, err.message);
+    console.error(`[AI Training] Full error:`, err);
     await prisma.trainingFile.update({
       where: { id: fileId },
       data: { status: 'error', errorMsg: err.message },
+    }).catch(updateErr => {
+      console.error(`[AI Training] Failed to update error status for ${fileId}:`, updateErr.message);
     });
   }
 }
