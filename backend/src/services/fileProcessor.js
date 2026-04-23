@@ -1,53 +1,22 @@
 export async function extractText(buffer, mimeType) {
   if (mimeType === 'application/pdf') {
     try {
-      // Import pdf-parse - try different export patterns
+      // pdf-parse exports PDFParse as a named export
       const pdfModule = await import('pdf-parse');
+      const PDFParse = pdfModule.PDFParse;
 
-      // pdf-parse might export as: default, direct, or as an object with a parse method
-      let PDFParse;
-
-      // Try direct import first
-      if (typeof pdfModule.default === 'function') {
-        PDFParse = pdfModule.default;
-      } else if (typeof pdfModule === 'function') {
-        PDFParse = pdfModule;
-      } else {
-        // Log what we got for debugging
-        console.error('[PDF] Module keys:', Object.keys(pdfModule));
-        console.error('[PDF] Module.default type:', typeof pdfModule.default);
-
-        // Try finding a function in the module
-        for (const [key, value] of Object.entries(pdfModule)) {
-          if (typeof value === 'function') {
-            console.log(`[PDF] Found function at key: ${key}`);
-            PDFParse = value;
-            break;
-          }
-        }
+      if (!PDFParse || typeof PDFParse !== 'function') {
+        throw new Error(`PDFParse not found or not a function: ${typeof PDFParse}`);
       }
 
-      if (!PDFParse) {
-        throw new Error('Could not find PDF parser function in module');
+      // PDFParse is a class, instantiate and await the promise
+      const parser = new PDFParse(buffer);
+      const data = await parser;
+
+      if (!data || typeof data.text !== 'string' || data.text.trim().length === 0) {
+        throw new Error(`Invalid PDF data: no text content extracted`);
       }
 
-      // Try to call it - could be a class or function
-      let data;
-      try {
-        // Try as a class first
-        data = await new PDFParse(buffer);
-      } catch (classErr) {
-        // If that fails, try as a function
-        try {
-          data = await PDFParse(buffer);
-        } catch (funcErr) {
-          throw new Error(`Failed both as class and function: ${funcErr.message}`);
-        }
-      }
-
-      if (!data || !data.text) {
-        throw new Error('PDF parsing returned no text data');
-      }
       return data.text;
     } catch (err) {
       throw new Error(`PDF parsing failed: ${err.message}`);
