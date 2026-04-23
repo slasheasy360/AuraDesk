@@ -1,28 +1,18 @@
 export async function extractText(buffer, mimeType) {
   if (mimeType === 'application/pdf') {
     try {
-      // pdf-parse exports PDFParse as a named export
-      const pdfModule = await import('pdf-parse');
-      const PDFParse = pdfModule.PDFParse;
+      // pdf-parse v1 exports a function as default export
+      const pdfParseModule = await import('pdf-parse');
+      const pdfParse = pdfParseModule.default || pdfParseModule;
 
-      if (!PDFParse || typeof PDFParse !== 'function') {
-        throw new Error(`PDFParse not found or not a function: ${typeof PDFParse}`);
+      if (typeof pdfParse !== 'function') {
+        throw new Error(`pdf-parse not a function: ${typeof pdfParse}`);
       }
 
-      // PDFParse is a class, instantiate and await the promise
-      const parser = new PDFParse(buffer);
-      const data = await parser;
+      const data = await pdfParse(buffer);
 
-      // Log what we got
-      console.log('[PDF] Parsed data keys:', Object.keys(data || {}));
-      console.log('[PDF] Text type:', typeof data?.text, 'Length:', data?.text?.length);
-
-      if (!data) {
-        throw new Error('No data returned from PDF parser');
-      }
-
-      if (!data.text || typeof data.text !== 'string') {
-        throw new Error(`PDF text property invalid: type=${typeof data.text}`);
+      if (!data || typeof data.text !== 'string') {
+        throw new Error('PDF parsing returned no text data');
       }
 
       const trimmedText = data.text.trim();
