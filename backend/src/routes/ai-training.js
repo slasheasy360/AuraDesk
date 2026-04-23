@@ -127,6 +127,7 @@ router.post('/files', authenticate, upload.single('file'), async (req, res) => {
     const ownerId = resolveOwnerId(req.user);
 
     if (!req.file) {
+      console.warn('[AI Training] No file provided');
       return res.status(400).json({ error: 'No file provided' });
     }
 
@@ -134,20 +135,25 @@ router.post('/files', authenticate, upload.single('file'), async (req, res) => {
 
     // Validate file type
     if (mimetype !== 'application/pdf' && mimetype !== 'text/plain') {
+      console.warn(`[AI Training] Unsupported file type: ${mimetype}`);
       return res.status(400).json({ error: 'Only PDF and TXT files are supported' });
     }
 
     // Validate file size (25MB cap from middleware)
     if (size > 25 * 1024 * 1024) {
+      console.warn(`[AI Training] File size exceeds limit: ${size}`);
       return res.status(400).json({ error: 'File exceeds 25MB limit' });
     }
 
     const fileId = uuid();
     const s3Key = `ai-training/${ownerId}/${fileId}-${originalname}`;
 
+    console.log(`[AI Training] Uploading to S3: ${s3Key}`);
     // Upload to S3
     await uploadFile(s3Key, buffer, mimetype);
+    console.log(`[AI Training] S3 upload successful: ${s3Key}`);
 
+    console.log(`[AI Training] Creating DB record for ${fileId}`);
     // Create DB record with "pending" status
     const trainingFile = await prisma.trainingFile.create({
       data: {
@@ -171,8 +177,8 @@ router.post('/files', authenticate, upload.single('file'), async (req, res) => {
 
     res.status(201).json({ file: trainingFile });
   } catch (err) {
-    console.error('[AI Training] File upload failed:', err.message);
-    res.status(500).json({ error: 'File upload failed' });
+    console.error('[AI Training] File upload failed:', err);
+    res.status(500).json({ error: 'File upload failed', details: err.message });
   }
 });
 
@@ -183,7 +189,6 @@ router.get('/files', authenticate, async (req, res) => {
     const ownerId = resolveOwnerId(req.user);
     const files = await prisma.trainingFile.findMany({
       where: { userId: ownerId },
-      include: { uploadedByUser: { select: { name: true, email: true } } },
       orderBy: { createdAt: 'desc' },
     });
     res.json({ files });
