@@ -5,7 +5,7 @@ import {
   Heart, FileText, Bell, Calendar, BookOpen, HelpCircle, Upload, File, Download,
 } from 'lucide-react';
 import api from '../services/api.js';
-import { io } from 'socket.io-client';
+import { getSocket } from '../services/socket.js';
 
 const TABS = ['General', 'Features', 'Resources', 'Files'];
 
@@ -483,15 +483,19 @@ export default function AITrainingPage() {
   useEffect(() => { fetchData(); }, [fetchData]);
 
   // Socket.io listener for real-time file processing updates
+  // Reuse the shared socket (already registered in the user's room)
   useEffect(() => {
-    const BACKEND_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
-    const socket = io(BACKEND_URL, { withCredentials: true });
-    socket.on('file:processed', ({ fileId, status, errorMsg }) => {
+    const socket = getSocket();
+    if (!socket) return;
+
+    const handler = ({ fileId, status, errorMsg }) => {
       setFiles(prev =>
         prev.map(f => f.id === fileId ? { ...f, status, ...(errorMsg ? { errorMsg } : {}) } : f)
       );
-    });
-    return () => socket.disconnect();
+    };
+
+    socket.on('file:processed', handler);
+    return () => socket.off('file:processed', handler);
   }, []);
 
   const handleFileUpload = (newFile) => {
