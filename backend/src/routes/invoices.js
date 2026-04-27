@@ -110,10 +110,12 @@ router.get('/public/:slug', async (req, res) => {
 
 // ═══════════════════════════════════════════════════════════════════
 // GET /api/invoices — list
+// Supports: ?status=&search=&leadId=&dateFrom=&dateTo=&datePreset=
+//   datePreset: today | this_week | this_month
 // ═══════════════════════════════════════════════════════════════════
 router.get('/', authenticate, requireActiveSubscription, async (req, res) => {
   try {
-    const { search, status, leadId } = req.query;
+    const { search, status, leadId, dateFrom, dateTo, datePreset } = req.query;
     const where = { userId: req.user.id };
     if (leadId) where.leadId = leadId;
     if (status && VALID_STATUSES.includes(status)) where.status = status;
@@ -121,13 +123,46 @@ router.get('/', authenticate, requireActiveSubscription, async (req, res) => {
       where.OR = [
         { invoiceNumber: { contains: search, mode: 'insensitive' } },
         { clientName: { contains: search, mode: 'insensitive' } },
+        { clientEmail: { contains: search, mode: 'insensitive' } },
       ];
     }
+
+    // Date filtering — preset takes precedence over explicit range
+    const now = new Date();
+    if (datePreset) {
+      if (datePreset === 'today') {
+        const start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        const end = new Date(start.getTime() + 86400000);
+        where.createdAt = { gte: start, lt: end };
+      } else if (datePreset === 'this_week') {
+        const day = now.getDay(); // 0=Sun
+        const start = new Date(now.getFullYear(), now.getMonth(), now.getDate() - day);
+        const end = new Date(start.getTime() + 7 * 86400000);
+        where.createdAt = { gte: start, lt: end };
+      } else if (datePreset === 'this_month') {
+        const start = new Date(now.getFullYear(), now.getMonth(), 1);
+        const end = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+        where.createdAt = { gte: start, lt: end };
+      }
+    } else if (dateFrom || dateTo) {
+      where.createdAt = {};
+      if (dateFrom) where.createdAt.gte = new Date(dateFrom);
+      if (dateTo) {
+        // include the whole end day
+        const end = new Date(dateTo);
+        end.setDate(end.getDate() + 1);
+        where.createdAt.lt = end;
+      }
+    }
+
     const invoices = await prisma.invoice.findMany({
       where,
       orderBy: { createdAt: 'desc' },
       include: {
-        payments: { select: { amount: true } },
+        payments: {
+          orderBy: { date: 'asc' },
+          select: { id: true, amount: true, date: true, type: true, note: true, createdAt: true },
+        },
       },
     });
     const enriched = invoices.map((i) => {

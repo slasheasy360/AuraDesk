@@ -20,6 +20,11 @@ model User {
   passwordResetTokenHash String?   @map("password_reset_token_hash")
   passwordResetExpiresAt DateTime? @map("password_reset_expires_at")
 
+  // ── Stripe Connect (invoice payments to owner's own Stripe account) ──
+  stripeConnectAccountId     String?  @unique @map("stripe_connect_account_id")
+  stripeConnectChargesEnabled Boolean @default(false) @map("stripe_connect_charges_enabled")
+  stripeConnectAccountName   String?  @map("stripe_connect_account_name")
+
   // ── Trial & Subscription ──
   plan              PlanType    @default(trial)
   trialEndsAt       DateTime?   @map("trial_ends_at")
@@ -215,10 +220,11 @@ model Invoice {
   subtotal       Float         @default(0)
   taxAmount      Float         @default(0) @map("tax_amount")
   total          Float         @default(0)
-  status              InvoiceStatus @default(Draft)
-  stripeCheckoutId    String?       @map("stripe_checkout_id")
-  paymentLink         String?       @map("payment_link")
-  createdAt           DateTime      @default(now()) @map("created_at")
+  status                 InvoiceStatus @default(Draft)
+  stripeCheckoutId       String?       @map("stripe_checkout_id")
+  paymentLink            String?       @map("payment_link")
+  stripeSessionExpiresAt DateTime?     @map("stripe_session_expires_at")
+  createdAt              DateTime      @default(now()) @map("created_at")
   updatedAt           DateTime      @updatedAt @map("updated_at")
 
   user           User          @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -255,15 +261,18 @@ model InvoiceItem {
 }
 
 model Payment {
-  id        String      @id @default(uuid())
-  invoiceId String      @map("invoice_id")
-  amount    Float
-  date      DateTime    @default(now())
-  type      PaymentType @default(Partial)
-  note      String?
-  createdAt DateTime    @default(now()) @map("created_at")
+  id                   String      @id @default(uuid())
+  invoiceId            String      @map("invoice_id")
+  amount               Float
+  date                 DateTime    @default(now())
+  type                 PaymentType @default(Partial)
+  note                 String?
+  provider             String      @default("manual")
+  stripePaymentIntentId String?    @map("stripe_payment_intent_id")
+  refundedAt           DateTime?   @map("refunded_at")
+  createdAt            DateTime    @default(now()) @map("created_at")
 
-  invoice   Invoice     @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  invoice              Invoice     @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
 
   @@index([invoiceId])
   @@map("payments")

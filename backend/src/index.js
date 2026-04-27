@@ -68,6 +68,7 @@ import planRoutes from './routes/plan.js';
 import aiRoutes from './routes/ai.js';
 import aiTrainingRoutes from './routes/ai-training.js';
 import contactRoutes from './routes/contacts.js';
+import stripeConnectRoutes from './routes/stripe.js';
 import metaWebhook from './webhooks/meta.js';
 import gmailWebhook from './webhooks/gmail.js';
 import stripeWebhook from './webhooks/stripe.js';
@@ -197,6 +198,10 @@ app.use('/api/plan',         planRoutes);
 // route itself so we can return a proper plan-limit JSON on quota hits.
 app.use('/api/ai',           aiRoutes);
 app.use('/api/ai-training',  authenticate, aiTrainingRoutes);
+// Stripe Connect account management + invoice checkout session creation.
+// The OAuth callback (/api/stripe/connect/callback) is intentionally open
+// (no authenticate) because Stripe redirects there without a Bearer token.
+app.use('/api/stripe',       stripeConnectRoutes);
 
 // Alias: GET /api/user/onboarding-status
 // Mirrors /api/onboarding/status. Kept as a thin alias because some clients
