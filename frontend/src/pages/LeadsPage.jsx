@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Search, ChevronDown, RotateCcw, MessageSquare, FileText, Plus, UserPlus, Filter } from 'lucide-react';
+import { Search, ChevronDown, RotateCcw, MessageSquare, FileText, Plus, UserPlus, Filter, Download } from 'lucide-react';
 import api from '../services/api.js';
 import AddLeadModal from '../components/AddLeadModal.jsx';
 import LeadInvoicesModal from '../components/LeadInvoicesModal.jsx';
@@ -182,6 +182,33 @@ export default function LeadsPage() {
 
   const resetFilters = () => setFilters({ date: '', platform: '', lastAction: '', status: '' });
 
+  const exportCSV = () => {
+    const headers = ['#', 'Name', 'Email', 'Phone', 'Platform', 'Status', 'Last Action', 'Last Contacted', 'Created At'];
+    const rows = filtered.map((lead, idx) => [
+      String(idx + 1).padStart(4, '0'),
+      lead.name || '',
+      lead.email || '',
+      lead.phone || '',
+      lead.platform || '',
+      lead.status || '',
+      lead.lastAction || '',
+      lead.lastContactedAt ? new Date(lead.lastContactedAt).toLocaleDateString('en-US') : '',
+      lead.createdAt ? new Date(lead.createdAt).toLocaleDateString('en-US') : '',
+    ]);
+
+    const csv = [headers, ...rows]
+      .map((row) => row.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(','))
+      .join('\n');
+
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `leads-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
   return (
     <div className="flex-1 flex flex-col h-full bg-[#0c1a2e] overflow-hidden">
       {/* Header */}
@@ -198,6 +225,15 @@ export default function LeadsPage() {
               className="w-full pl-11 pr-4 py-2.5 bg-white/10 border border-white/10 rounded-full text-sm text-white placeholder-gray-400 focus:bg-white/15 focus:border-white/20 outline-none"
             />
           </div>
+          <button
+            onClick={exportCSV}
+            disabled={filtered.length === 0}
+            title="Export visible leads to CSV"
+            className="flex items-center gap-2 px-4 py-2.5 bg-white/10 hover:bg-white/20 text-white text-sm font-semibold rounded-lg transition disabled:opacity-40"
+          >
+            <Download size={15} />
+            EXPORT CSV
+          </button>
           <button
             onClick={() => setShowAdd(true)}
             className="flex items-center gap-2 px-5 py-2.5 bg-blue-500 hover:bg-blue-600 text-white text-sm font-semibold rounded-lg transition shadow-lg shadow-blue-500/20"
