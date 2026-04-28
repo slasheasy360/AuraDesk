@@ -1,12 +1,12 @@
 import { NavLink, useLocation } from 'react-router-dom';
-import { LayoutDashboard, Inbox, Users, FileText, Sparkles } from 'lucide-react';
+import { LayoutDashboard, Inbox, Users, FileText, DollarSign } from 'lucide-react';
 
 const NAV_ITEMS = [
   { to: '/', icon: LayoutDashboard, end: true },
   { to: '/inbox', icon: Inbox, end: false, matchPrefix: '/inbox' },
   { to: '/leads', icon: Users, end: false },
   { to: '/invoices', icon: FileText, end: false, matchPrefix: '/invoices' },
-  { to: '/ai-training', icon: Sparkles, end: false },
+  { to: '/payments', icon: DollarSign, end: false },
 ];
 
 export default function MobileBottomNav() {

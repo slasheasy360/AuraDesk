@@ -261,20 +261,23 @@ model InvoiceItem {
 }
 
 model Payment {
-  id                   String      @id @default(uuid())
-  invoiceId            String      @map("invoice_id")
-  amount               Float
-  date                 DateTime    @default(now())
-  type                 PaymentType @default(Partial)
-  note                 String?
-  provider             String      @default("manual")
-  stripePaymentIntentId String?    @map("stripe_payment_intent_id")
-  refundedAt           DateTime?   @map("refunded_at")
-  createdAt            DateTime    @default(now()) @map("created_at")
+  id                    String      @id @default(uuid())
+  invoiceId             String      @map("invoice_id")
+  amount                Float
+  currency              String      @default("USD")
+  date                  DateTime    @default(now())
+  type                  PaymentType @default(Partial)
+  note                  String?
+  provider              String      @default("manual")
+  stripePaymentIntentId String?     @map("stripe_payment_intent_id")
+  stripeSessionId       String?     @map("stripe_session_id")
+  refundedAt            DateTime?   @map("refunded_at")
+  createdAt             DateTime    @default(now()) @map("created_at")
 
-  invoice              Invoice     @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  invoice               Invoice     @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
 
   @@index([invoiceId])
+  @@index([createdAt])
   @@map("payments")
 }
 

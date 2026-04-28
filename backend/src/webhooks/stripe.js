@@ -74,9 +74,11 @@ router.post('/', async (req, res) => {
         data: {
           invoiceId,
           amount: invoice.total,
+          currency: (invoice.currency || 'USD').toUpperCase(),
           type: 'Full',
           provider: 'stripe',
           stripePaymentIntentId: paymentIntentId,
+          stripeSessionId: session.id,
           note: `Stripe payment — session ${session.id}`,
         },
       });
@@ -93,6 +95,14 @@ router.post('/', async (req, res) => {
 
       console.log(`[Stripe Webhook] Invoice ${invoiceId} → Paid`);
       emitToUser(userId, 'invoice_updated', { invoice: updatedInvoice });
+      emitToUser(userId, 'payment_received', {
+        paymentId: payment.id,
+        invoiceId,
+        invoiceNumber: invoice.invoiceNumber,
+        clientName: invoice.clientName,
+        amount: invoice.total,
+        currency: (invoice.currency || 'USD').toUpperCase(),
+      });
 
       if (invoice.lead?.conversationId) {
         try {

@@ -1,9 +1,9 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Outlet, NavLink, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext.jsx';
 import { LinkAccountsProvider, useLinkAccounts } from '../context/LinkAccountsContext.jsx';
-import { connectSocket, disconnectSocket } from '../services/socket.js';
-import { LayoutDashboard, Inbox, Users, FileText, Brain, LogOut, X, ChevronRight } from 'lucide-react';
+import { connectSocket, disconnectSocket, getSocket } from '../services/socket.js';
+import { LayoutDashboard, Inbox, Users, FileText, Brain, LogOut, X, ChevronRight, DollarSign, CheckCircle } from 'lucide-react';
 import logoUrl from '../assets/logo.svg';
 import MobileBottomNav from './MobileBottomNav.jsx';
 import LinkAccountsSheet from './LinkAccountsSheet.jsx';
@@ -24,12 +24,50 @@ function DashboardLayoutInner() {
   const location = useLocation();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const { open: linkAccountsOpen, closeLinkAccounts } = useLinkAccounts();
+  const [paymentToast, setPaymentToast] = useState(null);
+  const toastTimer = useRef(null);
 
   useEffect(() => {
     if (user?.id) {
       connectSocket(user.id);
     }
     return () => disconnectSocket();
+  }, [user?.id]);
+
+  // Listen for incoming payments and show a toast notification.
+  // Uses a short delay so connectSocket() finishes before we attach.
+  useEffect(() => {
+    if (!user?.id) return;
+    let socket = getSocket();
+
+    const attach = (s) => {
+      const handler = (data) => {
+        const amount = new Intl.NumberFormat('en-US', {
+          style: 'currency',
+          currency: data.currency || 'USD',
+        }).format(data.amount || 0);
+        setPaymentToast({
+          message: `Payment received for Invoice #${data.invoiceNumber} — ${amount}`,
+          id: data.paymentId,
+        });
+        clearTimeout(toastTimer.current);
+        toastTimer.current = setTimeout(() => setPaymentToast(null), 6000);
+      };
+      s.on('payment_received', handler);
+      return () => s.off('payment_received', handler);
+    };
+
+    if (socket) return attach(socket);
+
+    // Socket not ready yet — wait one tick (connectSocket called in prior effect)
+    const t = setTimeout(() => {
+      socket = getSocket();
+      if (socket) attach(socket);
+    }, 50);
+    return () => {
+      clearTimeout(t);
+      clearTimeout(toastTimer.current);
+    };
   }, [user?.id]);
 
   // Close sidebar on route change (mobile)
@@ -54,6 +92,7 @@ function DashboardLayoutInner() {
     { to: '/inbox', icon: Inbox, label: 'Smart Inbox' },
     { to: '/leads', icon: Users, label: 'Leads' },
     { to: '/invoices', icon: FileText, label: 'Invoices' },
+    { to: '/payments', icon: DollarSign, label: 'Payments' },
     { to: '/ai-training', icon: Brain, label: 'AI Training' },
   ];
 
@@ -196,6 +235,33 @@ function DashboardLayoutInner() {
       {/* Global Link Accounts modal — single instance, opened from anywhere
           inside the dashboard via the LinkAccounts context. */}
       <LinkAccountsSheet open={linkAccountsOpen} onClose={closeLinkAccounts} />
+
+      {/* Payment received toast */}
+      {paymentToast && (
+        <div className="fixed bottom-24 lg:bottom-6 right-4 z-[100] max-w-sm w-full">
+          <div className="bg-white border border-green-200 shadow-lg rounded-xl px-4 py-3 flex items-start gap-3 animate-fade-in">
+            <div className="w-8 h-8 bg-green-100 rounded-full flex items-center justify-center flex-shrink-0 mt-0.5">
+              <CheckCircle size={16} className="text-green-600" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-semibold text-gray-800">Payment Received</p>
+              <p className="text-xs text-gray-500 mt-0.5 truncate">{paymentToast.message}</p>
+            </div>
+            <button
+              onClick={() => { setPaymentToast(null); clearTimeout(toastTimer.current); navigate('/payments'); }}
+              className="text-xs text-[#1787FE] font-medium hover:underline flex-shrink-0"
+            >
+              View
+            </button>
+            <button
+              onClick={() => { setPaymentToast(null); clearTimeout(toastTimer.current); }}
+              className="text-gray-300 hover:text-gray-500 flex-shrink-0"
+            >
+              <X size={14} />
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
