@@ -70,6 +70,7 @@ import aiTrainingRoutes from './routes/ai-training.js';
 import contactRoutes from './routes/contacts.js';
 import stripeConnectRoutes from './routes/stripe.js';
 import paymentRoutes from './routes/payments.js';
+import dashboardRoutes from './routes/dashboard.js';
 import metaWebhook from './webhooks/meta.js';
 import gmailWebhook from './webhooks/gmail.js';
 import stripeWebhook from './webhooks/stripe.js';
@@ -204,6 +205,7 @@ app.use('/api/ai-training',  authenticate, aiTrainingRoutes);
 // (no authenticate) because Stripe redirects there without a Bearer token.
 app.use('/api/stripe',       stripeConnectRoutes);
 app.use('/api/payments',     requirePaidAccess, paymentRoutes);
+app.use('/api/dashboard',    requirePaidAccess, dashboardRoutes);
 
 // Alias: GET /api/user/onboarding-status
 // Mirrors /api/onboarding/status. Kept as a thin alias because some clients
